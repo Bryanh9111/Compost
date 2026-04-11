@@ -1,0 +1,53 @@
+# Node / Bun
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+bun-debug.log
+npm-debug.log*
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Compost runtime data (never commit the actual knowledge base)
+.compost/
+.compost-local/
+*.db
+*.db-wal
+*.db-shm
+
+# LanceDB artifacts (regenerable from L0 ledger)
+lance/
+vectors/
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.history/
+
+# Logs
+logs/
+*.log
+
+# Env files with secrets
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+.nyc_output/

@@ -1,0 +1,21 @@
+{
+  "debate_id": "001-kb-fusion-architecture",
+  "question": "Self-evolving Knowledge Fusion Reasoning System: 3 technical decisions + architecture go/no-go",
+  "rounds_total": 2,
+  "rounds_completed": 2,
+  "advisors": ["gemini", "codex", "sonnet", "claude-opus"],
+  "status": "completed",
+  "synthesis_file": "synthesis.md",
+  "outcome": {
+    "D1": "stdio MCP + adapter-local observe_outbox (unanimous after Codex concession)",
+    "D2": "local markdown week 1 + web URL week 2 (unanimous after Codex+Sonnet sequencing accept)",
+    "D3": "Hybrid Node+Python with subprocess CLI boundary (3-1, Gemini dissent on strategic grounds, mitigated by CLI escape hatch)",
+    "product_pivot": "Complete guarantee reframed as Auditable Coverage SLO (unanimous)",
+    "top_risks": [
+      "Derivation versioning (transform_policy + derivations table, day-one schema)",
+      "Adapter observe_outbox for stdio durability",
+      "is_noteworthy() function with MinHash+embedding thresholds for autonomous crawl"
+    ]
+  },
+  "completed_at": "2026-04-10T22:32:00Z"
+}

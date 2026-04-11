@@ -1,0 +1,760 @@
+# Phase 0 Technical Specification — Compost
+
+**Target**: buildable in 1 week solo
+**Outcome**: a running `compost-daemon` that ingests local markdown, writes to L0/L1/L2, exposes `compost.query` and `compost.ask` via stdio MCP, and ships with the schema shape needed to survive derivation-versioning risks from day one.
+
+This spec is the direct output of the 2-round 4-participant debate. See `synthesis.md` for decisions and rationale. This file is the executable plan.
+
+---
+
+## 0. Naming and project layout
+
+Package name: `compost`. CLI binary: `compost`. Data directory: `~/.compost/`. MCP server id: `compost`.
+
+```
+Compost/
+├── packages/
+│   ├── compost-core/              # Node, pure library (no side effects on import)
+│   │   ├── src/
+│   │   │   ├── schema/       # SQL migrations (numbered files)
+│   │   │   ├── ledger/       # L0 observations + derivations API
+│   │   │   ├── storage/      # LanceDB wrapper + fact graph
+│   │   │   ├── queue/        # ingest job queue
+│   │   │   ├── query/        # query synthesis
+│   │   │   ├── policies/     # transform_policy registry
+│   │   │   ├── api.ts        # public entry point
+│   │   │   └── index.ts
+│   │   ├── test/
+│   │   │   └── fixtures/
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   ├── compost-daemon/            # Node, thin wrapper: Core + MCP server + L4 scheduler
+│   │   ├── src/
+│   │   │   ├── main.ts
+│   │   │   ├── mcp-server.ts
+│   │   │   └── scheduler.ts
+│   │   └── package.json
+│   ├── compost-embedded/          # Node, re-export of compost-core (no daemon extras)
+│   │   └── src/index.ts
+│   ├── compost-adapter-sdk/       # Node, base class for adapters + outbox
+│   │   ├── src/
+│   │   │   ├── outbox.ts
+│   │   │   ├── adapter.ts
+│   │   │   └── mcp-client.ts
+│   │   └── package.json
+│   ├── compost-adapter-claude-code/  # Node, first adapter (Phase 0 scope)
+│   │   ├── src/index.ts
+│   │   └── package.json
+│   └── compost-ingest/            # Python, extraction subprocess (separate runtime)
+│       ├── compost_ingest/
+│       │   ├── __init__.py
+│       │   ├── cli.py        # JSON stdin/stdout contract
+│       │   ├── extractors/
+│       │   │   ├── markdown.py
+│       │   │   └── html.py
+│       │   └── schema.py     # pydantic model matching TS types
+│       ├── tests/
+│       │   ├── fixtures/
+│       │   └── test_schema_contract.py
+│       ├── pyproject.toml
+│       └── uv.lock
+├── scripts/
+│   ├── install.sh            # one-command setup (bun + uv)
+│   └── compost-doctor.ts          # reconcile L0 vs LanceDB
+├── docs/
+│   ├── architecture.md       # from synthesis.md, trimmed
+│   ├── coverage-slo.md       # Auditable Coverage spec
+│   └── transform-policy.md   # versioning rules
+├── .gitignore
+├── bun.lockb
+└── package.json              # workspace root
+```
+
+**Runtime boundary**: anything under `packages/compost-ingest/` is Python-owned (uv-managed). Everything else is Node/Bun (bun-managed). This is the full extent of the hybrid runtime split.
+
+---
+
+## 1. L0 Schema (ledger, SQLite)
+
+File: `~/.compost/ledger.db` (single SQLite database in WAL mode).
+
+```sql
+-- Migrations file: packages/compost-core/src/schema/0001_init.sql
+
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+
+-- 1.1 Source registry: what we are subscribed to
+CREATE TABLE source (
+  id TEXT PRIMARY KEY,                    -- e.g. "local:notes-dir", "web:nextjs-docs"
+  uri TEXT NOT NULL,                      -- logical URI (may contain $REPOS, $HOME)
+  kind TEXT NOT NULL CHECK(kind IN ('local-file','local-dir','web','claude-code','host-adapter')),
+  refresh_sec INTEGER,                    -- NULL = on-demand only
+  coverage_target REAL DEFAULT 0.0,       -- 0.0 disables SLO tracking for this source
+  trust_tier TEXT NOT NULL DEFAULT 'web'  -- user | first_party | web
+    CHECK(trust_tier IN ('user','first_party','web')),
+  contexts TEXT NOT NULL DEFAULT '[]',    -- JSON array of context labels
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  paused_at TEXT                          -- non-null means dormant
+);
+
+-- 1.2 Observations: immutable append-only ledger (the rebuild anchor)
+CREATE TABLE observations (
+  observe_id TEXT PRIMARY KEY,            -- uuid v7 (time-ordered)
+  source_id TEXT NOT NULL REFERENCES source(id),
+  source_uri TEXT NOT NULL,               -- exact fetched URI at capture time
+  occurred_at TEXT NOT NULL,              -- when the content was authored if known, else captured_at
+  captured_at TEXT NOT NULL,              -- when compost-core received it
+  content_hash TEXT NOT NULL,             -- sha256 of normalized content
+  raw_hash TEXT NOT NULL,                 -- sha256 of raw bytes as-fetched
+  raw_bytes BLOB,                         -- inline if <= 64 KiB, else NULL + blob_ref
+  blob_ref TEXT,                          -- path under ~/.compost/blobs/<prefix>/<hash> if not inline
+  mime_type TEXT NOT NULL,
+  adapter TEXT NOT NULL,                  -- e.g. "compost-adapter-claude-code@0.1.0"
+  adapter_sequence INTEGER NOT NULL,      -- monotonic per (adapter, source_id)
+  trust_tier TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  transform_policy TEXT NOT NULL,         -- the policy version applied at capture, e.g. "tp-2026-04"
+  metadata JSON,                          -- adapter-specific fields
+  UNIQUE(adapter, source_id, idempotency_key)
+);
+
+CREATE INDEX idx_obs_source ON observations(source_id, captured_at);
+CREATE INDEX idx_obs_content_hash ON observations(content_hash);
+CREATE INDEX idx_obs_raw_hash ON observations(raw_hash);
+
+-- 1.3 Derivations: what layer was built from which observation by which model
+CREATE TABLE derivations (
+  observe_id TEXT NOT NULL REFERENCES observations(observe_id) ON DELETE CASCADE,
+  layer TEXT NOT NULL CHECK(layer IN ('L1','L2','L3')),
+  transform_policy TEXT NOT NULL,         -- the policy version at derivation time
+  model_id TEXT,                          -- e.g. "nomic-embed-text-v1.5" for L1, "claude-opus-4-6" for L3
+  derived_at TEXT NOT NULL DEFAULT (datetime('now')),
+  artifact_ref TEXT,                      -- pointer into L1/L2/L3 (vector_id / fact_id / wiki_path)
+  PRIMARY KEY (observe_id, layer, model_id)
+);
+
+CREATE INDEX idx_der_layer ON derivations(layer, model_id);
+
+-- 1.4 Ingest queue: observation enqueued for derivation
+CREATE TABLE ingest_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  observe_id TEXT NOT NULL REFERENCES observations(observe_id),
+  source_kind TEXT NOT NULL,
+  priority INTEGER NOT NULL,              -- 0=HIGH (sniff/push), 100=LOW (crawl)
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  completed_at TEXT
+);
+
+CREATE INDEX idx_queue_pending ON ingest_queue(priority, enqueued_at)
+  WHERE completed_at IS NULL;
+
+-- 1.5 Coverage SLO tracking (per Codex R2 schema)
+CREATE TABLE expected_item (
+  source_id TEXT NOT NULL REFERENCES source(id),
+  external_id TEXT NOT NULL,              -- e.g. RSS guid, sitemap URL, commit sha
+  expected_at TEXT NOT NULL,              -- when we expected to see it
+  PRIMARY KEY (source_id, external_id)
+);
+
+CREATE TABLE captured_item (
+  source_id TEXT NOT NULL REFERENCES source(id),
+  external_id TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  observe_id TEXT NOT NULL REFERENCES observations(observe_id),
+  PRIMARY KEY (source_id, external_id, captured_at)
+);
+
+CREATE INDEX idx_captured_lookup ON captured_item(source_id, external_id);
+
+-- 1.6 L2 facts graph (context-partitioned triples)
+CREATE TABLE facts (
+  fact_id TEXT PRIMARY KEY,               -- uuid v7
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  contexts TEXT NOT NULL DEFAULT '[]',    -- JSON array of context labels
+  confidence REAL NOT NULL DEFAULT 0.8,
+  freshness TEXT NOT NULL DEFAULT 'fresh' CHECK(freshness IN ('fresh','stale','expired')),
+  observe_id TEXT NOT NULL REFERENCES observations(observe_id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  superseded_by TEXT REFERENCES facts(fact_id),  -- chain of revisions
+  conflict_group INTEGER                   -- shared ID if in unresolved conflict
+);
+
+CREATE INDEX idx_facts_spo ON facts(subject, predicate);
+CREATE INDEX idx_facts_observe ON facts(observe_id);
+CREATE INDEX idx_facts_conflict ON facts(conflict_group) WHERE conflict_group IS NOT NULL;
+
+-- 1.7 L3 wiki page registry (actual markdown lives on disk under ~/.compost/wiki/)
+CREATE TABLE wiki_pages (
+  path TEXT PRIMARY KEY,                  -- relative to ~/.compost/wiki/, e.g. "nextjs/cache-components.md"
+  title TEXT NOT NULL,
+  contexts TEXT NOT NULL DEFAULT '[]',
+  last_synthesis_at TEXT NOT NULL,
+  last_synthesis_model TEXT NOT NULL,
+  contributing_observes TEXT NOT NULL     -- JSON array of observe_ids
+);
+```
+
+**Non-negotiable schema requirements (from debate):**
+
+1. `observations.raw_bytes` / `blob_ref` — you must be able to rebuild derivations from raw content, not just metadata. Gemini's "museum vs living stream" requirement.
+2. `observations.transform_policy` — every row tagged with the policy version active at capture. Enables deterministic replay.
+3. `derivations` table — the SQL unifier for embedding trap + wiki rot + rebuild drift. All three are "SELECT observe_id WHERE not in derivations with current model".
+4. `ingest_queue` — decouples the write pipeline. `compost.observe` writes only to `observations` + enqueue row. Derivations run async.
+
+---
+
+## 2. `transform_policy` versioning convention
+
+Pick and commit to one. The debate raised this as Phase 0 requirement #4.
+
+**Recommendation: date-stamp with optional suffix, monotonic.**
+
+Format: `tp-YYYY-MM[-NN]` where `NN` is an in-month revision counter if multiple updates land same month.
+
+Examples: `tp-2026-04`, `tp-2026-04-02`, `tp-2026-05`.
+
+A `transform_policy` encapsulates:
+- chunk size and overlap
+- embedding model ID
+- fact extraction prompt version
+- L3 synthesis prompt version
+- deduplication thresholds (MinHash Jaccard, embedding cosine)
+- content normalization rules (whitespace, boilerplate stripping)
+
+Each policy is a versioned record in `packages/compost-core/src/policies/registry.ts`:
+
+```typescript
+export const policies = {
+  'tp-2026-04': {
+    id: 'tp-2026-04',
+    supersedes: null,
+    effective_from: '2026-04-01',
+    chunk: { size: 800, overlap: 100 },
+    embedding: { model: 'nomic-embed-text-v1.5', dim: 768 },
+    factExtraction: { prompt: 'fact-extract-v1', model: 'claude-opus-4-6' },
+    wikiSynthesis: { prompt: 'wiki-synth-v1', model: 'claude-opus-4-6' },
+    dedup: { minhashJaccard: 0.98, embeddingCosine: 0.985 },
+    normalize: { stripBoilerplate: true, collapseWhitespace: true },
+    migration_notes: 'Initial Phase 0 policy.',
+  },
+  // Example of a later revision (not yet active):
+  // 'tp-2026-04-02': {
+  //   id: 'tp-2026-04-02',
+  //   supersedes: 'tp-2026-04',
+  //   effective_from: '2026-04-15',
+  //   chunk: { size: 800, overlap: 150 },  // changed
+  //   embedding: { model: 'nomic-embed-text-v1.5', dim: 768 },
+  //   // ... other fields unchanged ...
+  //   migration_notes: 'Bumped chunk overlap 100→150 to improve cross-chunk fact linking. Requires chunk + L1 rebuild for observations indexed under tp-2026-04.',
+  // },
+} as const;
+```
+
+**Rule**: existing policies are immutable. A schema change requires a new `tp-*` entry. Ingested observations reference a specific policy and always use that policy on replay.
+
+**Required fields in every policy entry**:
+- `id` — matches the registry key, e.g. `tp-2026-04-02`
+- `supersedes` — the id of the prior policy, or `null` for the first
+- `effective_from` — ISO date when this policy started being used
+- `migration_notes` — one paragraph describing what changed and which layers need rebuild. This is the field a future operator reads at 2am to understand "why did the rebuild produce different facts."
+
+**Rationale for date-stamp over semver** (from debate #2 synthesis): semver implies "this one is newer and better" and its compatibility semantics (MAJOR/MINOR/PATCH) do not translate to data extraction pipelines — a "minor" chunk size change still invalidates existing L1 vectors. The derivations table encodes rebuild requirements directly via explicit `(layer, model_id)` columns, so code never needs to parse the policy name to decide scope. Date-stamp is honest: "a different configuration snapshot active in a time window, make no compatibility assumptions." Git SHA is opaque in SQL and code review. The `supersedes` + `migration_notes` fields cover the relationship reasoning that semver would have encoded in the name.
+
+---
+
+## 3. Adapter SDK Interface
+
+File: `packages/compost-adapter-sdk/src/adapter.ts`
+
+```typescript
+import { MCPClient } from './mcp-client';
+import { Outbox } from './outbox';
+
+export interface ObserveEvent {
+  source_id: string;
+  source_uri: string;
+  occurred_at: string;  // RFC3339
+  content: string | Uint8Array;
+  mime_type: string;
+  adapter_sequence: number;
+  trust_tier: 'user' | 'first_party' | 'web';
+  idempotency_key: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdapterConfig {
+  adapterName: string;       // e.g. "compost-adapter-claude-code"
+  adapterVersion: string;
+  outboxPath: string;        // SQLite file under ~/.compost/adapters/<name>/outbox.db
+  coreCommand: string[];     // e.g. ["compost-daemon"] for stdio spawn
+}
+
+export abstract class HostAdapter {
+  protected outbox: Outbox;
+  protected client: MCPClient;
+  private sequence = 0;
+
+  constructor(protected config: AdapterConfig) {
+    this.outbox = new Outbox(config.outboxPath);
+    this.client = new MCPClient(config.coreCommand, {
+      onReconnect: () => this.replayUnacked(),
+    });
+  }
+
+  /**
+   * Called by subclass with captured observations. Persists to outbox first,
+   * then sends via MCP notification. Never blocks on core response.
+   */
+  protected async observe(event: Omit<ObserveEvent, 'adapter_sequence'>): Promise<void> {
+    const seq = ++this.sequence;
+    const full: ObserveEvent = { ...event, adapter_sequence: seq };
+    const outboxId = await this.outbox.append(full);
+    try {
+      await this.client.notify('compost.observe', full);
+      await this.outbox.markSent(outboxId);
+    } catch (err) {
+      // stays unacked, will replay on reconnect
+    }
+  }
+
+  private async replayUnacked(): Promise<void> {
+    const pending = await this.outbox.listPending();
+    for (const row of pending) {
+      try {
+        await this.client.notify('compost.observe', row.payload);
+        await this.outbox.markSent(row.id);
+      } catch {
+        break; // retry next reconnect
+      }
+    }
+  }
+
+  abstract start(): Promise<void>;
+  abstract stop(): Promise<void>;
+}
+```
+
+File: `packages/compost-adapter-sdk/src/outbox.ts`
+
+```typescript
+import Database from 'better-sqlite3';
+
+export interface OutboxRow {
+  id: number;
+  payload: unknown;
+  sent_at: string | null;
+  acked_at: string | null;
+}
+
+export class Outbox {
+  private db: Database.Database;
+  constructor(path: string) {
+    this.db = new Database(path);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS observe_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        payload TEXT NOT NULL,
+        sent_at TEXT,
+        acked_at TEXT
+      );
+    `);
+  }
+
+  async append(payload: unknown): Promise<number> {
+    const stmt = this.db.prepare('INSERT INTO observe_outbox (payload) VALUES (?)');
+    const info = stmt.run(JSON.stringify(payload));
+    return Number(info.lastInsertRowid);
+  }
+
+  async markSent(id: number): Promise<void> {
+    this.db.prepare('UPDATE observe_outbox SET sent_at = datetime("now") WHERE id = ?').run(id);
+  }
+
+  async markAcked(id: number): Promise<void> {
+    this.db.prepare('UPDATE observe_outbox SET acked_at = datetime("now") WHERE id = ?').run(id);
+  }
+
+  async listPending(): Promise<OutboxRow[]> {
+    const rows = this.db.prepare(
+      'SELECT id, payload, sent_at, acked_at FROM observe_outbox WHERE acked_at IS NULL ORDER BY id'
+    ).all() as Array<{ id: number; payload: string; sent_at: string | null; acked_at: string | null }>;
+    return rows.map(r => ({ ...r, payload: JSON.parse(r.payload) }));
+  }
+
+  async pruneAcked(olderThan: string): Promise<number> {
+    const info = this.db.prepare(
+      'DELETE FROM observe_outbox WHERE acked_at IS NOT NULL AND acked_at < ?'
+    ).run(olderThan);
+    return info.changes;
+  }
+}
+```
+
+**Ack semantics**: compost-daemon sends an acknowledgement back after successfully persisting the observation to `observations` table. This is a second MCP notification from daemon → adapter carrying the idempotency_key. Simple but sufficient.
+
+---
+
+## 4. Python compost_ingest CLI Contract
+
+This is the hybrid boundary. Everything on the Python side is a CLI invocation with JSON in and JSON out. No shared state, no DB access, no imports from Node.
+
+### 4.1 Invocation
+
+```
+python -m compost_ingest extract [--mime <type>] [--policy <tp-id>] < stdin > stdout
+```
+
+### 4.2 Input schema
+
+```json
+{
+  "observe_id": "018f3c...",
+  "source_uri": "file://$NOTES/foo.md",
+  "mime_type": "text/markdown",
+  "content_ref": "inline",
+  "content": "<base64 or raw utf-8>",
+  "transform_policy": "tp-2026-04"
+}
+```
+
+If content is large, the caller can write it to a temp file and use:
+
+```json
+{
+  "content_ref": "file",
+  "content_path": "/tmp/compost-ingest-abc123.bin"
+}
+```
+
+### 4.3 Output schema
+
+```json
+{
+  "observe_id": "018f3c...",
+  "extractor_version": "compost-ingest@0.1.0",
+  "extractor_stack": ["docling@1.2.0", "unstructured@0.13.0"],
+  "transform_policy": "tp-2026-04",
+  "chunks": [
+    {
+      "chunk_id": "c0",
+      "text": "...",
+      "metadata": { "heading_path": ["h1 Title", "h2 Section"], "page": 1 }
+    }
+  ],
+  "facts": [
+    { "subject": "Next.js 16", "predicate": "introduces", "object": "Cache Components", "confidence": 0.9 }
+  ],
+  "entities": [
+    { "name": "Next.js 16", "type": "software-version", "mentions": [ { "chunk_id": "c0", "span": [12, 23] } ] }
+  ],
+  "normalized_content": "...",
+  "content_hash_raw": "sha256:...",
+  "content_hash_normalized": "sha256:...",
+  "warnings": []
+}
+```
+
+### 4.4 Schema contract test (mandatory from debate)
+
+File: `packages/compost-ingest/tests/test_schema_contract.py`
+
+```python
+import json
+import subprocess
+from pathlib import Path
+import pytest
+from jsonschema import validate
+
+OUTPUT_SCHEMA = json.loads(Path("../../docs/compost-ingest-output.schema.json").read_text())
+
+@pytest.mark.parametrize("fixture", list(Path("tests/fixtures").glob("*.json")))
+def test_extract_output_matches_schema(fixture):
+    payload = fixture.read_text()
+    result = subprocess.run(
+        ["python", "-m", "compost_ingest", "extract"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    output = json.loads(result.stdout)
+    validate(instance=output, schema=OUTPUT_SCHEMA)
+```
+
+This test must pass before any `docling`, `unstructured`, or other Python dep bump is merged. Sonnet's explicit requirement — the subprocess boundary is correct but fragile at the Python library layer.
+
+---
+
+## 5. Core API (`packages/compost-core/src/api.ts`)
+
+Pure functions. No hidden side effects on import. This is the contract that both Daemon mode and Embedded mode share.
+
+```typescript
+export interface CompostContext {
+  dataDir: string;           // default: ~/.compost
+  transformPolicy: string;   // default: current
+}
+
+export interface ObserveResult {
+  observe_id: string;
+  stored: boolean;
+  duplicate_of?: string;     // populated if content_hash already present
+}
+
+export interface QueryOptions {
+  contexts?: string[];       // filter/weight by context labels
+  budget?: number;           // max facts to return
+  freshness?: 'any' | 'fresh_only';
+}
+
+export interface QueryHit {
+  fact: { subject: string; predicate: string; object: string };
+  confidence: number;
+  freshness: 'fresh' | 'stale' | 'expired';
+  provenance: {
+    source_uri: string;
+    captured_at: string;
+    adapter: string;
+    transform_policy: string;
+  };
+  contexts: string[];
+}
+
+export interface Compost {
+  observe(event: ObserveEvent, ctx?: CompostContext): Promise<ObserveResult>;
+  query(q: string, opts?: QueryOptions, ctx?: CompostContext): Promise<QueryHit[]>;
+  ask(q: string, opts?: QueryOptions, ctx?: CompostContext): Promise<{ answer: string; hits: QueryHit[] }>;
+  describeCoverage(topic: string, ctx?: CompostContext): Promise<CoverageReport>;
+  reportGap(q: string, consumerId: string, ctx?: CompostContext): Promise<void>;
+  reflect(ctx?: CompostContext): Promise<ReflectionReport>; // L4 manual trigger
+}
+
+export function createCompost(ctx: CompostContext): Compost {
+  // returns a Kb instance with functions bound to the ctx dataDir
+  // creates DB handles lazily; does NOT start any timers or background work
+}
+```
+
+**Embedded mode** imports `createCompost`, calls the functions directly, manages its own lifecycle.
+
+**Daemon mode** wraps `createCompost` in an MCP server and runs a scheduler that calls `reflect()` on a timer.
+
+---
+
+## 6. MCP Server Tools (packages/compost-daemon)
+
+Exposed tools:
+
+| Tool | Type | Description |
+|---|---|---|
+| `compost.observe` | notification | Write-path entry for all adapters (one-way, durability via outbox) |
+| `compost.query` | tool | Returns ranked facts with provenance+confidence+freshness |
+| `compost.ask` | tool | LLM-synthesized answer using L3 wiki + L2 facts, returns both |
+| `compost.describe_coverage` | tool | Returns coverage SLO report for a topic or source |
+| `compost.report_gap` | tool | Consumer reports "you could not answer this" → L4 processes |
+| `compost.reflect` | tool | Manual trigger for consolidate/reconcile/refresh (for embedded hosts) |
+
+Phase 0 implements only `compost.observe`, `compost.query`, and `compost.reflect` (as a no-op stub). `ask`, `describe_coverage`, `report_gap` are Phase 2+.
+
+---
+
+## 7. is_noteworthy() — reference implementation
+
+File: `packages/compost-core/src/ledger/noteworthy.ts`
+
+```typescript
+export interface NoteworthyInput {
+  candidate: { rawBytes: Uint8Array; normalized: string };
+  priorSnapshot?: {
+    rawHash: string;
+    normHash: string;
+    chunks: Array<{ text: string; embedding: number[] }>;
+    factSet: Set<string>;  // "subject|predicate|object"
+  };
+  policy: { minhashJaccard: number; embeddingCosine: number };
+}
+
+export interface NoteworthyResult {
+  noteworthy: boolean;
+  reason: string;
+  signals: {
+    rawHashDiff: boolean;
+    normHashDiff: boolean;
+    jaccard: number;
+    novelChunkRatio: number;
+    newFactCount: number;
+  };
+}
+
+export async function isNoteworthy(input: NoteworthyInput): Promise<NoteworthyResult> {
+  if (!input.priorSnapshot) {
+    return {
+      noteworthy: true,
+      reason: 'first observation of source',
+      signals: { rawHashDiff: true, normHashDiff: true, jaccard: 0, novelChunkRatio: 1, newFactCount: 0 },
+    };
+  }
+
+  const rawHash = sha256(input.candidate.rawBytes);
+  const normHash = sha256(input.candidate.normalized);
+  const rawHashDiff = rawHash !== input.priorSnapshot.rawHash;
+  const normHashDiff = normHash !== input.priorSnapshot.normHash;
+
+  if (!rawHashDiff && !normHashDiff) {
+    return {
+      noteworthy: false,
+      reason: 'byte-identical to prior snapshot',
+      signals: { rawHashDiff, normHashDiff, jaccard: 1, novelChunkRatio: 0, newFactCount: 0 },
+    };
+  }
+
+  // Structural similarity gate via MinHash on 5-shingles
+  const jaccard = estimateJaccardFromMinHash(
+    shingleSet(input.candidate.normalized, 5),
+    shingleSet(input.priorSnapshot.normalized, 5)
+  );
+  if (jaccard >= input.policy.minhashJaccard) {
+    return {
+      noteworthy: false,
+      reason: `high structural similarity (jaccard=${jaccard.toFixed(3)})`,
+      signals: { rawHashDiff, normHashDiff, jaccard, novelChunkRatio: 0, newFactCount: 0 },
+    };
+  }
+
+  // Semantic novelty via embedding dedup + fact delta
+  // ... implementation deferred to Phase 1 (needs embedding call)
+  // Phase 0 stub returns noteworthy=true for anything past the jaccard gate.
+  return {
+    noteworthy: true,
+    reason: 'structural difference past jaccard threshold',
+    signals: { rawHashDiff, normHashDiff, jaccard, novelChunkRatio: 1, newFactCount: 0 },
+  };
+}
+```
+
+Phase 0 implements the first three gates (raw hash, normalized hash, MinHash jaccard). The semantic novelty + fact-delta gate requires embedding and fact extraction, which lands in Phase 1.
+
+**Test cases (fixtures) required before the file is committed:**
+
+- `identical.json` — same bytes → not noteworthy
+- `whitespace-only.json` — raw differs, normalized same → not noteworthy  
+- `comma-fix.json` — normalized differs but jaccard >= 0.98 → not noteworthy
+- `new-paragraph.json` — jaccard < 0.98 → noteworthy
+- `complete-rewrite.json` — jaccard < 0.5 → noteworthy
+- `first-seen.json` — no prior → noteworthy
+
+---
+
+## 8. install.sh
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+echo "==> compost install"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "bun not found. install: curl -fsSL https://bun.sh/install | bash"
+  exit 1
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv not found. install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+  exit 1
+fi
+
+echo "==> installing Node workspaces"
+bun install
+
+echo "==> installing Python compost_ingest"
+( cd packages/compost-ingest && uv sync --frozen )
+
+echo "==> running schema contract test"
+( cd packages/compost-ingest && uv run pytest tests/test_schema_contract.py -q )
+
+echo "==> creating data dir"
+mkdir -p "${HOME}/.compost"/{blobs,wiki,adapters}
+
+echo "==> applying L0 schema"
+bun run --cwd packages/compost-core schema:apply
+
+echo "==> done. try: bun run compost-daemon --help"
+```
+
+`bun install` handles all workspaces. `uv sync --frozen` uses `uv.lock`, guaranteeing reproducible Python env. `pytest` on the contract test blocks install if docling/unstructured output drifted from schema.
+
+---
+
+## 9. Day-one guardrails (from debate, all mandatory)
+
+| Guardrail | Source | Implementation |
+|---|---|---|
+| `compost doctor --reconcile` exists before `compost crawl` | Sonnet R1 | `scripts/compost-doctor.ts` compares L0 count vs LanceDB vector count, rebuilds delta |
+| Single-writer LanceDB mutex | Sonnet R1 | Node `AsyncMutex` wrapped around all LanceDB writes (daemon + CLI share the mutex via file lock) |
+| `~/.compost/` on local disk only — no Dropbox/iCloud | Sonnet R1 | `install.sh` detects sync services and errors out; document in `docs/portability.md` |
+| `$REPOS`, `$HOME` expansion validation on `compost relearn` | Sonnet R1 | Explicit env check with clear error messages, no silent no-op |
+| Contradiction arbitration has real confidence variance | Sonnet R1 | Seed passive sniff @ 0.85, active push @ 0.95, web crawl @ 0.75 — different by source kind, not all 1.0 |
+| L3 freshness derived from L2 updated_at | Sonnet R1 | `wiki_pages.last_synthesis_at` compared against `MAX(observations.captured_at) WHERE observe_id IN contributing_observes` |
+| Python dep pinning (`uv.lock` committed) + schema contract test | Sonnet R2 | See §4.4 |
+| Adapter outbox for stdio durability | Codex R2 | See §3 |
+| `is_noteworthy()` gates before crawl ingest | Codex R2 + Opus R1 | See §7 |
+| Coverage SLO schema day-one | Codex R2 | See §1.5 |
+| "Auditable Coverage" in user docs, not "Complete" | Gemini R2 | `docs/coverage-slo.md`, README |
+| Derivation versioning via `derivations` table | Everyone | See §1.3 |
+
+---
+
+## 10. Phase 0 Definition of Done
+
+**Functional**:
+- [ ] `./scripts/install.sh` runs clean on a fresh macOS checkout
+- [ ] `compost-daemon` starts, opens SQLite ledger, applies migrations, serves stdio MCP
+- [ ] `compost-adapter-claude-code` connects to compost-daemon, sends a test observe, ack returns
+- [ ] Adapter outbox persists unacked events across daemon restart
+- [ ] `compost.query` returns empty results with correct schema (no facts yet in Phase 0)
+- [ ] `compost add <markdown-file>` writes to L0 + enqueues + runs Python extraction + stores chunks
+- [ ] `compost doctor --reconcile` runs, reports L0 vs LanceDB counts
+
+**Non-functional**:
+- [ ] `transform_policy` registry compiles, `tp-2026-04` exists
+- [ ] `is_noteworthy()` passes its 6 fixture test cases
+- [ ] Python `compost_ingest extract` passes schema contract test against 3+ markdown fixtures
+- [ ] `uv.lock` committed; `bun.lockb` committed
+- [ ] `docs/coverage-slo.md` exists and does not use the word "complete" as a guarantee
+- [ ] `docs/transform-policy.md` documents the versioning rule
+- [ ] `docs/portability.md` documents the local-disk-only constraint
+
+**Explicitly NOT in Phase 0** (deferred to Phase 1+):
+- Web URL source type (Phase 1 week 2)
+- Embedding + BM25 in LanceDB (Phase 1)
+- Fact extraction → L2 (Phase 1)
+- L3 wiki synthesis (Phase 2)
+- L4 scheduler loop (Phase 3)
+- Coverage SLO alerting (Phase 3)
+- Contradiction arbitration (Phase 3)
+- Autonomous crawl (Phase 4)
+- Gap detection (Phase 4)
+
+---
+
+## 11. What the user must decide before coding starts
+
+Three things are still undecided and will block Phase 0 if left open:
+
+1. **Package name**: ~~decided: `compost`~~
+2. **Project home location**: ~~decided: `/Users/zion/Repos/Zylo/Compost/`~~
+3. **Whether Gemini's pure-Node dissent changes D3**: the synthesis went with hybrid because the majority won and current extraction reality favors it. If you are convinced by Gemini's 2031 WASM/Rust strategic argument and want to bet on pure Node/Bun today (accepting worse PDF extraction quality to preserve single-binary distribution), say so and I flip the spec. The rest of the architecture is transport-agnostic to this choice.
+
+Once you answer these three, I can produce:
+- A concrete Phase 0 implementation TODO list (files to create in order)
+- A first-commit bootstrap script
+- Optionally dispatch to a `feature-dev` agent to start building from this spec
