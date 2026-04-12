@@ -29,17 +29,36 @@ export function registerAdd(program: Command): void {
       applyMigrations(db);
       upsertPolicies(db);
 
+      // Set up embedding + vector store for full pipeline
+      const { OllamaEmbeddingService } = await import(
+        "../../../compost-core/src/embedding/ollama"
+      );
+      const { VectorStore } = await import(
+        "../../../compost-core/src/storage/lancedb"
+      );
+
+      const embSvc = new OllamaEmbeddingService();
+      const vectorStore = new VectorStore(join(dataDir, "lancedb"), embSvc);
+      await vectorStore.connect();
+
       try {
         if (isUrl(source)) {
-          const result = await ingestUrl(db, source, dataDir);
+          const result = await ingestUrl(db, source, dataDir, {
+            embeddingService: embSvc,
+            vectorStore,
+          });
           process.stdout.write(JSON.stringify(result) + "\n");
           process.exit(result.ok ? 0 : 1);
         } else {
-          const result = await ingestFile(db, source, dataDir);
+          const result = await ingestFile(db, source, dataDir, {
+            embeddingService: embSvc,
+            vectorStore,
+          });
           process.stdout.write(JSON.stringify(result) + "\n");
           process.exit(result.ok ? 0 : 1);
         }
       } finally {
+        await vectorStore.close();
         db.close();
       }
     });

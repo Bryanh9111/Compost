@@ -88,7 +88,25 @@ function rrfMerge(
 // BM25 via FTS5
 // ---------------------------------------------------------------------------
 
+/**
+ * Prepare a natural language query for FTS5 MATCH.
+ * FTS5 defaults to implicit AND; we convert to OR for recall.
+ * Strip special FTS5 syntax chars to avoid parse errors.
+ */
+function prepareFts5Query(q: string): string {
+  // Remove FTS5 special characters that could cause parse errors
+  const cleaned = q.replace(/[":*()^~{}[\]\\]/g, " ").trim();
+  // Split into words, filter empties, join with OR
+  const words = cleaned.split(/\s+/).filter((w) => w.length > 1);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0];
+  return words.join(" OR ");
+}
+
 function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_id: string }> {
+  const ftsQuery = prepareFts5Query(q);
+  if (!ftsQuery) return [];
+
   try {
     // FTS5 rank() returns negative values; ORDER BY rank ASC = best first
     const rows = db
@@ -100,10 +118,10 @@ function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_i
          ORDER BY rank
          LIMIT $limit`
       )
-      .all({ $q: q, $limit: topK }) as Array<{ fact_id: string }>;
+      .all({ $q: ftsQuery, $limit: topK }) as Array<{ fact_id: string }>;
     return rows;
   } catch {
-    // FTS5 MATCH can throw on malformed queries (e.g. special chars)
+    // FTS5 MATCH can throw on malformed queries
     return [];
   }
 }
