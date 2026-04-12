@@ -1,7 +1,7 @@
 import type { LLMService, LLMGenerateOptions, LLMServiceConfig } from "./types";
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
-const DEFAULT_MODEL = "qwen3:8b";
+const DEFAULT_MODEL = "gemma4:31b";
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_TIMEOUT_MS = 120_000;
