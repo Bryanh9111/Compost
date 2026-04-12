@@ -21,16 +21,17 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 5 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 6 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(5);
+    expect(result.applied).toHaveLength(6);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
       "0003_stateless_decay",
       "0004_probabilistic_ranking",
       "0005_merged_outbox",
+      "0006_chunks_and_fts5",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -43,12 +44,12 @@ describe("migrator", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  test("all 17 expected tables exist after migration", () => {
+  test("all 18 expected tables exist after migration (+ FTS5 virtual table)", () => {
     applyMigrations(db);
 
     const tables = db
       .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_compost_migrations' ORDER BY name"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_compost_migrations' AND name NOT LIKE 'facts_fts_%' ORDER BY name"
       )
       .all() as { name: string }[];
 
@@ -56,11 +57,13 @@ describe("migrator", () => {
     expect(tableNames).toEqual([
       "access_log",
       "captured_item",
+      "chunks",
       "context",
       "derivation_run",
       "expected_item",
       "fact_context",
       "facts",
+      "facts_fts",
       "ingest_queue",
       "observations",
       "observe_outbox",
@@ -150,12 +153,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(5);
+    expect(before.pending).toHaveLength(6);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(5);
+    expect(after.applied).toHaveLength(6);
     expect(after.pending).toHaveLength(0);
   });
 

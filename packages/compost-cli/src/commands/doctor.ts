@@ -208,13 +208,90 @@ export function registerDoctor(program: Command): void {
 
       if (opts.rebuild) {
         const layer = opts.rebuild;
-        const policy = opts.policy ?? "(none)";
-        process.stdout.write(
-          JSON.stringify({
-            ok: true,
-            message: `rebuild ${layer} with policy ${policy} — stub, not yet implemented`,
-          }) + "\n"
-        );
+        if (layer !== "L1") {
+          process.stderr.write(`error: only --rebuild L1 is supported\n`);
+          process.exit(1);
+        }
+
+        const db = openDb();
+        const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+        try {
+          const { OllamaEmbeddingService } = await import(
+            "../../../compost-core/src/embedding/ollama"
+          );
+          const { VectorStore } = await import(
+            "../../../compost-core/src/storage/lancedb"
+          );
+
+          const embSvc = new OllamaEmbeddingService();
+          const lanceDir = join(dataDir, "lancedb");
+          const tempLanceDir = join(dataDir, "lancedb-rebuild-tmp");
+
+          // Build new index in temp location (atomic rebuild)
+          const tempStore = new VectorStore(tempLanceDir, embSvc);
+          await tempStore.connect();
+
+          // Read all chunks from SQLite (source of truth)
+          const chunks = db
+            .query(
+              `SELECT c.chunk_id, c.observe_id, c.text_content,
+                      f.fact_id
+               FROM chunks c
+               LEFT JOIN facts f ON f.observe_id = c.observe_id
+               ORDER BY c.created_at`
+            )
+            .all() as Array<{
+              chunk_id: string;
+              observe_id: string;
+              text_content: string;
+              fact_id: string | null;
+            }>;
+
+          if (chunks.length === 0) {
+            process.stdout.write(
+              JSON.stringify({ ok: true, rebuilt: 0, message: "no chunks to rebuild" }) + "\n"
+            );
+            await tempStore.close();
+            return;
+          }
+
+          // Batch embed all chunk texts
+          const BATCH = 64;
+          let embedded = 0;
+          for (let i = 0; i < chunks.length; i += BATCH) {
+            const batch = chunks.slice(i, i + BATCH);
+            const texts = batch.map((c) => c.text_content);
+            const vectors = await embSvc.embed(texts);
+
+            const chunkVectors = batch.map((c, j) => ({
+              chunk_id: c.chunk_id,
+              fact_id: c.fact_id ?? `orphan:${c.observe_id}`,
+              observe_id: c.observe_id,
+              vector: vectors[j],
+            }));
+
+            await tempStore.add(chunkVectors);
+            embedded += chunkVectors.length;
+          }
+
+          await tempStore.close();
+
+          // Atomic swap: remove old, rename temp to live
+          const { rmSync: rm, renameSync } = await import("fs");
+          try { rm(lanceDir, { recursive: true, force: true }); } catch {}
+          renameSync(tempLanceDir, lanceDir);
+
+          // Update chunks.embedded_at
+          db.run(
+            "UPDATE chunks SET embedded_at = datetime('now') WHERE embedded_at IS NULL"
+          );
+
+          process.stdout.write(
+            JSON.stringify({ ok: true, rebuilt: embedded }) + "\n"
+          );
+        } finally {
+          db.close();
+        }
         return;
       }
 

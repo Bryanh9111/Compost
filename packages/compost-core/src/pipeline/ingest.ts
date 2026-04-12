@@ -6,6 +6,8 @@ import { appendToOutbox, drainOne } from "../ledger/outbox";
 import type { OutboxEvent } from "../ledger/outbox";
 import { claimOne, complete, fail } from "../queue/lease";
 import { getActivePolicy, validatePolicyExists } from "../policies/registry";
+import type { EmbeddingService } from "../embedding/types";
+import type { VectorStore } from "../storage/lancedb";
 
 export interface IngestResult {
   ok: boolean;
@@ -13,14 +15,20 @@ export interface IngestResult {
   derivation_id?: string;
   chunks_count?: number;
   facts_count?: number;
+  embedded_count?: number;
   error?: string;
+}
+
+export interface IngestOptions {
+  embeddingService?: EmbeddingService;
+  vectorStore?: VectorStore;
 }
 
 interface ExtractionOutput {
   observe_id: string;
   extractor_version: string;
   transform_policy: string;
-  chunks: Array<{ chunk_id: string; text: string; metadata?: unknown }>;
+  chunks: Array<{ chunk_id: string; text: string; metadata?: { char_start?: number; char_end?: number; [k: string]: unknown } }>;
   facts: Array<{
     subject: string;
     predicate: string;
@@ -59,7 +67,8 @@ function detectMimeType(filePath: string): string {
 export async function ingestFile(
   db: Database,
   filePath: string,
-  dataDir: string
+  dataDir: string,
+  opts: IngestOptions = {}
 ): Promise<IngestResult> {
   const absPath = resolve(filePath);
 
@@ -130,7 +139,7 @@ export async function ingestFile(
   // Record derivation_run as running
   db.run(
     `INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status)
-     VALUES (?, ?, 'L1', ?, 'running')`,
+     VALUES (?, ?, 'L2', ?, 'running')`,
     [derivationId, observeId, policy.id]
   );
 
@@ -182,7 +191,91 @@ export async function ingestFile(
       );
     }
 
-    // Step 5: Mark derivation as succeeded
+    // Step 5: Write facts to SQLite (L2) + chunks to chunks table
+    const insertFact = db.prepare(
+      `INSERT OR IGNORE INTO facts (fact_id, subject, predicate, object, confidence, importance, observe_id, last_reinforced_at_unix_sec, half_life_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const insertChunk = db.prepare(
+      `INSERT OR IGNORE INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    const nowUnixSec = Math.floor(Date.now() / 1000);
+    const defaultHalfLife = 2592000; // 30 days (from spec §2 tp-2026-04)
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const fact of output.facts) {
+        const factId = uuidv7();
+        insertFact.run(
+          factId,
+          fact.subject,
+          fact.predicate,
+          fact.object,
+          fact.confidence ?? 0.8,
+          fact.importance ?? 0.5,
+          observeId,
+          nowUnixSec,
+          defaultHalfLife
+        );
+      }
+
+      for (let i = 0; i < output.chunks.length; i++) {
+        const chunk = output.chunks[i];
+        const chunkHash = computeHash(chunk.text);
+        insertChunk.run(
+          chunk.chunk_id,
+          observeId,
+          derivationId,
+          i,
+          chunk.text,
+          chunkHash,
+          chunk.metadata?.char_start ?? 0,
+          chunk.metadata?.char_end ?? chunk.text.length,
+          policy.id
+        );
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+
+    // Step 6: Generate embeddings + write to LanceDB (if services available)
+    let embeddedCount = 0;
+    if (opts.embeddingService && opts.vectorStore && output.chunks.length > 0) {
+      const chunkTexts = output.chunks.map((c) => c.text);
+      const vectors = await opts.embeddingService.embed(chunkTexts);
+
+      // Query fact_ids that were just inserted for this observe_id
+      const factRows = db
+        .query("SELECT fact_id FROM facts WHERE observe_id = ? ORDER BY created_at")
+        .all(observeId) as { fact_id: string }[];
+
+      // Map chunks to their closest fact (round-robin if more chunks than facts)
+      const chunkVectors = output.chunks.map((chunk, i) => ({
+        chunk_id: chunk.chunk_id,
+        fact_id: factRows.length > 0
+          ? factRows[Math.min(i, factRows.length - 1)].fact_id
+          : `orphan:${observeId}:${i}`,
+        observe_id: observeId,
+        vector: vectors[i],
+      }));
+
+      await opts.vectorStore.add(chunkVectors);
+
+      // Update chunks.embedded_at
+      const updateEmbedded = db.prepare(
+        "UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?"
+      );
+      for (const cv of chunkVectors) {
+        updateEmbedded.run(cv.chunk_id);
+      }
+      embeddedCount = chunkVectors.length;
+    }
+
+    // Step 7: Mark derivation as succeeded
     db.run(
       `UPDATE derivation_run
        SET status = 'succeeded', finished_at = datetime('now'),
@@ -192,12 +285,13 @@ export async function ingestFile(
         JSON.stringify({
           chunks: output.chunks.length,
           facts: output.facts.length,
+          embedded: embeddedCount,
         }),
         derivationId,
       ]
     );
 
-    // Step 6: Complete queue item
+    // Step 8: Complete queue item
     complete(db, claimed.id, claimed.lease_token);
 
     return {
@@ -206,6 +300,7 @@ export async function ingestFile(
       derivation_id: derivationId,
       chunks_count: output.chunks.length,
       facts_count: output.facts.length,
+      embedded_count: embeddedCount,
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);

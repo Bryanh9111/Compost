@@ -178,17 +178,17 @@ describe("query command", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it("returns empty array of hits (Phase 0 stub)", () => {
+  it("returns empty array of hits (no vectorStore)", async () => {
     const db = openTestDb(testDir);
-    const result = query(db, "what is a kernel?");
+    const result = await query(db, "what is a kernel?");
     expect(result.hits).toEqual([]);
     expect(result.query_id).toBeString();
     db.close();
   });
 
-  it("returns correct QueryResult shape", () => {
+  it("returns correct QueryResult shape", async () => {
     const db = openTestDb(testDir);
-    const result = query(db, "test query");
+    const result = await query(db, "test query");
     expect(typeof result.query_id).toBe("string");
     expect(Array.isArray(result.hits)).toBe(true);
     expect(typeof result.ranking_profile_id).toBe("string");

@@ -22,10 +22,10 @@ export function registerQuery(program: Command): void {
     .command("query")
     .description("Query the knowledge base")
     .argument("<text>", "Query text")
-    .action((text: string) => {
+    .action(async (text: string) => {
       const db = openDb();
       try {
-        const result = query(db, text);
+        const result = await query(db, text);
         process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       } finally {
         db.close();
