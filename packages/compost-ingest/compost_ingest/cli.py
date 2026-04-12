@@ -19,6 +19,7 @@ import jsonschema
 
 from compost_ingest import __version__
 from compost_ingest.extractors.markdown import extract_chunks, extract_facts
+from compost_ingest.extractors.web import extract_from_html
 from compost_ingest.schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 
 
@@ -60,10 +61,16 @@ def sha256_hex(text: str) -> str:
 
 def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
     content: str = payload["content"]
-    normalized = normalize_content(content)
+    mime_type: str = payload.get("mime_type", "text/plain")
+    source_uri: str = payload.get("source_uri", "")
 
-    chunks = extract_chunks(content)
-    facts = extract_facts(content, chunks)
+    # Route to web extractor for HTML content
+    if mime_type in ("text/html", "application/xhtml+xml") or source_uri.startswith("http"):
+        normalized, chunks, facts = extract_from_html(content, source_url=source_uri)
+    else:
+        normalized = normalize_content(content)
+        chunks = extract_chunks(content)
+        facts = extract_facts(content, chunks)
 
     return {
         "observe_id": payload["observe_id"],

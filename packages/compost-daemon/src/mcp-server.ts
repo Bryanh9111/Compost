@@ -3,6 +3,7 @@ import { appendToOutbox } from "../../compost-core/src/ledger/outbox";
 import type { OutboxEvent } from "../../compost-core/src/ledger/outbox";
 import { query } from "../../compost-core/src/query/search";
 import type { QueryOptions } from "../../compost-core/src/query/search";
+import { ask } from "../../compost-core/src/query/ask";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
 import pino from "pino";
 
@@ -165,6 +166,50 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
         };
       } catch (err) {
         log.error({ err }, "compost.reflect error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // compost.ask — LLM-synthesized answer (Phase 2)
+  // -----------------------------------------------------------------------
+  server.registerTool(
+    "compost.ask",
+    {
+      description: "Ask a question — synthesizes an answer from facts and wiki pages via LLM",
+      inputSchema: z.object({
+        question: z.string(),
+        budget: z.number().optional(),
+        ranking_profile_id: z.string().optional(),
+        contexts: z.array(z.string()).optional(),
+        as_of_unix_sec: z.number().optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        // LLM service must be configured externally; stub for daemon without LLM
+        const { OllamaLLMService } = await import("../../compost-core/src/llm/ollama");
+        const llm = new OllamaLLMService();
+        const result = await ask(db, input.question, llm, {
+          budget: input.budget,
+          ranking_profile_id: input.ranking_profile_id,
+          contexts: input.contexts,
+          as_of_unix_sec: input.as_of_unix_sec,
+        });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.ask error");
         return {
           content: [
             {

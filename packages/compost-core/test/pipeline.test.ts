@@ -146,7 +146,7 @@ describe("pipeline/ingest (end-to-end)", () => {
     const obs = db
       .query("SELECT transform_policy FROM observations WHERE observe_id = ?")
       .get(result.observe_id!) as { transform_policy: string };
-    expect(obs.transform_policy).toBe("tp-2026-04");
+    expect(obs.transform_policy).toBe(getActivePolicy().id);
   });
 
   test("ingestFile with embedding service writes to LanceDB and updates chunks.embedded_at", async () => {

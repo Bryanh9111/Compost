@@ -44,6 +44,25 @@ export const policies = {
     },
     migration_notes: "Initial Phase 0 policy.",
   },
+  "tp-2026-04-02": {
+    id: "tp-2026-04-02",
+    supersedes: "tp-2026-04",
+    effective_from: "2026-04-12",
+    chunk: { size: 800, overlap: 100 },
+    embedding: { model: "nomic-embed-text-v1.5", dim: 768 },
+    factExtraction: { prompt: "fact-extract-v1", model: "claude-opus-4-6" },
+    wikiSynthesis: { prompt: "wiki-synth-v1", model: "claude-opus-4-6" },
+    dedup: { minhashJaccard: 0.98, embeddingCosine: 0.985 },
+    normalize: { stripBoilerplate: true, collapseWhitespace: true },
+    factDecay: { halfLifeSeconds: 2592000 }, // 30 days
+    extraction: {
+      timeoutSec: 120,
+      maxRetries: 3,
+      extractorMinVersion: "compost-ingest@0.1.0",
+    },
+    migration_notes:
+      "Phase 2 web policy. Uses trafilatura for HTML boilerplate removal. Same chunk/embedding config as tp-2026-04.",
+  },
 } as const satisfies Record<string, TransformPolicy>;
 
 export type PolicyId = keyof typeof policies;
