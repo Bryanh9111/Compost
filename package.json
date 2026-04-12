@@ -1,0 +1,14 @@
+{
+  "name": "compost",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "typecheck": "tsc --build",
+    "test": "bun test",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/bun": "^1.2.0"
+  }
+}

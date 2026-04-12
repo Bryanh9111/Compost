@@ -1,0 +1,226 @@
+import { Command } from "@commander-js/extra-typings";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync } from "fs";
+import { join } from "path";
+import { applyMigrations } from "../../../compost-core/src/schema/migrator";
+
+const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
+
+function openDb(): Database {
+  const dir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const db = new Database(join(dir, "ledger.db"), { create: true });
+  db.exec("PRAGMA journal_mode=WAL");
+  db.exec("PRAGMA foreign_keys=ON");
+  applyMigrations(db);
+  return db;
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)] ?? 0;
+}
+
+export function registerDoctor(program: Command): void {
+  program
+    .command("doctor")
+    .description("Diagnostic and maintenance operations")
+    .option("--reconcile", "Count observations vs facts and report delta")
+    .option(
+      "--measure-hook",
+      "Measure cold-start latency of `compost hook session-start` (n=100)"
+    )
+    .option(
+      "--drain-retry",
+      "Release quarantined outbox rows back into the drain queue"
+    )
+    .option("--rebuild <layer>", "Rebuild a derivation layer (e.g. L1)")
+    .option("--policy <name>", "Policy name for --rebuild")
+    .action(async (opts) => {
+      if (opts.reconcile) {
+        const db = openDb();
+        try {
+          const obsRow = db
+            .query("SELECT COUNT(*) AS c FROM observations")
+            .get() as { c: number };
+          const factRow = db
+            .query("SELECT COUNT(*) AS c FROM facts")
+            .get() as { c: number };
+          const observations = obsRow.c;
+          const facts = factRow.c;
+          process.stdout.write(
+            JSON.stringify({ observations, facts, delta: observations - facts }) +
+              "\n"
+          );
+        } finally {
+          db.close();
+        }
+        return;
+      }
+
+      if (opts.measureHook) {
+        // Spec §3b.5: Hook cold-start measurement protocol
+        const SHIM_PATH = join(
+          import.meta.dir,
+          "../../../compost-hook-shim/src/index.ts"
+        );
+        const dataDir =
+          process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+
+        // Step 1: Ensure shim exists
+        if (!existsSync(SHIM_PATH)) {
+          process.stderr.write(
+            `error: hook shim not found at ${SHIM_PATH}\n`
+          );
+          process.exit(2);
+        }
+
+        // Ensure data dir + migrations for measurement
+        if (!existsSync(dataDir))
+          mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+        const setupDb = new Database(join(dataDir, "ledger.db"), {
+          create: true,
+        });
+        setupDb.exec("PRAGMA journal_mode=WAL");
+        setupDb.exec("PRAGMA foreign_keys=ON");
+        applyMigrations(setupDb);
+        const { upsertPolicies } = await import(
+          "../../../compost-core/src/policies/registry"
+        );
+        upsertPolicies(setupDb);
+        setupDb.close();
+
+        // Step 2: Warm filesystem cache
+        for (let i = 0; i < 3; i++) {
+          Bun.spawnSync(["cat", SHIM_PATH], { stdout: "pipe" });
+        }
+
+        const shimEnv = { ...process.env, COMPOST_DATA_DIR: dataDir };
+
+        function makeEnvelope(id: string) {
+          return JSON.stringify({
+            hook_event_name: "SessionStart",
+            session_id: id,
+            cwd: "/tmp/measure",
+            timestamp: new Date().toISOString(),
+            payload: {},
+          });
+        }
+
+        // Step 3: 5 warmup samples (discarded)
+        for (let i = 0; i < 5; i++) {
+          const p = Bun.spawn(
+            ["bun", SHIM_PATH, "session-start"],
+            {
+              stdin: new Blob([makeEnvelope(`warmup-${i}`)]),
+              stdout: "pipe",
+              stderr: "pipe",
+              env: shimEnv,
+            }
+          );
+          await p.exited;
+        }
+
+        // Step 4: 100 measurement samples
+        const N = 100;
+        const latencies: number[] = [];
+        for (let i = 0; i < N; i++) {
+          const envelope = makeEnvelope(`measure-${Date.now()}-${i}`);
+          const t0 = performance.now();
+          const p = Bun.spawn(
+            ["bun", SHIM_PATH, "session-start"],
+            {
+              stdin: new Blob([envelope]),
+              stdout: "pipe",
+              stderr: "pipe",
+              env: shimEnv,
+            }
+          );
+          await p.exited;
+          latencies.push(performance.now() - t0);
+          // 50ms sleep between samples (let SQLite flush WAL)
+          await Bun.sleep(50);
+        }
+
+        // Step 5: Trim top 2% + bottom 2%, compute percentiles
+        const sorted = latencies.slice().sort((a, b) => a - b);
+        const trimCount = Math.floor(N * 0.02);
+        const trimmed = sorted.slice(trimCount, sorted.length - trimCount);
+
+        const p50 = +percentile(trimmed, 50).toFixed(1);
+        const p90 = +percentile(trimmed, 90).toFixed(1);
+        const p95 = +percentile(trimmed, 95).toFixed(1);
+        const p99 = +percentile(trimmed, 99).toFixed(1);
+        const max = +trimmed[trimmed.length - 1].toFixed(1);
+
+        const stats = {
+          n: N,
+          trimmed_n: trimmed.length,
+          p50,
+          p90,
+          p95,
+          p99,
+          max,
+          unit: "ms",
+          ship_gate: p95 <= 30 ? "PASS" : "FAIL",
+        };
+
+        process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
+
+        // Step 6: Persist results
+        const logsDir = join(dataDir, "logs");
+        if (!existsSync(logsDir))
+          mkdirSync(logsDir, { recursive: true, mode: 0o700 });
+        const today = new Date().toISOString().slice(0, 10);
+        const logPath = join(
+          logsDir,
+          `hook-measurement-${today}.jsonl`
+        );
+        const { appendFileSync } = await import("fs");
+        appendFileSync(
+          logPath,
+          JSON.stringify({
+            ...stats,
+            timestamp: new Date().toISOString(),
+            raw_latencies: latencies,
+          }) + "\n"
+        );
+
+        // Step 7: Exit code
+        process.exit(p95 <= 30 ? 0 : 1);
+      }
+
+      if (opts.drainRetry) {
+        const db = openDb();
+        try {
+          const result = db.run(
+            "UPDATE observe_outbox SET drain_quarantined_at = NULL WHERE drain_quarantined_at IS NOT NULL"
+          );
+          process.stdout.write(
+            JSON.stringify({ released: result.changes }) + "\n"
+          );
+        } finally {
+          db.close();
+        }
+        return;
+      }
+
+      if (opts.rebuild) {
+        const layer = opts.rebuild;
+        const policy = opts.policy ?? "(none)";
+        process.stdout.write(
+          JSON.stringify({
+            ok: true,
+            message: `rebuild ${layer} with policy ${policy} — stub, not yet implemented`,
+          }) + "\n"
+        );
+        return;
+      }
+
+      process.stderr.write(
+        "doctor: specify --reconcile, --measure-hook, --drain-retry, or --rebuild\n"
+      );
+      process.exit(1);
+    });
+}

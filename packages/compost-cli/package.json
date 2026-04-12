@@ -1,0 +1,25 @@
+{
+  "name": "compost-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "compost": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "compost-core": "workspace:*",
+    "compost-daemon": "workspace:*",
+    "@commander-js/extra-typings": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.8.0"
+  }
+}

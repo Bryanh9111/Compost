@@ -1,0 +1,23 @@
+{
+  "name": "compost-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "bun src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "compost-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.8.0"
+  }
+}
