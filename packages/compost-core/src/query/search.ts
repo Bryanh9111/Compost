@@ -40,11 +40,81 @@ export interface QueryResult {
   budget: number;
 }
 
+// ---------------------------------------------------------------------------
+// RRF (Reciprocal Rank Fusion) — Debate 8 consensus
+// ---------------------------------------------------------------------------
+
+const RRF_K = 60; // standard constant; benchmark to tune
+
+interface RRFCandidate {
+  fact_id: string;
+  rrf_score: number;
+  semantic_score: number; // best ANN cosine, 0 if BM25-only
+}
+
+function rrfMerge(
+  annRanked: Array<{ fact_id: string; score: number }>,
+  bm25Ranked: Array<{ fact_id: string }>,
+): RRFCandidate[] {
+  const scores = new Map<string, { rrf: number; semantic: number }>();
+
+  // ANN contributions
+  for (let i = 0; i < annRanked.length; i++) {
+    const { fact_id, score } = annRanked[i];
+    const entry = scores.get(fact_id) ?? { rrf: 0, semantic: 0 };
+    entry.rrf += 1 / (RRF_K + i + 1);
+    if (score > entry.semantic) entry.semantic = score;
+    scores.set(fact_id, entry);
+  }
+
+  // BM25 contributions
+  for (let i = 0; i < bm25Ranked.length; i++) {
+    const { fact_id } = bm25Ranked[i];
+    const entry = scores.get(fact_id) ?? { rrf: 0, semantic: 0 };
+    entry.rrf += 1 / (RRF_K + i + 1);
+    scores.set(fact_id, entry);
+  }
+
+  return Array.from(scores.entries())
+    .map(([fact_id, s]) => ({
+      fact_id,
+      rrf_score: s.rrf,
+      semantic_score: s.semantic,
+    }))
+    .sort((a, b) => b.rrf_score - a.rrf_score);
+}
+
+// ---------------------------------------------------------------------------
+// BM25 via FTS5
+// ---------------------------------------------------------------------------
+
+function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_id: string }> {
+  try {
+    // FTS5 rank() returns negative values; ORDER BY rank ASC = best first
+    const rows = db
+      .prepare(
+        `SELECT f.fact_id
+         FROM facts_fts fts
+         JOIN facts f ON f.rowid = fts.rowid
+         WHERE facts_fts MATCH $q AND f.archived_at IS NULL
+         ORDER BY rank
+         LIMIT $limit`
+      )
+      .all({ $q: q, $limit: topK }) as Array<{ fact_id: string }>;
+    return rows;
+  } catch {
+    // FTS5 MATCH can throw on malformed queries (e.g. special chars)
+    return [];
+  }
+}
+
 /**
- * Phase 1 query implementation.
- * Stage-1: LanceDB ANN narrows to top-K candidates with cosine scores.
- * Stage-2: SQLite rerank with ranking formula (w1 only in Phase 1).
- * Spec §5.1.
+ * Phase 2 query implementation — hybrid retrieval.
+ * Stage-0a: BM25 via FTS5 (always available, no external deps)
+ * Stage-0b: LanceDB ANN (optional — degrades to BM25-only if absent)
+ * RRF merge → unified candidate set
+ * Stage-2: SQLite rerank with ranking formula
+ * Spec §5.1 + Debate 8 consensus.
  */
 export async function query(
   db: Database,
@@ -57,22 +127,41 @@ export async function query(
   const budget = opts.budget ?? 20;
   const asOf = opts.as_of_unix_sec ?? Math.floor(Date.now() / 1000);
 
-  // No vector store or empty query = empty result
-  if (!vectorStore || !q.trim()) {
+  if (!q.trim()) {
     return { query_id: queryId, hits: [], ranking_profile_id: profileId, budget };
   }
 
   const profile = loadRankingProfile(db, profileId);
 
-  // Stage 1: LanceDB ANN — top 200 candidates
-  const candidates = await vectorStore.search(q, 200);
+  // Stage-0a: BM25 candidates (always available)
+  const bm25Hits = bm25Search(db, q, 200);
 
-  if (candidates.length === 0) {
+  // Stage-0b: ANN candidates (optional)
+  let annHits: Array<{ fact_id: string; score: number }> = [];
+  if (vectorStore) {
+    const rawHits = await vectorStore.search(q, 200);
+    // Deduplicate chunks to fact_id level (take max score per fact)
+    const factScores = new Map<string, number>();
+    for (const h of rawHits) {
+      const existing = factScores.get(h.fact_id);
+      if (!existing || h.score > existing) {
+        factScores.set(h.fact_id, h.score);
+      }
+    }
+    annHits = Array.from(factScores.entries())
+      .map(([fact_id, score]) => ({ fact_id, score }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  // No candidates from either source = empty
+  if (bm25Hits.length === 0 && annHits.length === 0) {
     return { query_id: queryId, hits: [], ranking_profile_id: profileId, budget };
   }
 
-  // Stage 2: SQLite rerank via temp table bridge (spec §5.1)
-  // Create temp tables for candidate scores and context filter
+  // RRF merge
+  const merged = rrfMerge(annHits, bm25Hits);
+
+  // Stage-2: SQLite rerank via temp table bridge
   db.exec(`
     CREATE TEMP TABLE IF NOT EXISTS query_candidates (
       fact_id TEXT PRIMARY KEY,
@@ -88,21 +177,11 @@ export async function query(
     DELETE FROM query_context_filter;
   `);
 
-  // Populate candidate bridge table.
-  // Deduplicate by fact_id (multiple chunks may map to same fact — take max score).
-  const factScores = new Map<string, number>();
-  for (const c of candidates) {
-    const existing = factScores.get(c.fact_id);
-    if (!existing || c.score > existing) {
-      factScores.set(c.fact_id, c.score);
-    }
-  }
-
   const insertCandidate = db.prepare(
-    "INSERT INTO query_candidates (fact_id, semantic_score) VALUES (?, ?)"
+    "INSERT OR IGNORE INTO query_candidates (fact_id, semantic_score) VALUES (?, ?)"
   );
-  for (const [factId, score] of factScores) {
-    insertCandidate.run(factId, score);
+  for (const c of merged) {
+    insertCandidate.run(c.fact_id, c.semantic_score);
   }
 
   // Context filter
@@ -116,7 +195,7 @@ export async function query(
     }
   }
 
-  // Main rerank query — spec §5.1 SQL with named parameters
+  // Main rerank query
   const reranked = db
     .prepare(
       `SELECT
@@ -208,7 +287,7 @@ export async function query(
     final_score: r.final_score as number,
   }));
 
-  // Telemetry: append access_log (fire-and-forget)
+  // Telemetry: append access_log
   if (hits.length > 0) {
     const insertAccess = db.prepare(
       "INSERT INTO access_log (fact_id, accessed_at_unix_sec, query_id, ranking_profile_id) VALUES (?, ?, ?, ?)"

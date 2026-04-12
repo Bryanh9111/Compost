@@ -63,7 +63,7 @@ def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_content(content)
 
     chunks = extract_chunks(content)
-    facts = extract_facts(content)
+    facts = extract_facts(content, chunks)
 
     return {
         "observe_id": payload["observe_id"],
@@ -80,6 +80,7 @@ def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
                 "object": f.object,
                 "confidence": 0.8,
                 "importance": 0.5,
+                "source_chunk_ids": f.source_chunk_ids,
             }
             for f in facts
         ],
