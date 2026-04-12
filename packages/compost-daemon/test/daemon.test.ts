@@ -199,11 +199,11 @@ describe("MCP server exposes Phase 0 tools", () => {
     const db = makeTestDb();
     const { query } = await import("../../compost-core/src/query/search");
 
-    const result = query(db, "test query");
+    const result = await query(db, "test query");
     expect(result).toHaveProperty("query_id");
     expect(result).toHaveProperty("hits");
     expect(Array.isArray(result.hits)).toBe(true);
-    expect(result.hits.length).toBe(0); // Phase 0 stub
+    expect(result.hits.length).toBe(0); // no vectorStore = empty
     expect(result).toHaveProperty("ranking_profile_id");
     expect(result).toHaveProperty("budget");
     db.close();

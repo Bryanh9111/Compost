@@ -129,7 +129,7 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
           as_of_unix_sec: input.as_of_unix_sec,
           debug_ranking: input.debug_ranking,
         };
-        const result = query(db, input.q, opts);
+        const result = await query(db, input.q, opts);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };

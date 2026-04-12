@@ -74,7 +74,13 @@ def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
             for c in chunks
         ],
         "facts": [
-            {"subject": f.subject, "predicate": f.predicate, "object": f.object}
+            {
+                "subject": f.subject,
+                "predicate": f.predicate,
+                "object": f.object,
+                "confidence": 0.8,
+                "importance": 0.5,
+            }
             for f in facts
         ],
         "normalized_content": normalized,

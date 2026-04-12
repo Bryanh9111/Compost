@@ -82,9 +82,29 @@ describe("pipeline/ingest (end-to-end)", () => {
       .get(result.derivation_id!) as Record<string, unknown>;
     expect(deriv).toBeTruthy();
     expect(deriv.observe_id).toBe(result.observe_id);
-    expect(deriv.layer).toBe("L1");
+    expect(deriv.layer).toBe("L2");
     expect(deriv.status).toBe("succeeded");
     expect(deriv.transform_policy).toBe(getActivePolicy().id);
+
+    // Verify facts were written to L2
+    const factCount = db
+      .query("SELECT count(*) as cnt FROM facts WHERE observe_id = ?")
+      .get(result.observe_id!) as { cnt: number };
+    expect(factCount.cnt).toBe(result.facts_count);
+    expect(factCount.cnt).toBeGreaterThan(0);
+
+    // Verify chunks were written
+    const chunkCount = db
+      .query("SELECT count(*) as cnt FROM chunks WHERE observe_id = ?")
+      .get(result.observe_id!) as { cnt: number };
+    expect(chunkCount.cnt).toBe(result.chunks_count);
+    expect(chunkCount.cnt).toBeGreaterThan(0);
+
+    // Verify FTS5 index was populated via triggers
+    const ftsCount = db
+      .query("SELECT count(*) as cnt FROM facts_fts")
+      .get() as { cnt: number };
+    expect(ftsCount.cnt).toBe(factCount.cnt);
 
     // Verify outbox was drained
     const outbox = db
@@ -127,5 +147,39 @@ describe("pipeline/ingest (end-to-end)", () => {
       .query("SELECT transform_policy FROM observations WHERE observe_id = ?")
       .get(result.observe_id!) as { transform_policy: string };
     expect(obs.transform_policy).toBe("tp-2026-04");
+  });
+
+  test("ingestFile with embedding service writes to LanceDB and updates chunks.embedded_at", async () => {
+    const { OllamaEmbeddingService } = await import("../src/embedding/ollama");
+    const { VectorStore } = await import("../src/storage/lancedb");
+
+    const embSvc = new OllamaEmbeddingService();
+    const lanceDir = join(dataDir, "lancedb");
+    const vectorStore = new VectorStore(lanceDir, embSvc);
+    await vectorStore.connect();
+
+    const result = await ingestFile(db, fixtureFile, dataDir, {
+      embeddingService: embSvc,
+      vectorStore,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.embedded_count).toBeGreaterThan(0);
+    expect(result.embedded_count).toBe(result.chunks_count);
+
+    // Verify chunks.embedded_at is set
+    const embeddedChunks = db
+      .query("SELECT count(*) as cnt FROM chunks WHERE embedded_at IS NOT NULL AND observe_id = ?")
+      .get(result.observe_id!) as { cnt: number };
+    expect(embeddedChunks.cnt).toBe(result.chunks_count);
+
+    // Verify LanceDB has vectors
+    expect(await vectorStore.isEmpty()).toBe(false);
+
+    // Verify search works
+    const hits = await vectorStore.search("software architecture", 5);
+    expect(hits.length).toBeGreaterThan(0);
+
+    await vectorStore.close();
   });
 });

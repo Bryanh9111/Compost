@@ -1,21 +1,28 @@
+import type { EmbeddingService } from "../embedding/types";
+import type { VectorStore } from "../storage/lancedb";
+
 /**
- * is_noteworthy — Phase 0 three-gate content change detector.
+ * is_noteworthy — five-gate content change detector.
  *
  * Gate 1: raw byte hash (sha256 of rawBytes)
  * Gate 2: normalized string hash (sha256 of normalized)
  * Gate 3: MinHash Jaccard on 5-shingles (threshold from policy)
- * Phase 0 stub: anything past Gate 3 returns noteworthy=true
+ * Gate 4: embedding cosine similarity on raw chunks (Phase 1)
+ * Gate 5: novel fact count from post-extraction diff (Phase 1)
  */
 
 export interface NoteworthyInput {
-  candidate: { rawBytes: Uint8Array; normalized: string };
+  candidate: { rawBytes: Uint8Array; normalized: string; chunks?: string[] };
   priorSnapshot?: {
     rawHash: string;
     normHash: string;
-    normalized: string; // Phase 0: needed for MinHash comparison
-    // chunks[] and factSet are Phase 1+
+    normalized: string;
   };
   policy: { minhashJaccard: number; embeddingCosine: number };
+  embeddingService?: EmbeddingService;
+  vectorStore?: VectorStore;
+  /** Post-extraction: how many new facts were produced vs prior */
+  newFactCount?: number;
 }
 
 export interface NoteworthyResult {
@@ -192,16 +199,51 @@ export async function is_noteworthy(
     };
   }
 
-  // Phase 0 stub: anything past jaccard gate is noteworthy
+  // Gate 4: Embedding cosine similarity on raw chunks (Phase 1)
+  // If embedding service + vector store are available, check if candidate chunks
+  // are semantically novel compared to existing indexed content.
+  let novelChunkRatio = 1.0; // default: all novel if no embedding
+  if (input.embeddingService && input.vectorStore && input.candidate.chunks && input.candidate.chunks.length > 0) {
+    const cosineThreshold = policy.embeddingCosine ?? 0.985;
+    const embeddings = await input.embeddingService.embed(input.candidate.chunks);
+
+    let novelCount = 0;
+    for (const vec of embeddings) {
+      const hits = await input.vectorStore.searchByVector(vec, 1);
+      if (hits.length === 0 || hits[0].score < cosineThreshold) {
+        novelCount++;
+      }
+    }
+    novelChunkRatio = novelCount / input.candidate.chunks.length;
+
+    // If no novel chunks, the content change is cosmetic
+    if (novelChunkRatio < 0.05) {
+      return {
+        noteworthy: false,
+        reason: "semantic-duplicate",
+        signals: {
+          rawHashDiff: true,
+          normHashDiff: true,
+          jaccard,
+          novelChunkRatio,
+          newFactCount: input.newFactCount ?? 0,
+        },
+      };
+    }
+  }
+
+  // Gate 5: Novel fact count (post-extraction, if available)
+  const newFactCount = input.newFactCount ?? 0;
+
   return {
     noteworthy: true,
-    reason: "content-changed",
+    reason: novelChunkRatio < 1.0 ? "partial-novelty" : "content-changed",
     signals: {
       rawHashDiff: true,
       normHashDiff: true,
       jaccard,
-      novelChunkRatio: 1,
-      newFactCount: 0,
+      novelChunkRatio,
+      newFactCount,
     },
   };
 }
