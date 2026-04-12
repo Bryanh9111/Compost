@@ -289,6 +289,13 @@ function updateFetchState(
 ): void {
   const now = Math.floor(Date.now() / 1000);
 
+  // Ensure source row exists (drain auto-registers, but we may call this before drain)
+  db.run(
+    `INSERT OR IGNORE INTO source (id, uri, kind, trust_tier, refresh_sec)
+     VALUES (?, ?, 'web', 'web', 3600)`,
+    [sourceId, sourceId]
+  );
+
   // Get refresh_sec from source table (default 3600 = 1 hour)
   const sourceRow = db
     .query("SELECT refresh_sec FROM source WHERE id = ?")
