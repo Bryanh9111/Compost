@@ -1,0 +1,13 @@
+{
+  "name": "compost-hook-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --format=cjs --external:bun:sqlite --outfile=dist/index.cjs",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
