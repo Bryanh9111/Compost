@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 6 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 7 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(6);
+    expect(result.applied).toHaveLength(7);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -32,6 +32,7 @@ describe("migrator", () => {
       "0004_probabilistic_ranking",
       "0005_merged_outbox",
       "0006_chunks_and_fts5",
+      "0007_phase2_search",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -72,6 +73,7 @@ describe("migrator", () => {
       "ranking_profile",
       "source",
       "source_context",
+      "web_fetch_state",
       "wiki_page_observe",
       "wiki_pages",
     ]);
@@ -153,12 +155,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(6);
+    expect(before.pending).toHaveLength(7);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(6);
+    expect(after.applied).toHaveLength(7);
     expect(after.pending).toHaveLength(0);
   });
 

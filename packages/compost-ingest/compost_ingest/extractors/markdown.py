@@ -19,6 +19,7 @@ class Fact:
     subject: str
     predicate: str
     object: str
+    source_chunk_ids: list[str] = field(default_factory=list)
 
 
 CHUNK_SIZE = 800
@@ -108,28 +109,42 @@ def _first_sentence(text: str) -> str:
     return clean[:200].strip()
 
 
-def extract_facts(content: str) -> list[Fact]:
-    """Extract heading-based subject/predicate/object facts (Phase 0)."""
+def extract_facts(content: str, chunks: list[Chunk] | None = None) -> list[Fact]:
+    """Extract heading-based subject/predicate/object facts with chunk linkage."""
     paragraphs = _split_paragraphs(content)
     heading_paths = _build_heading_path(paragraphs)
+
+    # Build heading→chunk_ids index from chunks metadata
+    heading_to_chunks: dict[str, list[str]] = {}
+    if chunks:
+        for chunk in chunks:
+            hpath = chunk.metadata.get("heading_path", [])
+            if hpath:
+                subject = hpath[-1]
+                heading_to_chunks.setdefault(subject, []).append(chunk.chunk_id)
 
     facts: list[Fact] = []
     seen_subjects: set[str] = set()
 
     for para, hpath in zip(paragraphs, heading_paths):
         if HEADING_RE.match(para):
-            # Headings themselves don't generate facts
             continue
         if not hpath:
             continue
 
-        subject = hpath[-1]  # innermost heading
+        subject = hpath[-1]
         if subject in seen_subjects:
             continue
         seen_subjects.add(subject)
 
         obj = _first_sentence(para)
         if obj:
-            facts.append(Fact(subject=subject, predicate="discusses", object=obj))
+            source_chunk_ids = heading_to_chunks.get(subject, [])
+            facts.append(Fact(
+                subject=subject,
+                predicate="discusses",
+                object=obj,
+                source_chunk_ids=source_chunk_ids,
+            ))
 
     return facts

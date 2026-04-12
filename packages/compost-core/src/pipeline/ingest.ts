@@ -33,8 +33,9 @@ interface ExtractionOutput {
     subject: string;
     predicate: string;
     object: string;
-    confidence: number;
-    importance: number;
+    confidence?: number;
+    importance?: number;
+    source_chunk_ids?: string[];
   }>;
   normalized_content: string;
   content_hash_raw: string;
@@ -248,17 +249,30 @@ export async function ingestFile(
       const chunkTexts = output.chunks.map((c) => c.text);
       const vectors = await opts.embeddingService.embed(chunkTexts);
 
-      // Query fact_ids that were just inserted for this observe_id
+      // Build chunk_id → fact_id mapping from extractor output
+      // Each fact has source_chunk_ids linking it to the chunks it was extracted from
+      const chunkToFactId = new Map<string, string>();
       const factRows = db
         .query("SELECT fact_id FROM facts WHERE observe_id = ? ORDER BY created_at")
         .all(observeId) as { fact_id: string }[];
 
-      // Map chunks to their closest fact (round-robin if more chunks than facts)
+      for (let fi = 0; fi < output.facts.length; fi++) {
+        const fact = output.facts[fi];
+        const factId = factRows[fi]?.fact_id;
+        if (factId && fact.source_chunk_ids) {
+          for (const cid of fact.source_chunk_ids) {
+            // First fact wins if multiple facts claim the same chunk
+            if (!chunkToFactId.has(cid)) {
+              chunkToFactId.set(cid, factId);
+            }
+          }
+        }
+      }
+
       const chunkVectors = output.chunks.map((chunk, i) => ({
         chunk_id: chunk.chunk_id,
-        fact_id: factRows.length > 0
-          ? factRows[Math.min(i, factRows.length - 1)].fact_id
-          : `orphan:${observeId}:${i}`,
+        fact_id: chunkToFactId.get(chunk.chunk_id)
+          ?? (factRows.length > 0 ? factRows[0].fact_id : `orphan:${observeId}:${i}`),
         observe_id: observeId,
         vector: vectors[i],
       }));
