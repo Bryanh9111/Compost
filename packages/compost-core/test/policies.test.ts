@@ -112,6 +112,6 @@ describe("policies/registry", () => {
   test("getActivePolicy returns the latest non-superseded policy", () => {
     upsertPolicies(db);
     const active = getActivePolicy();
-    expect(active.id).toBe("tp-2026-04");
+    expect(active.id).toBe("tp-2026-04-02");
   });
 });
