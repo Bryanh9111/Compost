@@ -63,6 +63,25 @@ export const policies = {
     migration_notes:
       "Phase 2 web policy. Uses trafilatura for HTML boilerplate removal. Same chunk/embedding config as tp-2026-04.",
   },
+  "tp-2026-04-03": {
+    id: "tp-2026-04-03",
+    supersedes: "tp-2026-04-02",
+    effective_from: "2026-04-13",
+    chunk: { size: 800, overlap: 100 },
+    embedding: { model: "nomic-embed-text-v1.5", dim: 768 },
+    factExtraction: { prompt: "fact-extract-v2-llm", model: "gemma3:4b" },
+    wikiSynthesis: { prompt: "wiki-synth-v1", model: "gemma4:31b" },
+    dedup: { minhashJaccard: 0.97, embeddingCosine: 0.985 },
+    normalize: { stripBoilerplate: true, collapseWhitespace: true },
+    factDecay: { halfLifeSeconds: 2592000 }, // 30 days
+    extraction: {
+      timeoutSec: 180,
+      maxRetries: 3,
+      extractorMinVersion: "compost-ingest@0.2.0",
+    },
+    migration_notes:
+      "Phase 3 policy. LLM-based fact extraction (local Ollama gemma3:4b) + improved heading-based predicates. Old facts from tp-2026-04/tp-2026-04-02 remain valid; new extractions produce richer triples.",
+  },
 } as const satisfies Record<string, TransformPolicy>;
 
 export type PolicyId = keyof typeof policies;

@@ -98,23 +98,53 @@ def extract_chunks(content: str) -> list[Chunk]:
     return result
 
 
-def _first_sentence(text: str) -> str:
-    """Return the first sentence (or up to 200 chars) of text."""
-    # Strip markdown code/emphasis markers for a clean object
+def _extract_sentences(text: str, max_sentences: int = 3) -> str:
+    """Return up to max_sentences from text, cleaned of markdown formatting."""
     clean = re.sub(r"[`*_#]", "", text).strip()
-    # Split on sentence-ending punctuation
-    m = re.search(r"[.!?]", clean)
-    if m:
-        return clean[: m.start() + 1].strip()
-    return clean[:200].strip()
+    sentences: list[str] = []
+    for m in re.finditer(r"[^.!?]+[.!?]", clean):
+        sentences.append(m.group().strip())
+        if len(sentences) >= max_sentences:
+            break
+    if not sentences:
+        return clean[:300].strip()
+    return " ".join(sentences)
+
+
+# Predicate inference from heading text and paragraph content
+_PREDICATE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(install|setup|set up|getting started)\b", re.I), "requires_setup"),
+    (re.compile(r"\b(configur|option|setting|parameter)\b", re.I), "configures"),
+    (re.compile(r"\b(defin|what is|overview|introduc|describe)\b", re.I), "defines"),
+    (re.compile(r"\b(architec|design|structur|layer|component)\b", re.I), "has_architecture"),
+    (re.compile(r"\b(depend|require|prerequisit|need)\b", re.I), "depends_on"),
+    (re.compile(r"\b(deprecat|remov|drop|obsolet)\b", re.I), "deprecates"),
+    (re.compile(r"\b(error|bug|issue|problem|fix|troubleshoot)\b", re.I), "addresses_issue"),
+    (re.compile(r"\b(example|usage|how to|tutorial|guide)\b", re.I), "demonstrates"),
+    (re.compile(r"\b(api|endpoint|route|method|function|interface)\b", re.I), "exposes_api"),
+    (re.compile(r"\b(test|spec|assert|expect|coverage)\b", re.I), "tests"),
+    (re.compile(r"\b(perform|optim|fast|slow|latency|throughput)\b", re.I), "affects_performance"),
+    (re.compile(r"\b(secur|auth|permission|token|credential)\b", re.I), "secures"),
+    (re.compile(r"\b(migrat|upgrad|version|changelog)\b", re.I), "migrates"),
+    (re.compile(r"\b(stor|databas|table|schema|sql|query)\b", re.I), "stores_data"),
+]
+
+
+def _infer_predicate(heading: str, paragraph: str) -> str:
+    """Infer a meaningful predicate from heading + paragraph text."""
+    combined = f"{heading} {paragraph[:200]}"
+    for pattern, predicate in _PREDICATE_PATTERNS:
+        if pattern.search(combined):
+            return predicate
+    return "describes"
 
 
 def extract_facts(content: str, chunks: list[Chunk] | None = None) -> list[Fact]:
-    """Extract heading-based subject/predicate/object facts with chunk linkage."""
+    """Extract heading-based facts with inferred predicates and richer objects."""
     paragraphs = _split_paragraphs(content)
     heading_paths = _build_heading_path(paragraphs)
 
-    # Build heading→chunk_ids index from chunks metadata
+    # Build heading->chunk_ids index from chunks metadata
     heading_to_chunks: dict[str, list[str]] = {}
     if chunks:
         for chunk in chunks:
@@ -137,12 +167,13 @@ def extract_facts(content: str, chunks: list[Chunk] | None = None) -> list[Fact]
             continue
         seen_subjects.add(subject)
 
-        obj = _first_sentence(para)
+        obj = _extract_sentences(para)
         if obj:
+            predicate = _infer_predicate(subject, para)
             source_chunk_ids = heading_to_chunks.get(subject, [])
             facts.append(Fact(
                 subject=subject,
-                predicate="discusses",
+                predicate=predicate,
                 object=obj,
                 source_chunk_ids=source_chunk_ids,
             ))
