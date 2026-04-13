@@ -7,6 +7,7 @@ export interface ReflectionReport {
   sensoryObservationsDeleted: number;
   sensoryFactsCascaded: number;
   semanticFactsTombstoned: number;
+  contradictionsResolved: number;
   outboxRowsPruned: number;
   skippedDueToFkViolation: number;
   reflectionDurationMs: number;
@@ -32,6 +33,7 @@ export function reflect(db: Database): ReflectionReport {
     sensoryObservationsDeleted: 0,
     sensoryFactsCascaded: 0,
     semanticFactsTombstoned: 0,
+    contradictionsResolved: 0,
     outboxRowsPruned: 0,
     skippedDueToFkViolation: 0,
     reflectionDurationMs: 0,
@@ -129,7 +131,63 @@ export function reflect(db: Database): ReflectionReport {
     });
   }
 
-  // Step 3: Prune drained outbox rows past retention.
+  // Step 3: Contradiction detection + resolution
+  // Debate 9 consensus: detect facts with same subject+predicate but different object.
+  // Resolution: newer > higher-confidence > multi-source. Loser gets superseded_by.
+  try {
+    // Find conflicting fact pairs (same subject + predicate, different object, both active)
+    const conflicts = db
+      .query(
+        `SELECT f1.fact_id AS winner_id, f2.fact_id AS loser_id,
+                f1.subject, f1.predicate,
+                f1.confidence AS winner_conf, f2.confidence AS loser_conf,
+                f1.created_at AS winner_created, f2.created_at AS loser_created
+         FROM facts f1
+         JOIN facts f2 ON f1.subject = f2.subject
+           AND f1.predicate = f2.predicate
+           AND f1.fact_id != f2.fact_id
+           AND f1.object != f2.object
+         WHERE f1.archived_at IS NULL AND f2.archived_at IS NULL
+           AND f1.superseded_by IS NULL AND f2.superseded_by IS NULL
+           AND (
+             f1.confidence > f2.confidence
+             OR (f1.confidence = f2.confidence AND f1.created_at > f2.created_at)
+             OR (f1.confidence = f2.confidence AND f1.created_at = f2.created_at AND f1.fact_id > f2.fact_id)
+           )
+         LIMIT 100`
+      )
+      .all() as Array<{
+      winner_id: string;
+      loser_id: string;
+      subject: string;
+      predicate: string;
+    }>;
+
+    if (conflicts.length > 0) {
+      const groupId = `cg-${Date.now()}`;
+      const resolveTx = db.transaction(() => {
+        const supStmt = db.prepare(
+          "UPDATE facts SET superseded_by = ?, conflict_group = ? WHERE fact_id = ? AND superseded_by IS NULL"
+        );
+        const winStmt = db.prepare(
+          "UPDATE facts SET conflict_group = ? WHERE fact_id = ? AND conflict_group IS NULL"
+        );
+        for (const c of conflicts) {
+          supStmt.run(c.winner_id, groupId, c.loser_id);
+          winStmt.run(groupId, c.winner_id);
+        }
+      });
+      resolveTx();
+      report.contradictionsResolved = conflicts.length;
+    }
+  } catch (err) {
+    report.errors.push({
+      step: "contradictionResolution",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Step 4: Prune drained outbox rows past retention.
   // Quarantined rows are NEVER pruned — operator must resolve via compost doctor.
   try {
     const pruned = db.run(

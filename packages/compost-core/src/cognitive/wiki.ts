@@ -4,7 +4,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { LLMService } from "../llm/types";
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 
 export interface WikiSynthesisResult {
@@ -15,19 +15,21 @@ export interface WikiSynthesisResult {
 
 /**
  * Discover topics that have facts but no wiki page, or stale wiki pages.
+ * Debate 9 fix: also watches archived_at changes (tombstoned facts should
+ * trigger rebuild so the wiki doesn't show stale info).
  */
 function findTopicsNeedingSynthesis(db: Database): string[] {
-  // Find distinct fact subjects that have no wiki page or stale wiki page
   const rows = db
     .query(
       `SELECT DISTINCT f.subject AS topic
        FROM facts f
        WHERE f.archived_at IS NULL
+         AND f.superseded_by IS NULL
          AND f.subject NOT IN (
            SELECT wp.title FROM wiki_pages wp
            WHERE wp.last_synthesis_at > (
-             SELECT MAX(f2.created_at) FROM facts f2
-             WHERE f2.subject = wp.title AND f2.archived_at IS NULL
+             SELECT MAX(COALESCE(f2.archived_at, f2.created_at)) FROM facts f2
+             WHERE f2.subject = wp.title
            )
          )
        ORDER BY f.created_at DESC
@@ -92,13 +94,24 @@ Write the wiki page in markdown:`;
   const pagePath = `${safePath}.md`;
   const fullPath = join(wikiDir, pagePath);
   mkdirSync(dirname(fullPath), { recursive: true });
-  writeFileSync(fullPath, markdown, "utf-8");
 
-  // Write to wiki_pages table
+  // Version snapshot: save existing content before overwrite
   const existing = db
     .query("SELECT path FROM wiki_pages WHERE path = ?")
     .get(pagePath) as { path: string } | null;
 
+  if (existing && existsSync(fullPath)) {
+    const oldContent = readFileSync(fullPath, "utf-8");
+    db.run(
+      `INSERT INTO wiki_page_versions (page_path, content, synthesis_model)
+       VALUES (?, ?, (SELECT last_synthesis_model FROM wiki_pages WHERE path = ?))`,
+      [pagePath, oldContent, pagePath]
+    );
+  }
+
+  writeFileSync(fullPath, markdown, "utf-8");
+
+  // Write to wiki_pages table
   if (existing) {
     db.run(
       `UPDATE wiki_pages SET title = ?, last_synthesis_at = datetime('now'), last_synthesis_model = ?

@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 8 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 9 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(8);
+    expect(result.applied).toHaveLength(9);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -34,6 +34,7 @@ describe("migrator", () => {
       "0006_chunks_and_fts5",
       "0007_phase2_search",
       "0008_phase3_ranking",
+      "0009_phase3_contradiction_and_wiki_versions",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -46,7 +47,7 @@ describe("migrator", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  test("all 18 expected tables exist after migration (+ FTS5 virtual table)", () => {
+  test("all 19 expected tables exist after migration (+ FTS5 virtual table)", () => {
     applyMigrations(db);
 
     const tables = db
@@ -76,6 +77,7 @@ describe("migrator", () => {
       "source_context",
       "web_fetch_state",
       "wiki_page_observe",
+      "wiki_page_versions",
       "wiki_pages",
     ]);
   });
@@ -156,12 +158,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(8);
+    expect(before.pending).toHaveLength(9);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(8);
+    expect(after.applied).toHaveLength(9);
     expect(after.pending).toHaveLength(0);
   });
 
