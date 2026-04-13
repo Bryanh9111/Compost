@@ -63,49 +63,44 @@ Debate 8: 4-way Phase 2 plan review, 10-step revised plan
 - drainOne tolerates hook payloads missing occurred_at/mime_type (auto-derives from appended_at)
 - Passive capture pipeline now end-to-end: hook -> outbox -> drain -> ingest -> embed
 
----
+### Phase 3: Consolidation (2026-04-13)
 
-## In Progress
+**Batch 0: Phase 2 debt fix**
+- Wire rp-phase2-default as default ranking profile (search.ts hardcode fix)
 
-### Phase 3: Consolidation (estimated weeks 6-8)
+**Batch A: Extraction quality**
+- Improved heading-based fact extraction: 14 inferred predicates replace "discusses"
+- Object extraction: 2-3 sentences instead of truncated first sentence
+- LLM-based fact extraction: local Ollama (gemma3:4b) extracts SPO triples from chunks
+- New transform policy tp-2026-04-03
 
-**Episodic memory**
-- memory_episodic link table (fact_id -> episode metadata)
-- Extractor outputs episodic_metadata (event_type, participants, occurred_at)
+**Batch B: Search quality**
+- rp-phase3-default ranking profile: w4_importance=0.1 activated
+- Migration 0008: new ranking profile
+- Multi-query expansion in compost.ask: LLM generates 2-3 query variants, fan-out search, dedup
 
-**Ranking factors**
-- w4_importance activation
-- w5_emotional (Phase 4)
-- w6_repetition_penalty (Phase 4)
-- w7_context_mismatch (Phase 4)
+**Batch C: Cognitive loop**
+- Contradiction detection + resolution in reflect (heuristic: confidence > recency)
+- superseded_by + conflict_group tracking
+- Wiki rebuild trigger fix: watches archived_at changes (Opus debate 9 bug find)
+- Wiki page versioning: wiki_page_versions table, auto-snapshot before rewrite
+- Migration 0009: wiki_page_versions + contradiction indexes
 
-**Contradiction arbitration**
-- Detect conflicting facts (same subject+predicate, different object)
-- Arbitration rules: newer > higher-confidence > multi-source > conflict flag
-- superseded_by + conflict_group activation
+**Deferred to Phase 4** (debate 9 consensus: 4/4 agree)
+- Episodic memory materialization (no extractor consumer)
+- Fact-to-fact links graph (no caller in query/wiki/reflect)
+- Semantic chunking / Savitzky-Golay (heading-based adequate for markdown)
 
-**Reflect completion**
-- Contradiction resolution in reflect cycle
-- Wiki rebuild trigger (L3 vs L2 freshness comparison)
-- Fact consolidation
-
-**GBrain-inspired capabilities** (ported from garrytan/gbrain, no Postgres/OpenAI deps)
-- Fact-to-fact links graph: fact_links table + recursive CTE traverseGraph
-- Multi-query expansion: LLM (Ollama) generates 2-3 query variants before retrieval
-- Semantic chunking: Savitzky-Golay smoothing for topic boundary detection
-- Wiki page versioning: wiki_page_versions table, auto-snapshot on reflect rewrite
-
-**Tech debt**
-- ONNX embedding fallback (local, no Ollama dependency)
-- proper-lockfile for concurrent LanceDB access
-- RRF k parameter benchmarking on real corpus
-- BM25 on chunks (currently fact-level only)
+Debate 9: 4-way (Opus/Sonnet/Gemini/Codex) plan review, revised to 4 batches
 
 ---
 
 ## Planned
 
 ### Phase 4: Active Learning (weeks 9-12)
+- Episodic memory materialization (deferred from Phase 3, needs extractor consumer)
+- Fact-to-fact links graph + recursive CTE traversal (deferred from Phase 3, needs caller)
+- Semantic chunking / Savitzky-Golay (deferred from Phase 3, evaluate on real corpus)
 - Curiosity agent: detect knowledge gaps, generate SearchPlan
 - Gap tracker: from query failure signals -> "what you don't know"
 - Autonomous crawl with is_noteworthy semantic gates
@@ -130,6 +125,7 @@ Debate 8: 4-way Phase 2 plan review, 10-step revised plan
 | Milestone | Phase | What it means |
 |-----------|-------|---------------|
 | Queryable with manual maintenance | 2 | **Done** -- add/query/ask all work |
+| Self-maintaining knowledge | 3 | **Done** -- contradiction arbitration, wiki rebuild, LLM extraction |
 | Self-evolving | 4 | Three ingest paths live (push + sniff + crawl) |
 | Portable | 5 | Clone to new machine, knowledge survives |
 | Ecosystem | 6 | Multiple host adapters + source types |

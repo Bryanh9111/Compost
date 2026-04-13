@@ -166,7 +166,7 @@ packages/
 | **0** | Encoding + Storage | **Done** -- ledger, drain, queue, reflect, hook, CLI |
 | **1** | Semantic retrieval | **Done** -- LanceDB embeddings, real query results, ranking |
 | **2** | Hybrid search + web + LLM | **Done** -- BM25+ANN, temporal decay, web ingest, wiki synthesis, compost.ask |
-| 3 | Consolidation | Next -- episodic memory, contradiction arbitration |
+| **3** | Consolidation | **Done** -- contradiction arbitration, wiki rebuild+versioning, LLM fact extraction, multi-query expansion |
 | 4 | Active learning | Curiosity agent, gap tracker, autonomous crawl |
 | 5 | Multi-host | Cross-machine sync, HTTP transport |
 | 6 | Ecosystem | More adapters, PDF/code/video ingest |
@@ -182,18 +182,19 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - **Date-stamped policies** (`tp-YYYY-MM`) over semver -- honest about what changes mean
 - **Python extraction boundary** -- separate runtime for ML/NLP, JSON stdin/stdout contract
 - **BM25 as fallback** -- search works without LanceDB (graceful degradation)
-- **Local-first LLM** -- Ollama default for wiki synthesis + ask, zero API cost
+- **Local-first LLM** -- Ollama default for wiki synthesis + ask + fact extraction, zero API cost
+- **Heuristic contradiction arbitration** -- no LLM in reflect loop, avoids SQLite single-writer lock contention
 
 Full spec: `docs/compost-v2-spec.md`
 Debate records: `docs/debate*/`
 
 ## Stats
 
-- **8.1K lines** of TypeScript + Python
+- **8.5K lines** of TypeScript + Python
 - **128 TS tests + 18 Python contract tests**, 0 failures
-- **7 SQL migrations**, 19 tables + FTS5 + triggers
-- **8 architecture debates** with 4 AI reviewers
-- **2 transform policies** (local file + web content)
+- **9 SQL migrations**, 20 tables + FTS5 + triggers
+- **9 architecture debates** with 4 AI reviewers
+- **3 transform policies** (local file, web content, LLM fact extraction)
 
 ## License
 
