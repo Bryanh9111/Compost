@@ -1,22 +1,58 @@
 /**
  * compost.ask — LLM-synthesized answers over query results + wiki pages.
  * Debate 8 consensus: ask = query() + wiki context + LLM synthesis.
+ * Debate 9: added multi-query expansion (LLM generates query variants before search).
  * NOT an independent retrieval path.
  */
 import type { Database } from "bun:sqlite";
 import type { VectorStore } from "../storage/lancedb";
 import type { LLMService } from "../llm/types";
-import { query, type QueryOptions, type QueryHit } from "./search";
+import { query, type QueryOptions, type QueryHit, type QueryResult } from "./search";
 
 export interface AskResult {
   answer: string;
   query_id: string;
   hits: QueryHit[];
   wiki_pages_used: string[];
+  expanded_queries?: string[];
 }
 
 export interface AskOptions extends QueryOptions {
   maxAnswerTokens?: number;
+  expandQueries?: boolean; // default true — LLM generates 2-3 query variants
+}
+
+const EXPANSION_PROMPT = `Given the user's question, generate 2-3 alternative phrasings that could find relevant information. Return ONLY a JSON array of strings, no explanation.
+
+Question: `;
+
+/**
+ * Expand a query into multiple variants using LLM.
+ * Returns [original, ...variants]. Gracefully falls back to [original].
+ */
+async function expandQuery(question: string, llm: LLMService): Promise<string[]> {
+  try {
+    const raw = await llm.generate(EXPANSION_PROMPT + question, {
+      maxTokens: 200,
+      temperature: 0.3,
+      timeoutMs: 10_000,
+    });
+
+    const text = raw.trim();
+    // Strip markdown fences
+    const cleaned = text.replace(/```\w*\n?/g, "").trim();
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      const variants = JSON.parse(cleaned.slice(start, end + 1)) as string[];
+      if (Array.isArray(variants) && variants.length > 0) {
+        return [question, ...variants.slice(0, 3).filter((v) => typeof v === "string" && v.trim())];
+      }
+    }
+  } catch {
+    // Expansion failure is non-fatal
+  }
+  return [question];
 }
 
 /**
@@ -30,8 +66,39 @@ export async function ask(
   opts: AskOptions = {},
   vectorStore?: VectorStore
 ): Promise<AskResult> {
-  // Step 1: Retrieve via hybrid query (same path as compost.query)
-  const queryResult = await query(db, question, { ...opts, budget: opts.budget ?? 10 }, vectorStore);
+  const doExpand = opts.expandQueries !== false;
+  const budget = opts.budget ?? 10;
+
+  // Step 1: Multi-query expansion (Debate 9: ask-only, not compost.query)
+  let queries = [question];
+  if (doExpand) {
+    queries = await expandQuery(question, llm);
+  }
+
+  // Step 2: Fan-out search across all query variants, deduplicate by fact_id
+  const seenFactIds = new Set<string>();
+  const allHits: QueryHit[] = [];
+  let primaryQueryId = "";
+
+  for (const q of queries) {
+    const result = await query(db, q, { ...opts, budget }, vectorStore);
+    if (!primaryQueryId) primaryQueryId = result.query_id;
+    for (const hit of result.hits) {
+      if (!seenFactIds.has(hit.fact_id)) {
+        seenFactIds.add(hit.fact_id);
+        allHits.push(hit);
+      }
+    }
+  }
+
+  // Re-sort by final_score and limit to budget
+  allHits.sort((a, b) => b.final_score - a.final_score);
+  const queryResult: QueryResult = {
+    query_id: primaryQueryId,
+    hits: allHits.slice(0, budget),
+    ranking_profile_id: opts.ranking_profile_id ?? "rp-phase3-default",
+    budget,
+  };
 
   // Step 2: Gather relevant wiki pages
   const wikiPages: Array<{ path: string; title: string }> = [];
@@ -94,5 +161,6 @@ Answer:`;
     query_id: queryResult.query_id,
     hits: queryResult.hits,
     wiki_pages_used: wikiPages.map((p) => p.path),
+    expanded_queries: queries.length > 1 ? queries : undefined,
   };
 }

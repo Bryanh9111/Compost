@@ -52,16 +52,16 @@ describe("query/search", () => {
   test("QueryResult shape matches spec", async () => {
     const result = await query(db, "test", {
       budget: 10,
-      ranking_profile_id: "rp-phase2-default",
+      ranking_profile_id: "rp-phase3-default",
     });
-    expect(result.ranking_profile_id).toBe("rp-phase2-default");
+    expect(result.ranking_profile_id).toBe("rp-phase3-default");
     expect(result.budget).toBe(10);
     expect(result.hits).toEqual([]);
   });
 
-  test("defaults: budget=20, profile=rp-phase2-default", async () => {
+  test("defaults: budget=20, profile=rp-phase3-default", async () => {
     const result = await query(db, "test");
-    expect(result.ranking_profile_id).toBe("rp-phase2-default");
+    expect(result.ranking_profile_id).toBe("rp-phase3-default");
     expect(result.budget).toBe(20);
   });
 
@@ -270,18 +270,18 @@ Al dente means cooking pasta until it is firm to the bite.
 
     for (const hit of result.hits) {
       expect(hit.ranking_components.w1_semantic).toBeGreaterThan(0);
-      // rp-phase2-default: w2_temporal=0.15, w3_access=0.1
+      // rp-phase3-default: w2_temporal=0.15, w3_access=0.1
       // w2 should be > 0 for fresh facts; w3 starts at 0 (no access history yet)
       expect(hit.ranking_components.w2_temporal).toBeGreaterThanOrEqual(0);
       expect(hit.ranking_components.w3_access).toBeGreaterThanOrEqual(0);
     }
   });
 
-  test("temporal decay: rp-phase2-default makes w2_temporal nonzero", async () => {
+  test("temporal decay: rp-phase3-default makes w2_temporal nonzero", async () => {
     const result = await query(
       db,
       "machine learning",
-      { ranking_profile_id: "rp-phase2-default" },
+      { ranking_profile_id: "rp-phase3-default" },
       vectorStore
     );
 
@@ -298,7 +298,7 @@ Al dente means cooking pasta until it is firm to the bite.
     const fresh = await query(
       db,
       "neural networks",
-      { ranking_profile_id: "rp-phase2-default", as_of_unix_sec: Math.floor(Date.now() / 1000) },
+      { ranking_profile_id: "rp-phase3-default", as_of_unix_sec: Math.floor(Date.now() / 1000) },
       vectorStore
     );
 
@@ -307,7 +307,7 @@ Al dente means cooking pasta until it is firm to the bite.
     const stale = await query(
       db,
       "neural networks",
-      { ranking_profile_id: "rp-phase2-default", as_of_unix_sec: oneYearLater },
+      { ranking_profile_id: "rp-phase3-default", as_of_unix_sec: oneYearLater },
       vectorStore
     );
 
