@@ -65,10 +65,12 @@ BM25 works independently when vectorStore is null (graceful degradation).
 2. Sensory hard-GC: DELETE observations WHERE source.kind='sensory' AND captured_at < -7d
    (FK CASCADE deletes facts, chunks, queue entries, captured_items)
 3. Semantic soft-tombstone: SET archived_at WHERE importance*decay < 0.001 AND NOT pinned
-4. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
+4. Contradiction arbitration: same subject+predicate, different object
+   -> confidence > recency tiebreak, loser gets superseded_by
+5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (7 migrations, 19 tables)
+## Database schema (9 migrations, 20 tables)
 
 ### Core tables
 
@@ -87,6 +89,7 @@ BM25 works independently when vectorStore is null (graceful degradation).
 | `access_log` | telemetry | Fact access frequency for w3 ranking |
 | `web_fetch_state` | L4 | ETag/Last-Modified/backoff for freshness loop |
 | `facts_fts` | L1 | FTS5 virtual table for BM25 keyword search |
+| `wiki_page_versions` | L3 | Wiki page snapshots before rewrite |
 
 ### FK CASCADE chain (critical for reflect GC)
 
@@ -103,8 +106,8 @@ wiki_pages.path CASCADE -> wiki_page_observe
 
 ```
 src/
-  schema/          7 SQL migrations + migrator.ts
-  policies/        transform_policy registry (tp-2026-04, tp-2026-04-02)
+  schema/          9 SQL migrations + migrator.ts
+  policies/        transform_policy registry (tp-2026-04, tp-2026-04-02, tp-2026-04-03)
   ledger/          outbox.ts (append + drain), noteworthy.ts (5-gate dedup)
   queue/           lease.ts (claim, heartbeat, complete, fail)
   pipeline/        ingest.ts (file), web-ingest.ts (URL)
