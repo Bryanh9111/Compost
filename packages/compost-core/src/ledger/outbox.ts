@@ -101,6 +101,7 @@ export function drainOne(db: Database): DrainResult | null {
     mime_type?: string;
     occurred_at?: string;
     metadata?: Record<string, unknown>;
+    [key: string]: unknown;
   };
 
   try {
@@ -110,13 +111,18 @@ export function drainOne(db: Database): DrainResult | null {
     return null;
   }
 
-  if (!parsedPayload.occurred_at || !parsedPayload.mime_type) {
-    recordDrainFailure(
-      db,
-      pending.seq,
-      "payload missing required fields: occurred_at, mime_type"
-    );
-    return null;
+  // Derive missing fields from hook payloads:
+  // Hook shim writes {session_id, hook_event_name, ...} without occurred_at/mime_type.
+  // Use appended_at as fallback for occurred_at, and application/json for mime_type.
+  if (!parsedPayload.occurred_at) {
+    parsedPayload.occurred_at = pending.appended_at;
+  }
+  if (!parsedPayload.mime_type) {
+    parsedPayload.mime_type = "application/json";
+  }
+  // For hook payloads, the entire payload IS the content
+  if (!parsedPayload.content) {
+    parsedPayload.content = pending.payload;
   }
 
   try {
