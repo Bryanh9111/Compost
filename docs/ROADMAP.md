@@ -57,6 +57,12 @@
 
 Debate 8: 4-way Phase 2 plan review, 10-step revised plan
 
+**Daemon ingest worker** (2026-04-13)
+- startIngestWorker in scheduler.ts (claims ingest_queue -> Python extract -> embed -> facts/chunks)
+- Daemon initializes OllamaEmbeddingService + VectorStore at startup
+- drainOne tolerates hook payloads missing occurred_at/mime_type (auto-derives from appended_at)
+- Passive capture pipeline now end-to-end: hook -> outbox -> drain -> ingest -> embed
+
 ---
 
 ## In Progress
@@ -82,6 +88,12 @@ Debate 8: 4-way Phase 2 plan review, 10-step revised plan
 - Contradiction resolution in reflect cycle
 - Wiki rebuild trigger (L3 vs L2 freshness comparison)
 - Fact consolidation
+
+**GBrain-inspired capabilities** (ported from garrytan/gbrain, no Postgres/OpenAI deps)
+- Fact-to-fact links graph: fact_links table + recursive CTE traverseGraph
+- Multi-query expansion: LLM (Ollama) generates 2-3 query variants before retrieval
+- Semantic chunking: Savitzky-Golay smoothing for topic boundary detection
+- Wiki page versioning: wiki_page_versions table, auto-snapshot on reflect rewrite
 
 **Tech debt**
 - ONNX embedding fallback (local, no Ollama dependency)

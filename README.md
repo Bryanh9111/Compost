@@ -189,8 +189,8 @@ Debate records: `docs/debate*/`
 
 ## Stats
 
-- **4.7K lines** of TypeScript + Python
-- **146 tests** (128 TS + 18 Python), 0 failures
+- **8.1K lines** of TypeScript + Python
+- **128 TS tests + 18 Python contract tests**, 0 failures
 - **7 SQL migrations**, 19 tables + FTS5 + triggers
 - **8 architecture debates** with 4 AI reviewers
 - **2 transform policies** (local file + web content)
