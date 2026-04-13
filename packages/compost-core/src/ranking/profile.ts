@@ -15,11 +15,11 @@ export interface RankingProfile {
 
 /**
  * Load a ranking profile from the database.
- * Falls back to rp-phase2-default if not found.
+ * Falls back to rp-phase3-default if not found.
  */
 export function loadRankingProfile(
   db: Database,
-  profileId: string = "rp-phase2-default"
+  profileId: string = "rp-phase3-default"
 ): RankingProfile {
   const row = db
     .query(
