@@ -122,7 +122,7 @@ src/
 src/
   main.ts          startDaemon/stopDaemon, PID file, Unix socket
   mcp-server.ts    5 MCP tools: observe, query, ask, reflect, feedback
-  scheduler.ts     drain loop (1s) + reflect (6h) + freshness (60s)
+  scheduler.ts     drain loop (1s) + ingest worker (2s) + reflect (6h) + freshness (60s)
 ```
 
 ### compost-ingest (Python)
