@@ -3,8 +3,10 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
-import { startDrainLoop, startReflectScheduler } from "./scheduler";
+import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startIngestWorker } from "./scheduler";
 import type { Scheduler } from "./scheduler";
+import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
+import { VectorStore } from "../../compost-core/src/storage/lancedb";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -60,15 +62,31 @@ export async function startDaemon(
   const pidPath = join(dataDir, "daemon.pid");
   writeFileSync(pidPath, String(process.pid), "utf-8");
 
-  // 5. Start background services
+  // 5. Initialize embedding + vector store
+  const embSvc = new OllamaEmbeddingService();
+  const vectorStore = new VectorStore(join(dataDir, "lancedb"), embSvc);
+  try {
+    await vectorStore.connect();
+    log.info("vector store connected");
+  } catch (err) {
+    log.warn({ err }, "vector store connection failed (embedding will be skipped)");
+  }
+
+  // 6. Start background services
   const drainSched: Scheduler = startDrainLoop(db);
   const reflectSched: Scheduler = startReflectScheduler(db);
+  const ingestSched: Scheduler = startIngestWorker(db, {
+    embeddingService: embSvc,
+    vectorStore,
+    dataDir,
+  });
+  const freshnessSched: Scheduler = startFreshnessLoop(db, dataDir);
 
-  // 6. Unix socket control server (stop/status/reload)
+  // 7. Unix socket control server (stop/status/reload)
   const sockPath = join(dataDir, "daemon.sock");
   const socketServer = await startControlSocket(sockPath, db);
 
-  // 7. MCP stdio server (skip in test environments that pass withMcp=false)
+  // 8. MCP stdio server (skip in test environments that pass withMcp=false)
   let mcpHandle: { stop(): Promise<void> } | null = null;
   if (withMcp) {
     try {
@@ -80,13 +98,16 @@ export async function startDaemon(
     }
   }
 
-  // 8. Signal handlers
+  // 9. Signal handlers
   const cleanup = async () => {
     log.info("shutting down");
     drainSched.stop();
     reflectSched.stop();
+    ingestSched.stop();
+    freshnessSched.stop();
     socketServer.stop();
     if (mcpHandle) await mcpHandle.stop();
+    await vectorStore.close().catch(() => {});
     tryUnlink(pidPath);
     tryUnlink(sockPath);
     db.close();

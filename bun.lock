@@ -52,6 +52,7 @@
         "@modelcontextprotocol/sdk": "^1.0.0",
         "compost-core": "workspace:*",
         "pino": "^9.6.0",
+        "uuid": "^11.1.0",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",
