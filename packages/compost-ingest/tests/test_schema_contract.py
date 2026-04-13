@@ -167,7 +167,7 @@ def test_simple_note_has_facts() -> None:
     # simple-note.md has 3 headings with body paragraphs -> expect >=1 fact
     assert len(output["facts"]) >= 1
     for fact in output["facts"]:
-        assert fact["predicate"] == "discusses"
+        assert fact["predicate"] != ""  # inferred predicate, no longer hardcoded
         assert fact["subject"]
         assert fact["object"]
 

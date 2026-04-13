@@ -20,6 +20,7 @@ import jsonschema
 from compost_ingest import __version__
 from compost_ingest.extractors.markdown import extract_chunks, extract_facts
 from compost_ingest.extractors.web import extract_from_html
+from compost_ingest.extractors.llm_facts import extract_facts_llm
 from compost_ingest.schema import INPUT_SCHEMA, OUTPUT_SCHEMA
 
 
@@ -72,25 +73,38 @@ def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
         chunks = extract_chunks(content)
         facts = extract_facts(content, chunks)
 
+    # LLM-based fact extraction (additive, merges with heading-based facts)
+    chunk_dicts = [{"chunk_id": c.chunk_id, "text": c.text, "metadata": c.metadata} for c in chunks]
+    llm_facts = extract_facts_llm(chunk_dicts)
+
+    all_facts = [
+        {
+            "subject": f.subject,
+            "predicate": f.predicate,
+            "object": f.object,
+            "confidence": 0.8,
+            "importance": 0.5,
+            "source_chunk_ids": f.source_chunk_ids,
+        }
+        for f in facts
+    ] + [
+        {
+            "subject": lf.subject,
+            "predicate": lf.predicate,
+            "object": lf.object,
+            "confidence": lf.confidence,
+            "importance": 0.6,
+            "source_chunk_ids": lf.source_chunk_ids,
+        }
+        for lf in llm_facts
+    ]
+
     return {
         "observe_id": payload["observe_id"],
         "extractor_version": __version__,
         "transform_policy": payload["transform_policy"],
-        "chunks": [
-            {"chunk_id": c.chunk_id, "text": c.text, "metadata": c.metadata}
-            for c in chunks
-        ],
-        "facts": [
-            {
-                "subject": f.subject,
-                "predicate": f.predicate,
-                "object": f.object,
-                "confidence": 0.8,
-                "importance": 0.5,
-                "source_chunk_ids": f.source_chunk_ids,
-            }
-            for f in facts
-        ],
+        "chunks": chunk_dicts,
+        "facts": all_facts,
         "normalized_content": normalized,
         "content_hash_raw": sha256_hex(content),
         "content_hash_normalized": sha256_hex(normalized),

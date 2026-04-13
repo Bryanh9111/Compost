@@ -225,7 +225,7 @@ Al dente means cooking pasta until it is firm to the bite.
     expect(topHit.confidence).toBeGreaterThan(0);
     expect(topHit.final_score).toBeGreaterThan(0);
     expect(topHit.provenance.source_uri).toBeTruthy();
-    expect(topHit.provenance.transform_policy).toBe("tp-2026-04-02");
+    expect(topHit.provenance.transform_policy).toBe("tp-2026-04-03");
   });
 
   test("query respects budget limit", async () => {
