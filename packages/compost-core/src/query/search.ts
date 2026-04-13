@@ -8,7 +8,7 @@ import { loadRankingProfile } from "../ranking/profile";
  */
 export interface QueryOptions {
   budget?: number; // max results, default 20
-  ranking_profile_id?: string; // default 'rp-phase1-default'
+  ranking_profile_id?: string; // default 'rp-phase2-default'
   contexts?: string[]; // context filter
   as_of_unix_sec?: number; // decay reference time
   debug_ranking?: boolean; // writes to ranking_audit_log if true
@@ -141,7 +141,7 @@ export async function query(
   vectorStore?: VectorStore
 ): Promise<QueryResult> {
   const queryId = uuidv7();
-  const profileId = opts.ranking_profile_id ?? "rp-phase1-default";
+  const profileId = opts.ranking_profile_id ?? "rp-phase2-default";
   const budget = opts.budget ?? 20;
   const asOf = opts.as_of_unix_sec ?? Math.floor(Date.now() / 1000);
 
