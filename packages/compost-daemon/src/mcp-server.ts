@@ -5,6 +5,7 @@ import { query } from "../../compost-core/src/query/search";
 import type { QueryOptions } from "../../compost-core/src/query/search";
 import { ask } from "../../compost-core/src/query/ask";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
+import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import pino from "pino";
 
 const log = pino({ name: "compost-mcp" });
@@ -44,6 +45,12 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
     { name: "compost", version: "0.1.0" },
     { capabilities: {} }
   );
+
+  // Debate 009 Fix 1: per-server BreakerRegistry singleton. Lazy-init inside
+  // the compost.ask handler so daemons without LLM configured don't pay the
+  // Ollama import cost up front. Holds rolling-window state for the 3 TS
+  // call sites (ask.expand / ask.answer / wiki.synthesis).
+  let llmRegistry: BreakerRegistry | null = null;
 
   // -----------------------------------------------------------------------
   // compost.observe — write an observation to the outbox
@@ -196,10 +203,15 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
     },
     async (input) => {
       try {
-        // LLM service must be configured externally; stub for daemon without LLM
-        const { OllamaLLMService } = await import("../../compost-core/src/llm/ollama");
-        const llm = new OllamaLLMService();
-        const result = await ask(db, input.question, llm, {
+        // Debate 009 Fix 1: construct the BreakerRegistry *once per server
+        // instance* so circuit state (closed/open/half-open) persists across
+        // requests. A fresh registry per call would reset state every time
+        // and the breaker would never actually trip.
+        if (!llmRegistry) {
+          const { OllamaLLMService } = await import("../../compost-core/src/llm/ollama");
+          llmRegistry = new BreakerRegistry(new OllamaLLMService());
+        }
+        const result = await ask(db, input.question, llmRegistry, {
           budget: input.budget,
           ranking_profile_id: input.ranking_profile_id,
           contexts: input.contexts,

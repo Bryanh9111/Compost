@@ -107,8 +107,14 @@ export class CircuitBreakerLLM implements LLMService {
     }
 
     if (this.state === "half-open") {
-      // Concurrent half-open: share the single in-flight probe.
-      if (this.probeInFlight) return this.probeInFlight;
+      // Half-open: exactly one concurrent call (the probe) hits the inner
+      // service. Non-probe concurrent callers immediately throw
+      // CircuitOpenError so each can run its own fallback with its own
+      // prompt — piggy-backing them on the probe promise would return the
+      // probe's response to unrelated prompts (debate 009 Fix 4, Codex #2).
+      if (this.probeInFlight) {
+        throw new CircuitOpenError(this.siteKey);
+      }
       this.probeInFlight = this.runProbe(prompt, opts);
       try {
         return await this.probeInFlight;

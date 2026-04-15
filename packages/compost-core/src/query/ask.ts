@@ -7,6 +7,7 @@
 import type { Database } from "bun:sqlite";
 import type { VectorStore } from "../storage/lancedb";
 import type { LLMService } from "../llm/types";
+import { BreakerRegistry } from "../llm/breaker-registry";
 import { query, type QueryOptions, type QueryHit, type QueryResult } from "./search";
 
 export interface AskResult {
@@ -49,8 +50,13 @@ async function expandQuery(question: string, llm: LLMService): Promise<string[]>
         return [question, ...variants.slice(0, 3).filter((v) => typeof v === "string" && v.trim())];
       }
     }
-  } catch {
-    // Expansion failure is non-fatal
+  } catch (err) {
+    // Expansion failure is non-fatal; log for operator visibility (debate 010
+    // Fix 4). Distinguishes CircuitOpenError from genuine LLM 5xx so SRE can
+    // tell "breaker is open" from "Ollama is actually broken".
+    const name = err instanceof Error ? err.name : "unknown";
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`ask.expandQuery: LLM failure (${name}): ${msg}`);
   }
   return [question];
 }
@@ -58,21 +64,36 @@ async function expandQuery(question: string, llm: LLMService): Promise<string[]>
 /**
  * Ask a question — retrieves relevant facts via hybrid query,
  * gathers wiki context, and synthesizes an answer via LLM.
+ *
+ * `llmOrRegistry` accepts either a raw `LLMService` (test / simple caller
+ * path) or a `BreakerRegistry` (production path, debate 009 Fix 1). When a
+ * registry is supplied, expansion uses `registry.get("ask.expand")` and
+ * answer synthesis uses `registry.get("ask.answer")`, so a storm of failed
+ * expansions cannot open the breaker that guards the main answer path.
  */
 export async function ask(
   db: Database,
   question: string,
-  llm: LLMService,
+  llmOrRegistry: LLMService | BreakerRegistry,
   opts: AskOptions = {},
   vectorStore?: VectorStore
 ): Promise<AskResult> {
   const doExpand = opts.expandQueries !== false;
   const budget = opts.budget ?? 10;
 
+  const expandLLM =
+    llmOrRegistry instanceof BreakerRegistry
+      ? llmOrRegistry.get("ask.expand")
+      : llmOrRegistry;
+  const answerLLM =
+    llmOrRegistry instanceof BreakerRegistry
+      ? llmOrRegistry.get("ask.answer")
+      : llmOrRegistry;
+
   // Step 1: Multi-query expansion (Debate 9: ask-only, not compost.query)
   let queries = [question];
   if (doExpand) {
-    queries = await expandQuery(question, llm);
+    queries = await expandQuery(question, expandLLM);
   }
 
   // Step 2: Fan-out search across all query variants, deduplicate by fact_id
@@ -158,12 +179,18 @@ Answer:`;
     // open / LLM error, return the top BM25 facts as plain text with an
     // `[LLM unavailable]` banner so the user still gets something usable.
     try {
-      answer = await llm.generate(prompt, {
+      answer = await answerLLM.generate(prompt, {
         maxTokens: opts.maxAnswerTokens ?? 1024,
         temperature: 0.2,
         systemPrompt: "You are a precise knowledge assistant. Only answer based on the provided facts and wiki context. Be concise.",
       });
-    } catch {
+    } catch (err) {
+      // Debate 010 Fix 4: surface LLM failure reason in operator log before
+      // returning the BM25 fallback. Without this, a CircuitOpenError looks
+      // identical to a genuine Ollama 5xx from the user's perspective.
+      const name = err instanceof Error ? err.name : "unknown";
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`ask.answer: LLM failure (${name}): ${msg} -- returning BM25 fallback`);
       const bm25Fallback = queryResult.hits
         .slice(0, 10)
         .map(

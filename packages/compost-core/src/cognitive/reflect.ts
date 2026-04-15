@@ -263,23 +263,36 @@ export function reflect(db: Database): ReflectionReport {
           // `confidence_actual` is the floor itself — SQL arbitration has no
           // model-reported confidence; the floor-level assertion is just
           // "this decision is classified at instance tier (0.85)".
+          //
+          // Debate 009 Fix 3: audit is an *observability* side-effect. If
+          // recordDecision throws, do NOT let it roll back the contradiction
+          // resolve (which is the real business outcome). Log to
+          // report.errors and continue.
           const meta = clusterMeta.get(key);
           if (meta && loserIds.length > 0) {
-            recordDecision(db, {
-              kind: "contradiction_arbitration",
-              targetId: cluster.groupId,
-              confidenceTier: TIER_FOR_KIND.contradiction_arbitration,
-              confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.contradiction_arbitration],
-              rationale: `arbitrated ${loserIds.length} loser(s) under (${meta.subject}, ${meta.predicate}); winner by newer > higher-confidence > fact_id`,
-              evidenceRefs: {
+            try {
+              recordDecision(db, {
                 kind: "contradiction_arbitration",
-                winner_id: cluster.winner,
-                loser_ids: loserIds,
-                subject: meta.subject,
-                predicate: meta.predicate,
-              },
-              decidedBy: "reflect",
-            });
+                targetId: cluster.groupId,
+                confidenceTier: TIER_FOR_KIND.contradiction_arbitration,
+                confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.contradiction_arbitration],
+                rationale: `arbitrated ${loserIds.length} loser(s) under (${meta.subject}, ${meta.predicate}); winner by newer > higher-confidence > fact_id`,
+                evidenceRefs: {
+                  kind: "contradiction_arbitration",
+                  winner_id: cluster.winner,
+                  loser_ids: loserIds,
+                  subject: meta.subject,
+                  predicate: meta.predicate,
+                },
+                decidedBy: "reflect",
+              });
+            } catch (auditErr) {
+              report.errors.push({
+                step: "auditContradiction",
+                message:
+                  auditErr instanceof Error ? auditErr.message : String(auditErr),
+              });
+            }
           }
         }
         // Report counts losers (one per archived fact), not raw pair rows.

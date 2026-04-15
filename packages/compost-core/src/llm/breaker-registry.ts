@@ -20,8 +20,11 @@ import { CircuitBreakerLLM, type CircuitBreakerOpts } from "./circuit-breaker";
 export type LLMCallSite =
   | "ask.expand"
   | "ask.answer"
-  | "wiki.synthesis"
-  | "mcp.ask.factory";
+  | "wiki.synthesis";
+// Debate 010 Fix 5: removed "mcp.ask.factory" -- it was declared in debate
+// 007 Lock 4 but no caller ever materialized. mcp-server.ts passes the
+// registry directly into `ask()`, which dispatches to ask.expand / ask.answer
+// internally. Add the site back only when a real MCP-level LLM call exists.
 
 /**
  * Returns a singleton `CircuitBreakerLLM` for the given site. Test code

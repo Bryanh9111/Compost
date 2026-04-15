@@ -4,6 +4,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { LLMService } from "../llm/types";
+import { BreakerRegistry } from "../llm/breaker-registry";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { recordDecision, TIER_FOR_KIND, CONFIDENCE_FLOORS } from "./audit";
@@ -172,20 +173,31 @@ Write the wiki page in markdown:`;
 
   // P0-2 (Week 3): record wiki_rebuild audit row. Shape locked by debate 008
   // Q5: evidence references `input_fact_ids`, not observe_ids.
-  recordDecision(db, {
-    kind: "wiki_rebuild",
-    targetId: pagePath,
-    confidenceTier: TIER_FOR_KIND.wiki_rebuild,
-    confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.wiki_rebuild],
-    rationale: `${existing ? "updated" : "created"} wiki page for topic "${topic}" from ${facts.length} facts`,
-    evidenceRefs: {
+  //
+  // Debate 009 Fix 3: audit is observability. At this point disk + wiki_pages
+  // are already written; if recordDecision throws, surface via console.warn
+  // so the daemon log captures it but don't propagate and abort synthesis.
+  try {
+    recordDecision(db, {
       kind: "wiki_rebuild",
-      page_path: pagePath,
-      input_fact_ids: facts.map((f) => f.fact_id),
-      input_fact_count: facts.length,
-    },
-    decidedBy: "wiki",
-  });
+      targetId: pagePath,
+      confidenceTier: TIER_FOR_KIND.wiki_rebuild,
+      confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.wiki_rebuild],
+      rationale: `${existing ? "updated" : "created"} wiki page for topic "${topic}" from ${facts.length} facts`,
+      evidenceRefs: {
+        kind: "wiki_rebuild",
+        page_path: pagePath,
+        input_fact_ids: facts.map((f) => f.fact_id),
+        input_fact_count: facts.length,
+      },
+      decidedBy: "wiki",
+    });
+  } catch (auditErr) {
+    console.warn(
+      `wiki.synthesizePage: audit write failed for ${pagePath}:`,
+      auditErr instanceof Error ? auditErr.message : String(auditErr)
+    );
+  }
 
   return { created: !existing, updated: !!existing };
 }
@@ -193,14 +205,24 @@ Write the wiki page in markdown:`;
 /**
  * Run wiki synthesis for all topics needing pages.
  * Called by reflect scheduler after reflect() completes.
+ *
+ * `llmOrRegistry` accepts either a raw `LLMService` (test / simple caller
+ * path) or a `BreakerRegistry` (production path, debate 009 Fix 1). With a
+ * registry, synthesis uses `registry.get("wiki.synthesis")` so repeated
+ * synthesis failures open the wiki breaker without starving `ask.answer`.
  */
 export async function synthesizeWiki(
   db: Database,
-  llm: LLMService,
+  llmOrRegistry: LLMService | BreakerRegistry,
   dataDir: string
 ): Promise<WikiSynthesisResult> {
   const wikiDir = join(dataDir, "wiki");
   mkdirSync(wikiDir, { recursive: true });
+
+  const llm =
+    llmOrRegistry instanceof BreakerRegistry
+      ? llmOrRegistry.get("wiki.synthesis")
+      : llmOrRegistry;
 
   const topics = findTopicsNeedingSynthesis(db);
   let pagesCreated = 0;

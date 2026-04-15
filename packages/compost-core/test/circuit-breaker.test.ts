@@ -176,33 +176,18 @@ describe("CircuitBreakerLLM (P0-6 Week 3)", () => {
     expect(b.getState()).toBe("open");
   });
 
-  test("half-open concurrent callers share the single probe", async () => {
-    // Inner takes 20ms, so two near-simultaneous calls will both land in
-    // half-open state but only one should hit the wire.
+  test("half-open: probe runs alone, concurrent callers get CircuitOpenError", async () => {
+    // Debate 009 Fix 4 semantics: only the probe (first caller in half-open)
+    // touches the inner service. Concurrent callers immediately throw
+    // CircuitOpenError so each can run its own fallback -- piggy-backing
+    // them on the probe promise would leak A's answer to B's unrelated prompt.
     let concurrent = 0;
     let peak = 0;
-    const trackingInner: MockLLMService = new MockLLMService({ mode: "happy" });
-    // Wrap to count concurrency
-    const innerWithTracking = {
-      model: "track",
-      async generate(p: string) {
-        concurrent += 1;
-        peak = Math.max(peak, concurrent);
-        await new Promise((r) => setTimeout(r, 20));
-        concurrent -= 1;
-        return trackingInner.generate(p);
-      },
-    };
-    const b = new CircuitBreakerLLM(innerWithTracking, "test", {
-      now: clock.now,
-    });
-    // Open the breaker first
-    for (let i = 0; i < 3; i++) {
-      // Use another failing inner temporarily via a second breaker instance
-      // Simpler: directly manipulate via a seq-driven mock and a fresh breaker
-    }
-    // Rebuild: fresh breaker with a failing-then-happy inner
-    const inner2: { model: string; generate: (p: string) => Promise<string>; _mode: string } = {
+    const inner: {
+      model: string;
+      generate: (p: string) => Promise<string>;
+      _mode: string;
+    } = {
       model: "m2",
       _mode: "error",
       generate: async function (p: string) {
@@ -214,19 +199,27 @@ describe("CircuitBreakerLLM (P0-6 Week 3)", () => {
         return `ok:${p.slice(0, 3)}`;
       },
     };
-    const b2 = new CircuitBreakerLLM(inner2, "test", { now: clock.now });
+    const b2 = new CircuitBreakerLLM(inner, "test", { now: clock.now });
     for (let i = 0; i < 3; i++) await b2.generate("x").catch(() => {});
     expect(b2.getState()).toBe("open");
-    inner2._mode = "happy";
+    inner._mode = "happy";
     clock.tick(CIRCUIT_BREAKER_OPEN_MS + 1);
-    // Fire 3 concurrent calls in half-open state
-    const results = await Promise.all([
+
+    // Fire 3 concurrent calls in half-open state. The first becomes the probe;
+    // the others receive CircuitOpenError so their own fallback paths run.
+    const settled = await Promise.allSettled([
       b2.generate("aaa"),
       b2.generate("bbb"),
       b2.generate("ccc"),
     ]);
-    // All three received the same probe result (not 3 separate round trips)
-    expect(results).toHaveLength(3);
+    const fulfilled = settled.filter((s) => s.status === "fulfilled");
+    const rejected = settled.filter((s) => s.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(2);
+    for (const r of rejected as PromiseRejectedResult[]) {
+      expect(r.reason).toBeInstanceOf(CircuitOpenError);
+    }
+    // Only the probe hit the wire.
     expect(peak).toBe(1);
   });
 

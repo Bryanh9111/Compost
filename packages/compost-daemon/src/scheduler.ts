@@ -1,12 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { drainOne } from "../../compost-core/src/ledger/outbox";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
+import { synthesizeWiki } from "../../compost-core/src/cognitive/wiki";
+import type { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
+import type { LLMService } from "../../compost-core/src/llm/types";
 import { ingestUrl } from "../../compost-core/src/pipeline/web-ingest";
 import { claimOne, complete, fail } from "../../compost-core/src/queue/lease";
 import { getActivePolicy, validatePolicyExists } from "../../compost-core/src/policies/registry";
 import { v7 as uuidv7 } from "uuid";
 import { existsSync } from "fs";
-import { resolve } from "path";
+import { resolve, join } from "path";
 import type { EmbeddingService } from "../../compost-core/src/embedding/types";
 import type { VectorStore } from "../../compost-core/src/storage/lancedb";
 import pino from "pino";
@@ -75,10 +78,26 @@ export function startDrainLoop(db: Database): Scheduler {
   };
 }
 
+export interface ReflectSchedulerOpts {
+  /** Optional LLM/registry for post-reflect wiki synthesis (debate 009 Fix 2). */
+  llm?: BreakerRegistry | LLMService;
+  /** Required when `llm` is provided; wiki pages land under `<dataDir>/wiki`. */
+  dataDir?: string;
+}
+
 /**
  * Reflect scheduler: runs reflect(db) every 6 hours.
+ *
+ * Debate 009 Fix 2: when `opts.llm` + `opts.dataDir` are supplied, also runs
+ * `synthesizeWiki` after each successful reflect. Without this hook the
+ * wiki_rebuild audit rows and `wiki_pages.stale_at` fallback never fire in
+ * the daemon path. Wiki errors are logged and swallowed so one bad topic
+ * cannot stall the reflect cadence.
  */
-export function startReflectScheduler(db: Database): Scheduler {
+export function startReflectScheduler(
+  db: Database,
+  opts: ReflectSchedulerOpts = {}
+): Scheduler {
   let running = true;
 
   async function loop() {
@@ -90,6 +109,16 @@ export function startReflectScheduler(db: Database): Scheduler {
         log.info({ report }, "reflect complete");
       } catch (err) {
         log.error({ err }, "reflect error");
+        continue; // skip wiki synth when reflect failed
+      }
+
+      if (opts.llm && opts.dataDir) {
+        try {
+          const wikiResult = await synthesizeWiki(db, opts.llm, opts.dataDir);
+          log.info({ wikiResult }, "wiki synthesis complete");
+        } catch (err) {
+          log.error({ err }, "wiki synthesis error (continuing)");
+        }
       }
     }
   }
@@ -424,8 +453,6 @@ import {
 } from "../../compost-core/src/persistence/backup";
 import { takeSnapshot as takeGraphHealthSnapshot } from "../../compost-core/src/cognitive/graph-health";
 import { scanObservationForCorrection } from "../../compost-core/src/cognitive/correction-detector";
-import { existsSync } from "fs";
-import { join } from "path";
 
 const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKUP_TIME_WINDOW_HOUR_UTC = 3;

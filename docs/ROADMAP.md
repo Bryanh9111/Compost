@@ -93,9 +93,52 @@ Debate 8: 4-way Phase 2 plan review, 10-step revised plan
 
 Debate 9: 4-way (Opus/Sonnet/Gemini/Codex) plan review, revised to 4 batches
 
+### Phase 4 Batch D — Week 1-3 (2026-04-15)
+
+Branch `feat/phase4-batch-d-myco-integration`. 9 debates (003-009), all 4/4 or 3/4 consensus.
+
+**Week 1 (PR #1 merged)**
+- P0-0: `fact_links` table + recursive CTE traversal API (migration 0011, path-string cycle detection workaround for SQLite "multiple recursive references" limit)
+- P0-4: `facts.archive_reason` enum (6 values frozen) + `replaced_by_fact_id` writes from `reflect.ts` step 2 (`'stale'` decay tombstone) and step 3 (`'contradicted'` + `replaced_by_fact_id` arbitration loser)
+- P0-7: `compost backup` / `compost restore` CLI + daemon scheduler (03:00 UTC, grace-window fire, tmp+rename atomic write, integrity_check via readonly open, PID liveness check, WAL/SHM cleanup)
+
+**Week 2**
+- P0-3: `v_graph_health` TS impl (`graph-health.ts` Union-Find over `fact_links`) + `graph_health_snapshot` (daily 04:00 UTC scheduler, same-day idempotent)
+- P0-5: `correction_events` capture — post-drain hook in `scheduler.ts` scans observation for correction markers (regex + MinHash similarity), writes `health_signals.correction_candidate` (feeds triage only, never mutates `facts.confidence` directly)
+
+**Week 3 Day 1-3**
+- P0-2: `recordDecision` / `listDecisions` live in `cognitive/audit.ts`; `contradiction_arbitration` writes from `reflect.ts` step 3 (per-cluster, `loser_ids[]`); `wiki_rebuild` writes from `wiki.ts` (with `input_fact_ids[]` per debate 008 Q5 revision); `compost audit list` CLI
+- P0-6: `CircuitBreakerLLM` (rolling 60s window, 50%+≥3 trip, 30s open, single-probe half-open with CircuitOpenError for concurrent callers) + `MockLLMService` (5 modes + sequence) + per-site `BreakerRegistry` (ask.expand / ask.answer / wiki.synthesis / mcp.ask.factory)
+- P0-6 fallbacks: `wiki.ts` sets `wiki_pages.stale_at` on LLM failure; `ask.ts` reads `stale_at` banner + BM25 `[LLM unavailable]` fallback
+- P0-6 Self-Consumption guard: `outbox.drainOne` regex-quarantines `file://<data-dir>/wiki/*.md` (home + `COMPOST_DATA_DIR`)
+- Migrations: 0010-0013 (health_signals, decision_audit, graph_health_snapshot, correction_events, fact_links, wiki_pages.stale_at)
+
+**Debate 009 Week 3 audit (4 fixes applied 2026-04-15)**
+- Fix 1: `BreakerRegistry` wired into production (`mcp-server.ts` per-server singleton, `main.ts` daemon-wide registry passed to reflect scheduler). `ask()` + `synthesizeWiki()` accept `LLMService | BreakerRegistry` union signature
+- Fix 2: `startReflectScheduler` accepts `{ llm, dataDir }` and calls `synthesizeWiki` after successful reflect (try/catch isolated so wiki errors don't stall reflect cadence)
+- Fix 3: `recordDecision` wrapped in try/catch in `reflect.ts` step 3 (pushes to `report.errors`) and `wiki.ts` success path (console.warn) — audit failures no longer roll back business transactions
+- Fix 4: half-open concurrent callers throw `CircuitOpenError` instead of sharing probe promise (prevents probe's answer leaking to unrelated prompts)
+
+Test suite (post Day 4 cross-P0 integration): 286 pass / 0 fail / 3 skip across 29 files.
+
 ---
 
 ## Planned
+
+### Known risks (post Week 3, tracked for Day 4+)
+
+Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
+
+| Risk | Location | Rationale | Mitigation / trigger |
+|---|---|---|---|
+| Two `BreakerRegistry` instances (mcp-server vs daemon main) hold separate circuit state | `mcp-server.ts:57` lazy init vs `main.ts:82` boot-time ctor | No crossover today: mcp uses `ask.*`, scheduler uses `wiki.synthesis`. State divergence only matters if a future call site appears in both paths. | Collapse to single registry when any shared site is added |
+| `synthesizeWiki` + `ask` union signature detects registry via `instanceof BreakerRegistry` | `cognitive/wiki.ts:213`, `query/ask.ts:73` | Adding a new breaker class (e.g. retry-only wrapper) breaks the branch | Convert to duck-typed `get(site)` check or refactor to interface when a second wrapper type lands |
+| `ask.ts` BM25 fallback drops `wikiContext` when `hits.length === 0` | `query/ask.ts:155` | Stale wiki banner is only surfaced if the query yielded a hit whose subject matches a wiki title. User's `stale_wiki` signal is lost for direct topic questions with no fact hits. | Day 4 cross-P0 test must cover the empty-hits path; re-evaluate if false-negatives observed in dogfood |
+| `Self-Consumption` regex only matches Unix paths (`file://.../.compost/wiki/*.md`) | `ledger/outbox.ts isWikiSelfConsumption` | Windows paths (`file:///C:/...`) and `wiki/topic/sub.md` nested pages are not blocked | Low priority while macOS-only; revisit before any Windows / nested-wiki support |
+| `reconstructConfidenceTier` uses float equality (`=== 0.9` / `=== 0.85`) | `cognitive/audit.ts listDecisions` | SQLite stores `REAL` as IEEE754; values round-tripped may not `===` literal | No production incident yet (migration `DEFAULT 0.85` is exact). Switch to `<` / `>` bands if a future migration introduces computed floors |
+| `decision_audit.profile_switch` variant declared in `EvidenceRefs` union but has no caller | `cognitive/audit.ts` | Schema CHECK permits the kind; `listDecisions` would return such rows silently if someone inserts directly | Add CHECK or producer when Week 5+ profile switcher lands |
+| Circuit breaker state not persisted across daemon restart | `llm/circuit-breaker.ts` (debate 007 Risk 2, accepted) | First post-restart call may incur an extra failure before window reopens | Accepted trade-off; revisit only if restart frequency becomes abnormal |
+| `decision_audit` has no TTL; evidence_refs_json payloads may exceed payload budget for wiki_rebuild with 10K+ input_fact_ids | `cognitive/audit.ts recordDecision` | Personal-tool scale makes this unlikely | Add retention policy + payload-size guard if table exceeds 100K rows (revisit per removed Phase 4 item) |
 
 ### Phase 4: Active Learning (weeks 9-12)
 
