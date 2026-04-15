@@ -114,8 +114,10 @@ export function reflect(db: Database): ReflectionReport {
 
     if (toTombstone.length > 0) {
       const tombstoneTx = db.transaction(() => {
+        // P0-4: write archive_reason='stale' for the decay-driven tombstone
+        // path. See docs/ARCHITECTURE.md "facts.archive_reason enum (frozen)".
         const stmt = db.prepare(
-          "UPDATE facts SET archived_at = datetime('now') WHERE fact_id = ?"
+          "UPDATE facts SET archived_at = datetime('now'), archive_reason = 'stale' WHERE fact_id = ?"
         );
         for (const factId of toTombstone) {
           stmt.run(factId);
@@ -166,14 +168,26 @@ export function reflect(db: Database): ReflectionReport {
     if (conflicts.length > 0) {
       const groupId = `cg-${Date.now()}`;
       const resolveTx = db.transaction(() => {
+        // P0-4: a contradicted loser is now archived immediately with
+        // archive_reason='contradicted' and replaced_by_fact_id pointing
+        // to the winner. Previously the loser was only marked superseded_by
+        // but stayed active in queries; the new behavior aligns with the
+        // ARCHITECTURE.md frozen enum and removes the loser from triage's
+        // contradiction-detection input.
         const supStmt = db.prepare(
-          "UPDATE facts SET superseded_by = ?, conflict_group = ? WHERE fact_id = ? AND superseded_by IS NULL"
+          "UPDATE facts " +
+            "SET superseded_by = ?, " +
+            "    conflict_group = ?, " +
+            "    archived_at = datetime('now'), " +
+            "    archive_reason = 'contradicted', " +
+            "    replaced_by_fact_id = ? " +
+            "WHERE fact_id = ? AND superseded_by IS NULL"
         );
         const winStmt = db.prepare(
           "UPDATE facts SET conflict_group = ? WHERE fact_id = ? AND conflict_group IS NULL"
         );
         for (const c of conflicts) {
-          supStmt.run(c.winner_id, groupId, c.loser_id);
+          supStmt.run(c.winner_id, groupId, c.winner_id, c.loser_id);
           winStmt.run(groupId, c.winner_id);
         }
       });
