@@ -58,26 +58,124 @@ export class CircuitOpenError extends Error {
   }
 }
 
+interface Outcome {
+  t: number;     // timestamp ms
+  ok: boolean;   // true on success, false on caught error
+}
+
 export class CircuitBreakerLLM implements LLMService {
+  readonly model: string;
+  private readonly windowMs: number;
+  private readonly openMs: number;
+  private readonly minFailures: number;
+  private readonly failureRate: number;
+  private readonly now: () => number;
+
+  private state: CircuitState = "closed";
+  private history: Outcome[] = [];
+  private openedAt: number | null = null;
+  /**
+   * When `state === "half-open"`, this holds the in-flight probe promise so
+   * concurrent callers block on the same request rather than all rushing the
+   * wire and defeating the point of being half-open.
+   */
+  private probeInFlight: Promise<string> | null = null;
+
   constructor(
-    _inner: LLMService,
-    _siteKey: string,
-    _opts: CircuitBreakerOpts = {}
+    private readonly inner: LLMService,
+    private readonly siteKey: string,
+    opts: CircuitBreakerOpts = {}
   ) {
-    void _inner;
-    void _siteKey;
-    void _opts;
+    this.model = inner.model;
+    this.windowMs = opts.windowMs ?? CIRCUIT_BREAKER_WINDOW_MS;
+    this.openMs = opts.openMs ?? CIRCUIT_BREAKER_OPEN_MS;
+    this.minFailures = opts.minFailures ?? CIRCUIT_BREAKER_MIN_FAILURES;
+    this.failureRate = opts.failureRate ?? CIRCUIT_BREAKER_FAILURE_RATE;
+    this.now = opts.now ?? (() => Date.now());
   }
 
-  async generate(_prompt: string, _opts?: LLMGenerateOptions): Promise<string> {
-    // TODO(P0-6 Week 3): implement rolling-window state machine + fallback
-    void _prompt;
-    void _opts;
-    throw new Error("CircuitBreakerLLM.generate not implemented (P0-6 stub)");
-  }
-
-  /** Exposed for testing state transitions; not part of the LLMService contract. */
   getState(): CircuitState {
-    return "closed";
+    this.maybeTransition();
+    return this.state;
+  }
+
+  async generate(prompt: string, opts?: LLMGenerateOptions): Promise<string> {
+    this.maybeTransition();
+
+    if (this.state === "open") {
+      throw new CircuitOpenError(this.siteKey);
+    }
+
+    if (this.state === "half-open") {
+      // Concurrent half-open: share the single in-flight probe.
+      if (this.probeInFlight) return this.probeInFlight;
+      this.probeInFlight = this.runProbe(prompt, opts);
+      try {
+        return await this.probeInFlight;
+      } finally {
+        this.probeInFlight = null;
+      }
+    }
+
+    // closed
+    try {
+      const result = await this.inner.generate(prompt, opts);
+      this.record({ t: this.now(), ok: true });
+      return result;
+    } catch (err) {
+      this.record({ t: this.now(), ok: false });
+      throw err;
+    }
+  }
+
+  private async runProbe(
+    prompt: string,
+    opts?: LLMGenerateOptions
+  ): Promise<string> {
+    try {
+      const result = await this.inner.generate(prompt, opts);
+      // Success closes the breaker and clears history.
+      this.state = "closed";
+      this.openedAt = null;
+      this.history = [];
+      return result;
+    } catch (err) {
+      // Probe failed -- re-open and restart the clock.
+      this.state = "open";
+      this.openedAt = this.now();
+      throw err;
+    }
+  }
+
+  private record(outcome: Outcome): void {
+    this.history.push(outcome);
+    this.prune(outcome.t);
+    if (this.shouldTrip()) {
+      this.state = "open";
+      this.openedAt = outcome.t;
+    }
+  }
+
+  private prune(now: number): void {
+    const cutoff = now - this.windowMs;
+    while (this.history.length > 0 && this.history[0]!.t < cutoff) {
+      this.history.shift();
+    }
+  }
+
+  private shouldTrip(): boolean {
+    if (this.state !== "closed") return false;
+    const failures = this.history.filter((o) => !o.ok).length;
+    if (failures < this.minFailures) return false;
+    const total = this.history.length;
+    return failures / total > this.failureRate;
+  }
+
+  private maybeTransition(): void {
+    if (this.state === "open" && this.openedAt !== null) {
+      if (this.now() - this.openedAt >= this.openMs) {
+        this.state = "half-open";
+      }
+    }
   }
 }

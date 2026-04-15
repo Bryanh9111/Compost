@@ -101,14 +101,16 @@ export async function ask(
   };
 
   // Step 2: Gather relevant wiki pages
-  const wikiPages: Array<{ path: string; title: string }> = [];
+  // P0-6 Lock 6: include stale_at so ask can warn the user when the wiki
+  // hasn't been refreshed (breaker was open at last rebuild attempt).
+  const wikiPages: Array<{ path: string; title: string; stale_at: string | null }> = [];
   if (queryResult.hits.length > 0) {
     // Find wiki pages whose titles match any hit subjects
     const subjects = [...new Set(queryResult.hits.map((h) => h.fact.subject))];
     for (const subject of subjects.slice(0, 5)) {
       const page = db
-        .query("SELECT path, title FROM wiki_pages WHERE title = ?")
-        .get(subject) as { path: string; title: string } | null;
+        .query("SELECT path, title, stale_at FROM wiki_pages WHERE title = ?")
+        .get(subject) as { path: string; title: string; stale_at: string | null } | null;
       if (page) wikiPages.push(page);
     }
   }
@@ -124,7 +126,10 @@ export async function ask(
     const fullPath = join(wikiDir, page.path);
     if (existsSync(fullPath)) {
       const content = readFileSync(fullPath, "utf-8");
-      wikiContexts.push(`## Wiki: ${page.title}\n${content}`);
+      const staleBanner = page.stale_at
+        ? `> \u26A0\ufe0f [stale wiki: last refresh attempt failed at ${page.stale_at} UTC]\n\n`
+        : "";
+      wikiContexts.push(`## Wiki: ${page.title}\n${staleBanner}${content}`);
     }
   }
 
@@ -149,11 +154,27 @@ Answer:`;
   if (queryResult.hits.length === 0 && wikiContexts.length === 0) {
     answer = "I don't have enough information in my knowledge base to answer this question.";
   } else {
-    answer = await llm.generate(prompt, {
-      maxTokens: opts.maxAnswerTokens ?? 1024,
-      temperature: 0.2,
-      systemPrompt: "You are a precise knowledge assistant. Only answer based on the provided facts and wiki context. Be concise.",
-    });
+    // P0-6 fallback contract (ARCHITECTURE.md LLM call sites): on circuit
+    // open / LLM error, return the top BM25 facts as plain text with an
+    // `[LLM unavailable]` banner so the user still gets something usable.
+    try {
+      answer = await llm.generate(prompt, {
+        maxTokens: opts.maxAnswerTokens ?? 1024,
+        temperature: 0.2,
+        systemPrompt: "You are a precise knowledge assistant. Only answer based on the provided facts and wiki context. Be concise.",
+      });
+    } catch {
+      const bm25Fallback = queryResult.hits
+        .slice(0, 10)
+        .map(
+          (h, i) =>
+            `${i + 1}. ${h.fact.subject} ${h.fact.predicate} ${h.fact.object} (confidence: ${h.confidence.toFixed(2)})`
+        )
+        .join("\n");
+      answer =
+        `[LLM unavailable — returning top-${Math.min(10, queryResult.hits.length)} facts by relevance]\n\n` +
+        (bm25Fallback || "(no relevant facts found)");
+    }
   }
 
   return {

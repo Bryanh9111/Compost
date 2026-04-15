@@ -7,6 +7,7 @@ import type { LLMService } from "../llm/types";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { recordDecision, TIER_FOR_KIND, CONFIDENCE_FLOORS } from "./audit";
+import { CircuitOpenError } from "../llm/circuit-breaker";
 
 export interface WikiSynthesisResult {
   pages_created: number;
@@ -85,11 +86,35 @@ ${factLines}
 
 Write the wiki page in markdown:`;
 
-  const markdown = await llm.generate(prompt, {
-    maxTokens: 2048,
-    temperature: 0.2,
-    systemPrompt: "You are a precise, factual wiki page writer. Only use information from the provided facts.",
-  });
+  let markdown: string;
+  try {
+    markdown = await llm.generate(prompt, {
+      maxTokens: 2048,
+      temperature: 0.2,
+      systemPrompt: "You are a precise, factual wiki page writer. Only use information from the provided facts.",
+    });
+  } catch (err) {
+    // P0-6 fallback (debate 007 Lock 6): circuit breaker open or direct LLM
+    // failure. Keep the existing on-disk page (if any) but mark the wiki_pages
+    // row as stale so ask.ts reads the stale banner. Don't write a
+    // decision_audit row for a non-rebuild; this is not a real decision.
+    const safePath = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const pagePath = `${safePath}.md`;
+    const existing = db
+      .query("SELECT path FROM wiki_pages WHERE path = ?")
+      .get(pagePath) as { path: string } | null;
+    if (existing) {
+      db.run(
+        "UPDATE wiki_pages SET stale_at = datetime('now') WHERE path = ?",
+        [pagePath]
+      );
+    }
+    const isCircuit = err instanceof CircuitOpenError;
+    // Swallow -- caller continues with the next topic. Throw-on-fatal only
+    // if the error is unknown (preserves prior exit semantics on bugs).
+    if (!isCircuit && !(err instanceof Error)) throw err;
+    return { created: false, updated: false };
+  }
 
   // Write to disk
   const safePath = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -113,10 +138,12 @@ Write the wiki page in markdown:`;
 
   writeFileSync(fullPath, markdown, "utf-8");
 
-  // Write to wiki_pages table
+  // Write to wiki_pages table. On successful rebuild, clear stale_at so
+  // ask.ts stops prefixing the stale banner.
   if (existing) {
     db.run(
-      `UPDATE wiki_pages SET title = ?, last_synthesis_at = datetime('now'), last_synthesis_model = ?
+      `UPDATE wiki_pages SET title = ?, last_synthesis_at = datetime('now'),
+         last_synthesis_model = ?, stale_at = NULL
        WHERE path = ?`,
       [topic, llm.model, pagePath]
     );

@@ -95,6 +95,19 @@ export function drainOne(db: Database): DrainResult | null {
 
   if (!pending) return null;
 
+  // P0-6 Self-Consumption guard (debate 007 Lock 5): quarantine immediately
+  // when the source URI points at Compost's own wiki export (= an LLM-generated
+  // page being offered back as raw input). drainOne is the universal L2 entry
+  // gate, so guarding here covers every adapter without per-pipeline changes.
+  if (isWikiSelfConsumption(pending.source_uri)) {
+    quarantineImmediately(
+      db,
+      pending.seq,
+      "self-consumption: refusing to re-ingest compost wiki export"
+    );
+    return null;
+  }
+
   // Parse payload for observation fields
   let parsedPayload: {
     content?: string;
@@ -265,6 +278,49 @@ function recordDrainFailure(
      WHERE seq = ?`,
     [error, QUARANTINE_THRESHOLD, seq]
   );
+}
+
+/**
+ * Quarantine an outbox row on the FIRST drain attempt, bypassing the
+ * QUARANTINE_THRESHOLD retry count. Used for deterministic-reject cases like
+ * the Self-Consumption guard where no retry can change the outcome.
+ */
+function quarantineImmediately(
+  db: Database,
+  seq: number,
+  error: string
+): void {
+  db.run(
+    `UPDATE observe_outbox
+     SET drain_attempts = drain_attempts + 1,
+         drain_error = ?,
+         drain_quarantined_at = datetime('now')
+     WHERE seq = ?`,
+    [error, seq]
+  );
+}
+
+/**
+ * Self-Consumption check (debate 007 Lock 5): reject URIs pointing at the
+ * Compost wiki export directory. The match is deliberately narrow -- a user's
+ * personal `~/notes/wiki/foo.md` is NOT blocked; only paths under
+ * `<data-dir>/wiki/` (current home-based default `~/.compost/wiki/` and
+ * the test-override `$COMPOST_DATA_DIR/wiki/`) match.
+ *
+ * Exported for unit tests so the regex lives in one place.
+ */
+export function isWikiSelfConsumption(sourceUri: string): boolean {
+  if (!sourceUri.startsWith("file://")) return false;
+  const path = sourceUri.slice("file://".length);
+  // Home-based default: ~/.compost/wiki/*.md
+  if (/\/\.compost\/wiki\/[^/]+\.md$/.test(path)) return true;
+  // Test/custom data dir: $COMPOST_DATA_DIR ends in something, wiki child
+  const overrideDir = process.env["COMPOST_DATA_DIR"];
+  if (overrideDir) {
+    const prefix = overrideDir.endsWith("/") ? overrideDir : `${overrideDir}/`;
+    if (path.startsWith(`${prefix}wiki/`) && /\.md$/.test(path)) return true;
+  }
+  return false;
 }
 
 /**
