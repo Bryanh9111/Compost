@@ -190,6 +190,39 @@ Changes require a new migration -- this enum is **frozen**.
 `revival_at` is set when an archived fact is re-captured (idempotency hash match)
 and unarchived.
 
+### `decision_audit.confidence_floor` by kind (locked 2026-04-15)
+
+Locked in debate 007 Pre-Week-3 Lock 3. Callers of `recordDecision` MUST pass
+the tier listed here. `fact_excretion` is the only kind whose tier depends on
+the sub-reason (heuristic vs user-driven).
+
+| decision_audit.kind | confidence tier | floor | Rationale |
+|---|---|---|---|
+| `contradiction_arbitration` | instance | 0.85 | Explicit winner selected from same (subject, predicate) pair |
+| `wiki_rebuild` | instance | 0.85 | Multi-fact synthesis; no single authoritative input |
+| `fact_excretion` (reason = `duplicate` or `low_access`) | exploration | 0.75 | Heuristic (decay / similarity) |
+| `fact_excretion` (reason = `manual`) | kernel | 0.90 | User-driven; highest trust |
+| `profile_switch` | kernel | 0.90 | Operator config change |
+
+> **reflect step 2 exception (debate 007 Lock 2)**: the `stale` archive path
+> (decay-tombstone) is the `archive_reason` enum's `(none)` audit kind. It
+> writes `facts.archive_reason = 'stale'` but NOT a `decision_audit` row.
+> Tombstone count is already carried in `ReflectionReport.semanticFactsTombstoned`.
+> Week 3 P0-2 implementers: do NOT add a recordDecision call to reflect step 2.
+
+### `decision_audit.evidence_refs_json` shapes (locked 2026-04-15)
+
+Locked in debate 007 Pre-Week-3 Lock 1. Each audit kind has a fixed payload
+shape stored as `JSON.stringify`'d text in `evidence_refs_json`. See
+`EvidenceRefs` union in `packages/compost-core/src/cognitive/audit.ts`.
+
+| kind | payload shape |
+|---|---|
+| `contradiction_arbitration` | `{ winner_id, loser_ids[], subject, predicate }` |
+| `wiki_rebuild` | `{ page_path, input_observe_ids[], input_fact_count }` |
+| `fact_excretion` | `{ fact_ids[], reason: 'duplicate'\|'low_access'\|'manual', count }` |
+| `profile_switch` (Week 5+) | `{ from_profile_id, to_profile_id, changed_fields[] }` |
+
 ### LLM call sites (inventory + fallback contract)
 
 Every LLM invocation MUST be wrapped by P0-6's circuit breaker. Inventory at
@@ -203,10 +236,24 @@ lock time (5 sites; 4 TS + 1 Python):
 | `compost-daemon/src/mcp-server.ts:201` `new OllamaLLMService()` | Service instantiation for `ask` MCP tool | constructor throws on missing config | return MCP error with hint (`compost doctor --check-llm`) |
 | `compost-ingest/.../llm_facts.py` (Python) | LLM-based fact extraction during ingest | already has Python-side retry; **out of scope for P0-6 TS wrapper** | (existing Python retry; surface `stuck_outbox` if queue grows) |
 
-**Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): the
-extractor MUST refuse to re-ingest content whose source path matches `wiki/**`
-or whose upstream `source.kind == 'wiki-rebuild'`. Prevents the LLM-generated
-wiki from feeding back into the fact extraction loop.
+**Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): prevents
+the LLM-generated wiki from feeding back into the fact extraction loop.
+
+**Enforcement location (locked debate 007 Lock 5)**: `ledger/outbox.ts
+drainOne` — the universal entry gate to L2. Checking only at
+`pipeline/ingest.ts` / `web-ingest.ts` would miss future adapters and the
+hook path. The guard quarantines the outbox row (not deletes) so an
+operator can inspect.
+
+**Rule**: quarantine any `observe_outbox` row whose `source_uri` matches
+`file://<compost_data_dir>/wiki/*.md`. Regex scoped to Compost's own wiki
+export directory — a user's personal `~/notes/wiki/` is NOT blocked.
+
+> The earlier draft of this section referenced `source.kind == 'wiki-rebuild'`.
+> That enum value does not exist in the `source.kind` CHECK constraint
+> (local-file / local-dir / web / claude-code / host-adapter / sensory) and
+> no caller would ever set it. Reference removed in debate 007 Lock 5 to
+> avoid a phantom contract.
 
 > **Status (debate 005)**: ⏳ not yet enforced. The guard lands in Week 3
 > (P0-6) alongside the LLM circuit breaker. Until then, manual
