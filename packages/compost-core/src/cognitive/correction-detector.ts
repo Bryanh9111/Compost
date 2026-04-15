@@ -30,9 +30,22 @@ export interface CorrectionEvent {
 }
 
 /**
- * Scan a text turn for correction patterns. Returns matched pattern + extracted
- * spans (retracted_text + corrected_text), or null if no match.
+ * Scan a text turn for correction patterns. Returns the matched pattern +
+ * the truncated full-turn context, or null if no match.
+ *
+ * IMPORTANT (debate 006 Pre-Week-2 Fix 3): the caller is responsible for
+ * passing the FULL turn text -- typically reconstructed by reading
+ * `observations.raw_bytes` for a `source.kind = 'claude-code'` row and
+ * parsing the hook payload JSON to extract `turnText`. `match[0]` is an
+ * idiomatic phrase ("I was wrong about"), NOT a subject keyword, so we
+ * store the broader context in `retractedText` to give `findRelatedFacts`
+ * meaningful tokens to work with.
+ *
+ * Capped at 500 chars to prevent a paste of a 10KB log (that happens to
+ * contain "actually, I..." deep inside) from flooding `correction_events`.
  */
+export const MAX_RETRACTED_TEXT_CHARS = 500;
+
 export function detectCorrection(turnText: string): {
   patternName: string;
   retractedText: string;
@@ -41,10 +54,15 @@ export function detectCorrection(turnText: string): {
   for (const { name, re } of CORRECTION_PATTERNS) {
     const match = turnText.match(re);
     if (match) {
+      // P0-5 stores the turn text (truncated) rather than match[0], so
+      // downstream findRelatedFacts has real content to tokenize against.
+      const retracted = turnText.length > MAX_RETRACTED_TEXT_CHARS
+        ? turnText.slice(0, MAX_RETRACTED_TEXT_CHARS)
+        : turnText;
       return {
         patternName: name,
-        retractedText: match[0],
-        correctedText: null, // TODO(phase4-batch-d): extract corrected span via context window
+        retractedText: retracted,
+        correctedText: null, // TODO(P0-5 Week 2 or later): extract corrected span via context window
       };
     }
   }
@@ -52,7 +70,24 @@ export function detectCorrection(turnText: string): {
 }
 
 /**
- * Insert correction event row. Called by daemon scheduler after drain.
+ * Insert a `correction_events` row plus a linked `health_signals` row in a
+ * single transaction.
+ *
+ * Transactional contract (locked in debate 006 Pre-Week-2 Fix 5):
+ *   1. INSERT correction_events (processed_at = NULL)
+ *   2. INSERT health_signals (kind='correction_candidate',
+ *                             target_ref='correction_event:<id>',
+ *                             severity='info')
+ *   3. UPDATE correction_events SET processed_at = datetime('now') for the id
+ *   4. COMMIT
+ * Failure anywhere rolls the whole thing back. This guarantees
+ * "one correction_event <=> at most one health_signal" and makes the
+ * `idx_correction_events_unprocessed` index meaningful (rows with
+ * processed_at IS NULL represent scanner-in-flight or scanner-crashed work).
+ *
+ * Called by `scanObservationForCorrection` in the post-drain path (NOT by
+ * reflect). The old JSDoc line "called by daemon scheduler after drain"
+ * meant post-drain, not a separate scheduler -- clarified here.
  */
 export function recordCorrection(
   db: Database,
@@ -64,31 +99,51 @@ export function recordCorrection(
     relatedFactIds?: string[];
   }
 ): { id: number } {
-  // TODO(phase4-batch-d): implement INSERT.
+  // TODO(P0-5 Week 2): implement per the 4-step transactional contract above.
   void db;
   void args;
   throw new Error("correction-detector.recordCorrection not implemented (P0-5 stub)");
 }
 
 /**
- * Find facts whose subject/object overlap with the retracted text — candidates
- * for review. Heuristic only, no LLM.
+ * Heuristic-only search for facts that may have been corrected. Returns up
+ * to `opts.limit` fact_ids, deduped.
+ *
+ * Signature lock (debate 006 Pre-Week-2 Fix 4):
+ *   - `sessionId`: restrict the search to facts created in the same session
+ *     (subquery joining `source.kind = 'claude-code'` + matching session_id
+ *     in observation metadata). Self-corrections almost always reference
+ *     recent same-session facts, so this kills the biggest false-positive
+ *     surface.
+ *   - `limit`: default 5. Keeps the health_signal message readable.
+ *   - `minTokenOverlap`: default 2. After tokenizing `retractedText` and
+ *     stop-wording it, a candidate fact must share at least this many
+ *     non-stop tokens in its subject OR object to count as related.
  *
  * IMPORTANT (debate 002 §Gemini 1.5 ruling): correction events are SIGNALS,
- * not direct mutations. The detected facts must be surfaced via `health_signals`
- * (kind='correction_candidate') for user/agent review. Never auto-decrement
- * `facts.confidence` from a regex hit — Gemini's "No, I meant…" false-positive
- * scenario would silently corrode high-quality facts.
+ * not direct mutations. The returned fact_ids feed into `health_signals`
+ * (kind='correction_candidate') for user/agent review. NEVER auto-decrement
+ * `facts.confidence` from a regex hit.
+ *
+ * Week 2 implementation choice (locked in debate 006 Fix 4):
+ *   Option A: implement tokenize + stopword + session-filter + overlap scoring
+ *   Option B: return `[]` with a TODO and defer the real impl to Week 4 P0-1
+ * The implementer MUST pick one at Week 2 start time and document the choice.
+ * "Looks-like-it-works" half-implementations (match[0] LIKE %...%) are
+ * explicitly disallowed.
  */
 export function findRelatedFacts(
   db: Database,
   retractedText: string,
-  limit: number = 5
+  opts?: {
+    sessionId?: string;
+    limit?: number;
+    minTokenOverlap?: number;
+  }
 ): string[] {
-  // TODO(phase4-batch-d): implement subject/object overlap heuristic.
-  // Output flows to triage as health_signal, not directly to facts table.
+  // TODO(P0-5 Week 2): pick Option A or Option B and implement.
   void db;
   void retractedText;
-  void limit;
+  void opts;
   return [];
 }

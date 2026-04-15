@@ -348,6 +348,31 @@ export function connectedComponents(db: Database): {
 }
 
 /**
+ * Count connected components where every active fact is older than
+ * `minAgeDays` (default 90). Used by P0-3 `graph_health_snapshot.stale_cluster_count`.
+ *
+ * Semantics (locked in debate 006 Pre-Week-2): a cluster is "stale" when
+ * ALL of its active facts have `created_at < now - minAgeDays`. A single
+ * recent fact in the cluster disqualifies it from the count. Archived
+ * facts are ignored (not members of any active component).
+ *
+ * Stub: Week 2 P0-3 lands the real implementation alongside `takeSnapshot`.
+ * Keeping the signature locked here prevents P0-3 from relitigating the
+ * API shape under schedule pressure.
+ */
+export function countStaleClusters(
+  db: Database,
+  minAgeDays: number = 90
+): number {
+  // TODO(P0-3 Week 2): implement per debate 006 Fix 1 -- iterate
+  // connectedComponents(), for each component fetch max(created_at) of
+  // active facts, count the components whose max is older than the gate.
+  void db;
+  void minAgeDays;
+  return 0;
+}
+
+/**
  * Quick-stats helper used by P0-3 graph_health snapshots and `compost stats`.
  */
 export function graphStats(db: Database): {

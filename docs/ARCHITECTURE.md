@@ -224,3 +224,4 @@ that take a SQLite writer lock for > 1s MUST declare a time window:
 | `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s |
 | `startFreshnessLoop` | 60s | continuous | read-only |
 | `startBackupScheduler` (P0-7) | 24h | **03:00 UTC** (between reflect runs) | VACUUM INTO -- avoids reflect lock by time-window separation |
+| `startGraphHealthScheduler` (P0-3) | 24h | **04:00 UTC** (after backup completes) | `takeSnapshot` runs Union-Find over active facts + fact_links; SQL writer lock ~100ms at 10K facts. Buffer hour after backup tolerates large-db VACUUM |
