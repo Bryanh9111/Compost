@@ -7,6 +7,7 @@ import { registerDoctor } from "./commands/doctor";
 import { registerHook } from "./commands/hook";
 import { registerReflect } from "./commands/reflect";
 import { registerDrain } from "./commands/drain";
+import { registerBackup, registerRestore } from "./commands/backup";
 
 const program = new Command()
   .name("compost")
@@ -20,5 +21,7 @@ registerDoctor(program);
 registerHook(program);
 registerReflect(program);
 registerDrain(program);
+registerBackup(program);
+registerRestore(program);
 
 program.parse(process.argv);

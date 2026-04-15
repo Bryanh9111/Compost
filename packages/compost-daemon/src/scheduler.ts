@@ -395,12 +395,17 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
 
 
 // =====================================================================
-// Backup scheduler (P0-7 stub, locked by debate 003 Pre-P0 fix #5)
+// Backup scheduler (P0-7, locked by debate 003 Pre-P0 fix #5)
 // =====================================================================
+
+import {
+  backup,
+  pruneOldBackups,
+  DEFAULT_BACKUP_RETENTION,
+} from "../../compost-core/src/persistence/backup";
 
 const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
-const BACKUP_RETENTION = 30;
 
 export interface BackupSchedulerOpts {
   ledgerPath: string;
@@ -415,16 +420,15 @@ export interface BackupSchedulerOpts {
  * startReflectScheduler (aligned to 00/06/12/18 UTC). See ARCHITECTURE.md
  * §"Scheduler hook points" for the full discipline.
  *
- * Stub: emits a no-op log line at the right wake-up time so reviewers can
- * confirm scheduling logic before P0-7 implementation lands the actual
- * VACUUM INTO + retention cleanup.
+ * Records each successful run via a structured log line and prunes old
+ * snapshots beyond `retentionCount` (default 30).
  */
 export function startBackupScheduler(
-  _db: Database,
+  db: Database,
   opts: BackupSchedulerOpts
 ): Scheduler {
   let running = true;
-  const retention = opts.retentionCount ?? BACKUP_RETENTION;
+  const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
 
   function msUntilNextWindow(): number {
     const now = new Date();
@@ -446,17 +450,22 @@ export function startBackupScheduler(
       await Bun.sleep(wait);
       if (!running) break;
       try {
-        // TODO(P0-7): implement
-        //   1. db.exec(`VACUUM INTO '${opts.backupDir}/YYYY-MM-DD.db'`)
-        //   2. enforce retention by deleting oldest snapshots beyond limit
-        //   3. emit health_signal on failure
+        const result = backup(db, opts.backupDir);
+        const pruned = pruneOldBackups(opts.backupDir, retention);
         log.info(
-          { backupDir: opts.backupDir, retention },
-          "backup scheduler: stub fire (P0-7 not implemented)"
+          {
+            path: result.path,
+            sizeBytes: result.sizeBytes,
+            durationMs: result.durationMs,
+            prunedCount: pruned,
+            retention,
+          },
+          "backup complete"
         );
-        await Bun.sleep(BACKUP_INTERVAL_MS);
+        // Sleep most of the day to leave the 03:00 window before next check
+        await Bun.sleep(BACKUP_INTERVAL_MS - 60_000);
       } catch (err) {
-        log.error({ err }, "backup scheduler error");
+        log.error({ err, backupDir: opts.backupDir }, "backup scheduler error");
         await Bun.sleep(BACKUP_INTERVAL_MS);
       }
     }
