@@ -161,17 +161,19 @@ compost_ingest/
 | Table | Purpose | Write path | Status | Migration |
 |-------|---------|-----------|--------|-----------|
 | `ranking_audit_log` | **Read path only** -- per-query ranking attribution. One row per (query_id, fact_id). Disabled unless `debug_ranking=true`. | `query/search.ts` | ✅ live since Phase 2 | 0004 |
-| `decision_audit` | **Cognitive write path only** -- four kinds: `contradiction_arbitration`, `wiki_rebuild`, `fact_excretion`, `profile_switch`. One row per high-cost decision. | `cognitive/reflect.ts`, `cognitive/wiki.ts`, future profile switcher | ⏳ **schema only; P0-2 (Week 3) wires the `recordDecision()` calls** | 0010 |
+| `decision_audit` | **Cognitive write path only** -- four kinds: `contradiction_arbitration`, `wiki_rebuild`, `fact_excretion`, `profile_switch`. One row per high-cost decision. | `cognitive/reflect.ts`, `cognitive/wiki.ts`, future profile switcher | ✅ **P0-2 live (2026-04-15)** -- `contradiction_arbitration` + `wiki_rebuild` wired; `fact_excretion` + `profile_switch` reserved for Week 5+. Writes wrapped in try/catch so audit failures do NOT roll back business transactions (debate 009 Fix 3). | 0010 |
 
 Never write the same event to both. If a decision involves ranking (e.g. profile
 switch changes ranking weights), it goes to `decision_audit` -- the ranking
 side-effects show up later in `ranking_audit_log` per query.
 
-> **Audit honesty (debate 005)**: the `decision_audit` table exists from 0010
-> but no caller writes to it until P0-2 lands. Do NOT rely on audit-trail
-> queries (`SELECT * FROM decision_audit WHERE kind = ...`) before Week 3;
-> they will return empty. Consumers that need a pre-P0-2 write trail should
-> read `facts.archive_reason` + `facts.replaced_by_fact_id` directly.
+> **Audit honesty (debate 005, updated 2026-04-15)**: `decision_audit` is now
+> live for `contradiction_arbitration` (reflect step 3, per-cluster with
+> `loser_ids[]`) and `wiki_rebuild` (successful `synthesizePage`). Both call
+> sites wrap `recordDecision` in try/catch so audit errors become
+> `report.errors` entries (reflect) or `console.warn` log lines (wiki)
+> rather than rolling back the underlying contradiction resolve or wiki
+> write. `fact_excretion` and `profile_switch` remain reserved.
 
 ### `facts.archive_reason` enum (frozen for Phase 4)
 
@@ -190,27 +192,83 @@ Changes require a new migration -- this enum is **frozen**.
 `revival_at` is set when an archived fact is re-captured (idempotency hash match)
 and unarchived.
 
+### `decision_audit.confidence_floor` by kind (locked 2026-04-15)
+
+Locked in debate 007 Pre-Week-3 Lock 3. Callers of `recordDecision` MUST pass
+the tier listed here. `fact_excretion` is the only kind whose tier depends on
+the sub-reason (heuristic vs user-driven).
+
+| decision_audit.kind | confidence tier | floor | Rationale |
+|---|---|---|---|
+| `contradiction_arbitration` | instance | 0.85 | Explicit winner selected from same (subject, predicate) pair |
+| `wiki_rebuild` | instance | 0.85 | Multi-fact synthesis; no single authoritative input |
+| `fact_excretion` (reason = `duplicate` or `low_access`) | exploration | 0.75 | Heuristic (decay / similarity) |
+| `fact_excretion` (reason = `manual`) | kernel | 0.90 | User-driven; highest trust |
+| `profile_switch` | kernel | 0.90 | Operator config change |
+
+> **reflect step 2 exception (debate 007 Lock 2)**: the `stale` archive path
+> (decay-tombstone) is the `archive_reason` enum's `(none)` audit kind. It
+> writes `facts.archive_reason = 'stale'` but NOT a `decision_audit` row.
+> Tombstone count is already carried in `ReflectionReport.semanticFactsTombstoned`.
+> Week 3 P0-2 implementers: do NOT add a recordDecision call to reflect step 2.
+
+### `decision_audit.evidence_refs_json` shapes (locked 2026-04-15)
+
+Locked in debate 007 Pre-Week-3 Lock 1. Each audit kind has a fixed payload
+shape stored as `JSON.stringify`'d text in `evidence_refs_json`. See
+`EvidenceRefs` union in `packages/compost-core/src/cognitive/audit.ts`.
+
+| kind | payload shape |
+|---|---|
+| `contradiction_arbitration` | `{ winner_id, loser_ids[], subject, predicate }` |
+| `wiki_rebuild` | `{ page_path, input_fact_ids[], input_fact_count }` |
+| `fact_excretion` | `{ fact_ids[], reason: 'duplicate'\|'low_access'\|'manual', count }` |
+| `profile_switch` (Week 5+) | `{ from_profile_id, to_profile_id, changed_fields[] }` |
+
+> **Q5 revision (debate 008, 2026-04-15, 3/4 vote)**: `wiki_rebuild` stores
+> `input_fact_ids[]` rather than `input_observe_ids[]`. Fact ids are the
+> direct input to wiki synthesis; observation provenance is one FK JOIN
+> away (`facts.observe_id`) and duplicating it here adds ~1.5× payload
+> size without audit value.
+
 ### LLM call sites (inventory + fallback contract)
 
-Every LLM invocation MUST be wrapped by P0-6's circuit breaker. Inventory at
-lock time (5 sites; 4 TS + 1 Python):
+Every **TypeScript** LLM invocation MUST be wrapped by P0-6's circuit
+breaker. The Python `compost-ingest` path is explicitly out-of-scope for the
+TS breaker (row 5 below) -- it uses its own retry loop. Inventory at lock
+time (5 sites; 4 TS + 1 Python):
 
 | Site | Purpose | Failure mode | Fallback |
 |------|---------|--------------|----------|
 | `cognitive/wiki.ts:86` `llm.generate` | L3 wiki page synthesis | timeout / 5xx / ECONNREFUSED | mark wiki page `stale_at = now`, return cached version, surface `stale_wiki` triage signal |
 | `query/ask.ts:35` `llm.generate` | Multi-query expansion for retrieval | timeout / 5xx | fall back to original query verbatim, log `expansion_skipped` |
 | `query/ask.ts:152` `llm.generate` | Final answer synthesis | timeout / 5xx | return BM25 top-N facts as plain text with `[LLM unavailable]` banner |
-| `compost-daemon/src/mcp-server.ts:201` `new OllamaLLMService()` | Service instantiation for `ask` MCP tool | constructor throws on missing config | return MCP error with hint (`compost doctor --check-llm`) |
+| `compost-daemon/src/mcp-server.ts` lazy `new BreakerRegistry(new OllamaLLMService())` in `compost.ask` handler | Per-MCP-server singleton registry (debate 009 Fix 1). Holds circuit state across MCP requests; `ask()` receives the registry and calls `registry.get("ask.expand")` / `registry.get("ask.answer")` internally. **Note**: `compost-daemon/src/main.ts` builds a *separate* registry at daemon boot for `startReflectScheduler`'s wiki synthesis; the two do not share circuit state (ROADMAP known-risks row 1, Week 4 consolidation planned). | first `generate()` call fails with network error; surfaces via circuit breaker (no ctor-time validation today) | return MCP error with hint (`compost doctor --check-llm` is a Week 4 deliverable) |
 | `compost-ingest/.../llm_facts.py` (Python) | LLM-based fact extraction during ingest | already has Python-side retry; **out of scope for P0-6 TS wrapper** | (existing Python retry; surface `stuck_outbox` if queue grows) |
 
-**Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): the
-extractor MUST refuse to re-ingest content whose source path matches `wiki/**`
-or whose upstream `source.kind == 'wiki-rebuild'`. Prevents the LLM-generated
-wiki from feeding back into the fact extraction loop.
+**Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): prevents
+the LLM-generated wiki from feeding back into the fact extraction loop.
 
-> **Status (debate 005)**: ⏳ not yet enforced. The guard lands in Week 3
-> (P0-6) alongside the LLM circuit breaker. Until then, manual
-> `compost add wiki/<page>.md` WILL re-ingest and is a known foot-gun.
+**Enforcement location (locked debate 007 Lock 5)**: `ledger/outbox.ts
+drainOne` — the universal entry gate to L2. Checking only at
+`pipeline/ingest.ts` / `web-ingest.ts` would miss future adapters and the
+hook path. The guard quarantines the outbox row (not deletes) so an
+operator can inspect.
+
+**Rule**: quarantine any `observe_outbox` row whose `source_uri` matches
+`file://<compost_data_dir>/wiki/*.md`. Regex scoped to Compost's own wiki
+export directory — a user's personal `~/notes/wiki/` is NOT blocked.
+
+> The earlier draft of this section referenced `source.kind == 'wiki-rebuild'`.
+> That enum value does not exist in the `source.kind` CHECK constraint
+> (local-file / local-dir / web / claude-code / host-adapter / sensory) and
+> no caller would ever set it. Reference removed in debate 007 Lock 5 to
+> avoid a phantom contract.
+
+> **Status (2026-04-15)**: ✅ enforced in `ledger/outbox.ts`
+> `isWikiSelfConsumption()` + `quarantineImmediately()` during `drainOne`.
+> Regex matches Unix paths only — Windows `file:///C:/...` not covered
+> (accepted risk; see ROADMAP known-risks table).
 
 ### Scheduler hook points + lock-window discipline
 
@@ -221,7 +279,7 @@ that take a SQLite writer lock for > 1s MUST declare a time window:
 |-----------|--------|-------------|-------|
 | `startDrainLoop` | 1s | continuous | brief writer lock per drain |
 | `startIngestWorker` | 2s | continuous | drains own outbox first |
-| `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s |
+| `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s. Accepts `{ llm: BreakerRegistry \| LLMService, dataDir }`; when both supplied, calls `synthesizeWiki` after each successful reflect (debate 009 Fix 2). Wiki errors logged + swallowed so one bad topic cannot stall the cadence. |
 | `startFreshnessLoop` | 60s | continuous | read-only |
 | `startBackupScheduler` (P0-7) | 24h | **03:00 UTC** (between reflect runs) | VACUUM INTO -- avoids reflect lock by time-window separation |
 | `startGraphHealthScheduler` (P0-3) | 24h | **04:00 UTC** (after backup completes) | `takeSnapshot` runs Union-Find over active facts + fact_links; SQL writer lock ~100ms at 10K facts. Buffer hour after backup tolerates large-db VACUUM |

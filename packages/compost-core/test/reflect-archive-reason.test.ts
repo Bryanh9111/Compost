@@ -300,4 +300,76 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
     }
     expect(new Set(edges.map((e) => e.from_fact_id))).toEqual(new Set(["b", "c"]));
   });
+
+  // ---- P0-2 Week 3: reflect writes contradiction_arbitration audit ----
+
+  test("reflect step 3 writes one contradiction_arbitration audit row per cluster", () => {
+    insertFact(db, "winner", "earth", "is", "round", { confidence: 0.95 });
+    insertFact(db, "loser", "earth", "is", "flat", { confidence: 0.3 });
+
+    reflect(db);
+
+    const audit = db
+      .query(
+        "SELECT kind, target_id, confidence_floor, evidence_refs_json, decided_by FROM decision_audit WHERE kind = 'contradiction_arbitration'"
+      )
+      .get() as {
+      kind: string;
+      target_id: string;
+      confidence_floor: number;
+      evidence_refs_json: string;
+      decided_by: string;
+    };
+    expect(audit.kind).toBe("contradiction_arbitration");
+    expect(audit.target_id).toMatch(/^cg-/);
+    expect(audit.confidence_floor).toBe(0.85);
+    expect(audit.decided_by).toBe("reflect");
+
+    const ev = JSON.parse(audit.evidence_refs_json);
+    expect(ev.kind).toBe("contradiction_arbitration");
+    expect(ev.winner_id).toBe("winner");
+    expect(ev.loser_ids).toEqual(["loser"]);
+    expect(ev.subject).toBe("earth");
+    expect(ev.predicate).toBe("is");
+  });
+
+  test("reflect step 3: 3-way cluster records one audit row with plural loser_ids", () => {
+    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
+    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
+    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+
+    reflect(db);
+
+    const auditRows = db
+      .query(
+        "SELECT evidence_refs_json FROM decision_audit WHERE kind = 'contradiction_arbitration'"
+      )
+      .all() as Array<{ evidence_refs_json: string }>;
+    expect(auditRows).toHaveLength(1);
+    const ev = JSON.parse(auditRows[0]!.evidence_refs_json);
+    expect(ev.winner_id).toBe("a");
+    expect(new Set(ev.loser_ids)).toEqual(new Set(["b", "c"]));
+  });
+
+  test("reflect step 2 stale tombstone does NOT write an audit row (contract: 'none')", () => {
+    insertFact(db, "stale-1", "old", "p", "o", {
+      confidence: 0.5,
+      importance: 0.0001,
+    });
+    reflect(db);
+
+    const auditCount = db
+      .query("SELECT COUNT(*) AS c FROM decision_audit")
+      .get() as { c: number };
+    expect(auditCount.c).toBe(0);
+  });
+
+  test("reflect with no conflicts writes no contradiction_arbitration rows", () => {
+    insertFact(db, "alone", "x", "p", "v", { confidence: 0.9 });
+    reflect(db);
+    const count = db
+      .query("SELECT COUNT(*) AS c FROM decision_audit WHERE kind = 'contradiction_arbitration'")
+      .get() as { c: number };
+    expect(count.c).toBe(0);
+  });
 });

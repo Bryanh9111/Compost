@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 12 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 13 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(12);
+    expect(result.applied).toHaveLength(13);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -38,6 +38,7 @@ describe("migrator", () => {
       "0010_phase4_myco_integration",
       "0011_fact_links_and_health_fix",
       "0012_correction_signal_kind",
+      "0013_wiki_stale_at",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -166,12 +167,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(12);
+    expect(before.pending).toHaveLength(13);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(12);
+    expect(after.applied).toHaveLength(13);
     expect(after.pending).toHaveLength(0);
   });
 
