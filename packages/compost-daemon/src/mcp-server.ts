@@ -30,8 +30,16 @@ export interface McpHandle {
  *   compost.observe   - notification-style, writes to outbox
  *   compost.query     - tool, proxies to query()
  *   compost.reflect   - tool, proxies to reflect()
+ *
+ * `llmRegistry` is injected by the caller (daemon boot, `main.ts`) so MCP
+ * and the reflect scheduler share the exact same BreakerRegistry instance
+ * -- circuit state for `ask.*` and `wiki.synthesis` lives in one place
+ * (debate 011 Day 1 contract; eliminates the prior two-registry topology).
  */
-export async function startMcpServer(db: Database): Promise<McpHandle> {
+export async function startMcpServer(
+  db: Database,
+  llmRegistry: BreakerRegistry
+): Promise<McpHandle> {
   // Dynamic import so missing SDK doesn't crash unrelated tests
   const { McpServer } = await import(
     "@modelcontextprotocol/sdk/server/mcp.js"
@@ -45,12 +53,6 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
     { name: "compost", version: "0.1.0" },
     { capabilities: {} }
   );
-
-  // Debate 009 Fix 1: per-server BreakerRegistry singleton. Lazy-init inside
-  // the compost.ask handler so daemons without LLM configured don't pay the
-  // Ollama import cost up front. Holds rolling-window state for the 3 TS
-  // call sites (ask.expand / ask.answer / wiki.synthesis).
-  let llmRegistry: BreakerRegistry | null = null;
 
   // -----------------------------------------------------------------------
   // compost.observe — write an observation to the outbox
@@ -203,14 +205,6 @@ export async function startMcpServer(db: Database): Promise<McpHandle> {
     },
     async (input) => {
       try {
-        // Debate 009 Fix 1: construct the BreakerRegistry *once per server
-        // instance* so circuit state (closed/open/half-open) persists across
-        // requests. A fresh registry per call would reset state every time
-        // and the breaker would never actually trip.
-        if (!llmRegistry) {
-          const { OllamaLLMService } = await import("../../compost-core/src/llm/ollama");
-          llmRegistry = new BreakerRegistry(new OllamaLLMService());
-        }
         const result = await ask(db, input.question, llmRegistry, {
           budget: input.budget,
           ranking_profile_id: input.ranking_profile_id,
