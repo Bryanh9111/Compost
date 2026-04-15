@@ -364,12 +364,44 @@ export function countStaleClusters(
   db: Database,
   minAgeDays: number = 90
 ): number {
-  // TODO(P0-3 Week 2): implement per debate 006 Fix 1 -- iterate
-  // connectedComponents(), for each component fetch max(created_at) of
-  // active facts, count the components whose max is older than the gate.
-  void db;
-  void minAgeDays;
-  return 0;
+  if (minAgeDays < 0) {
+    throw new Error(`fact-links: minAgeDays must be >= 0 (got ${minAgeDays})`);
+  }
+  const { components } = connectedComponents(db);
+  if (components.size === 0) return 0;
+
+  // Per-component: the youngest active fact determines staleness. If every
+  // member is older than the gate, the cluster is stale.
+  const cutoffIso = new Date(
+    Date.now() - minAgeDays * 86_400_000
+  ).toISOString();
+  // Convert ISO ("2026-01-15T12:34:56.789Z") to SQLite datetime() text
+  // format ("2026-01-15 12:34:56") so comparisons match the stored column.
+  const cutoffSqlite = cutoffIso.replace("T", " ").slice(0, 19);
+
+  // Max created_at per component (only active facts, which are what
+  // connectedComponents returned).
+  const factRows = db
+    .query(
+      "SELECT fact_id, created_at FROM facts WHERE archived_at IS NULL"
+    )
+    .all() as Array<{ fact_id: string; created_at: string }>;
+
+  const maxPerComponent = new Map<number, string>();
+  for (const { fact_id, created_at } of factRows) {
+    const cid = components.get(fact_id);
+    if (cid === undefined) continue; // shouldn't happen
+    const existing = maxPerComponent.get(cid);
+    if (!existing || created_at > existing) {
+      maxPerComponent.set(cid, created_at);
+    }
+  }
+
+  let staleCount = 0;
+  for (const maxCreatedAt of maxPerComponent.values()) {
+    if (maxCreatedAt < cutoffSqlite) staleCount += 1;
+  }
+  return staleCount;
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { connectedComponents, countStaleClusters } from "./fact-links";
 
 /**
  * Debate 005 fix #4: the four numeric fields are non-null since migration
@@ -28,18 +29,26 @@ export interface GraphHealthSnapshot {
  * daily snapshot and break `delta()`'s diagnostic signal on day one.
  */
 export function currentSnapshot(db: Database): GraphHealthSnapshot {
-  // TODO(P0-3 Week 2): implement per the query-split locked above:
-  //   const viewRow = db.query("SELECT total_facts, orphan_facts, density FROM v_graph_health").get()
-  //   const { count: clusterCount } = connectedComponents(db)
-  //   const staleClusterCount = countStaleClusters(db, 90)
-  void db;
+  // v_graph_health returns cluster_count as a hardcoded 0 placeholder,
+  // so we deliberately exclude it from this SELECT and compute it in TS.
+  const viewRow = db
+    .query(
+      "SELECT total_facts, orphan_facts, density FROM v_graph_health"
+    )
+    .get() as {
+    total_facts: number;
+    orphan_facts: number;
+    density: number;
+  };
+  const { count: clusterCount } = connectedComponents(db);
+  const staleClusterCount = countStaleClusters(db, 90);
   return {
     takenAt: new Date().toISOString(),
-    totalFacts: 0,
-    orphanFacts: 0,
-    density: 0,
-    clusterCount: 0,
-    staleClusterCount: 0,
+    totalFacts: viewRow.total_facts,
+    orphanFacts: viewRow.orphan_facts,
+    density: viewRow.density,
+    clusterCount,
+    staleClusterCount,
   };
 }
 
@@ -56,9 +65,29 @@ export function currentSnapshot(db: Database): GraphHealthSnapshot {
  * Called by `startGraphHealthScheduler` (daemon) at 04:00 UTC daily.
  */
 export function takeSnapshot(db: Database): GraphHealthSnapshot {
-  // TODO(P0-3 Week 2): transactional DELETE-same-date + INSERT, return snapshot.
-  void db;
-  throw new Error("graph-health.takeSnapshot not implemented (P0-3 stub)");
+  const snap = currentSnapshot(db);
+  const sqliteTs = snap.takenAt.replace("T", " ").slice(0, 19);
+  const tx = db.transaction(() => {
+    db.run(
+      "DELETE FROM graph_health_snapshot WHERE date(taken_at) = date(?)",
+      [sqliteTs]
+    );
+    db.run(
+      "INSERT INTO graph_health_snapshot " +
+        "(taken_at, total_facts, orphan_facts, density, cluster_count, stale_cluster_count) " +
+        "VALUES (?, ?, ?, ?, ?, ?)",
+      [
+        sqliteTs,
+        snap.totalFacts,
+        snap.orphanFacts,
+        snap.density,
+        snap.clusterCount,
+        snap.staleClusterCount,
+      ]
+    );
+  });
+  tx();
+  return snap;
 }
 
 /**
@@ -70,7 +99,26 @@ export function delta(db: Database): {
   densityDelta: number;
   windowDays: number;
 } | null {
-  // TODO(P0-3 Week 2): ORDER BY taken_at DESC LIMIT 2, diff the two rows.
-  void db;
-  return null;
+  const rows = db
+    .query(
+      "SELECT taken_at, orphan_facts, density " +
+        "FROM graph_health_snapshot ORDER BY taken_at DESC LIMIT 2"
+    )
+    .all() as Array<{
+    taken_at: string;
+    orphan_facts: number;
+    density: number;
+  }>;
+  if (rows.length < 2) return null;
+  const [latest, prior] = rows;
+  const latestMs = Date.parse(latest!.taken_at.replace(" ", "T") + "Z");
+  const priorMs = Date.parse(prior!.taken_at.replace(" ", "T") + "Z");
+  return {
+    orphanDelta: latest!.orphan_facts - prior!.orphan_facts,
+    densityDelta: latest!.density - prior!.density,
+    windowDays: Math.max(
+      0,
+      Math.round((latestMs - priorMs) / 86_400_000)
+    ),
+  };
 }

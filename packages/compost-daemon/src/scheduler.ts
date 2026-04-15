@@ -403,12 +403,15 @@ import {
   pruneOldBackups,
   DEFAULT_BACKUP_RETENTION,
 } from "../../compost-core/src/persistence/backup";
+import { takeSnapshot as takeGraphHealthSnapshot } from "../../compost-core/src/cognitive/graph-health";
 import { existsSync } from "fs";
 import { join } from "path";
 
 const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
 const BACKUP_GRACE_WINDOW_MS = 60 * 60 * 1000; // fire immediately if within 1h of 03:00 UTC and no backup today
+const GRAPH_HEALTH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const GRAPH_HEALTH_TIME_WINDOW_HOUR_UTC = 4; // one hour after backup; see ARCHITECTURE.md scheduler table
 
 export interface BackupSchedulerOpts {
   ledgerPath: string;
@@ -494,6 +497,76 @@ export function startBackupScheduler(
       } catch (err) {
         log.error({ err, backupDir: opts.backupDir }, "backup scheduler error");
         await Bun.sleep(BACKUP_INTERVAL_MS);
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+  };
+}
+
+// =====================================================================
+// Graph-health scheduler (P0-3 Week 2, debate 006 Fix 6)
+// =====================================================================
+
+/**
+ * Compute milliseconds until the next 04:00 UTC graph-health window.
+ * Exported pure helper so tests can pass an explicit `now`.
+ *
+ * Time window: 04:00 UTC, one hour after `startBackupScheduler`'s 03:00
+ * window. Avoids both the backup VACUUM lock (which can exceed 30min on
+ * large DBs) and the reflect 6h aligned slots (00/06/12/18 UTC).
+ */
+export function msUntilNextGraphHealthWindow(now: Date = new Date()): number {
+  const target = new Date(now);
+  target.setUTCHours(GRAPH_HEALTH_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * P0-3 graph-health scheduler: runs `takeSnapshot` once per day at 04:00 UTC.
+ *
+ * Same-day idempotency is enforced by `takeSnapshot` itself (DELETE-same-date
+ * + INSERT in one transaction), so daemon restarts within the same UTC day
+ * produce at most one row, always reflecting the latest call.
+ */
+export function startGraphHealthScheduler(db: Database): Scheduler {
+  let running = true;
+
+  async function loop() {
+    while (running) {
+      const wait = msUntilNextGraphHealthWindow();
+      log.debug(
+        { waitMs: wait },
+        "graph-health scheduler: waiting for 04:00 UTC window"
+      );
+      await Bun.sleep(wait);
+      if (!running) break;
+      try {
+        const snap = takeGraphHealthSnapshot(db);
+        log.info(
+          {
+            totalFacts: snap.totalFacts,
+            orphanFacts: snap.orphanFacts,
+            clusterCount: snap.clusterCount,
+            staleClusterCount: snap.staleClusterCount,
+            density: snap.density,
+          },
+          "graph-health snapshot taken"
+        );
+        // Sleep most of the day before re-checking the next window
+        await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS - 60_000);
+      } catch (err) {
+        log.error({ err }, "graph-health scheduler error");
+        await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS);
       }
     }
   }
