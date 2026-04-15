@@ -98,13 +98,36 @@ Debate 9: 4-way (Opus/Sonnet/Gemini/Codex) plan review, revised to 4 batches
 ## Planned
 
 ### Phase 4: Active Learning (weeks 9-12)
-- Episodic memory materialization (deferred from Phase 3, needs extractor consumer)
-- Fact-to-fact links graph + recursive CTE traversal (deferred from Phase 3, needs caller)
-- Semantic chunking / Savitzky-Golay (deferred from Phase 3, evaluate on real corpus)
-- Curiosity agent: detect knowledge gaps, generate SearchPlan
-- Gap tracker: from query failure signals -> "what you don't know"
-- Autonomous crawl with is_noteworthy semantic gates
+
+**Batch D — Myco distillation (P0, must-do)** — see `debates/001-myco-integration/synthesis_v2.md`
+- P0-1: `compost triage` + `health_signals` table (5 signal kinds, no auto-execute)
+- P0-2: `decision_audit` table + confidence ladder (kernel 0.90 / instance 0.85 / exploration 0.75)
+- P0-3: `v_graph_health` view + `graph_health_snapshot` (depends on Phase 4 fact-to-fact links)
+- P0-4: `facts.archive_reason` enum + `replaced_by_fact_id` + `revival_at` (compression 3-criteria)
+- P0-5: `correction_events` + regex-based self-correction detector
+
+**Carried from Phase 3 deferral**
+- Episodic memory materialization (P1: `session_turns` FTS5 + episode summary)
+- Fact-to-fact links graph + recursive CTE traversal (prerequisite for P0-3)
+- Semantic chunking / Savitzky-Golay (evaluate on real corpus; standalone)
 - memory_procedural standalone table (skills, never forgotten)
+
+**Batch D — P1 (after P0 lands, evaluate ROI)**
+- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
+- `compression_pressure` SQL view (feeds triage)
+- Cross-project `shareable` tag + `compost export --shareable` (manual export only)
+- `crawl_queue` SQLite table (persistent curiosity intent; manual trigger only)
+- Inlet `origin_hash` + `method` columns on `observations` (machine-required, user-optional)
+- Four-layer self-model dashboard, A inventory + C decay only
+
+**Batch D — P2 (defer indefinitely; debate consensus)**
+- Semantic Cohort Intelligence (query-side experimental)
+- Milestone retrospective scheduler
+
+**Removed from Phase 4** (debate 4/4 Reject)
+- ~~Curiosity agent (replaced by `open_problems` + triage signals)~~
+- ~~Gap tracker (replaced by `open_problems`)~~
+- ~~Autonomous crawl with is_noteworthy gates~~ (breaks first-party principle)
 
 ### Phase 5: Multi-Host (later)
 - Cross-machine sync protocol (explicit export/import)
