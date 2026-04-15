@@ -43,7 +43,11 @@ export type EvidenceRefs =
   | {
       kind: "wiki_rebuild";
       page_path: string;
-      input_observe_ids: string[];
+      // 2026-04-15 debate 008 Q5 (3/4 vote): changed from input_observe_ids
+      // to input_fact_ids. Wiki rebuild synthesizes from L2 facts; observe
+      // provenance is one FK JOIN away (facts.observe_id) and duplicating it
+      // here adds 1.5x storage without audit value.
+      input_fact_ids: string[];
       input_fact_count: number;
     }
   | {

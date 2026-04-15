@@ -219,9 +219,15 @@ shape stored as `JSON.stringify`'d text in `evidence_refs_json`. See
 | kind | payload shape |
 |---|---|
 | `contradiction_arbitration` | `{ winner_id, loser_ids[], subject, predicate }` |
-| `wiki_rebuild` | `{ page_path, input_observe_ids[], input_fact_count }` |
+| `wiki_rebuild` | `{ page_path, input_fact_ids[], input_fact_count }` |
 | `fact_excretion` | `{ fact_ids[], reason: 'duplicate'\|'low_access'\|'manual', count }` |
 | `profile_switch` (Week 5+) | `{ from_profile_id, to_profile_id, changed_fields[] }` |
+
+> **Q5 revision (debate 008, 2026-04-15, 3/4 vote)**: `wiki_rebuild` stores
+> `input_fact_ids[]` rather than `input_observe_ids[]`. Fact ids are the
+> direct input to wiki synthesis; observation provenance is one FK JOIN
+> away (`facts.observe_id`) and duplicating it here adds ~1.5× payload
+> size without audit value.
 
 ### LLM call sites (inventory + fallback contract)
 
