@@ -7,6 +7,8 @@ import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startIngestW
 import type { Scheduler } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
+import { OllamaLLMService } from "../../compost-core/src/llm/ollama";
+import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -73,8 +75,17 @@ export async function startDaemon(
   }
 
   // 6. Start background services
+  // Debate 009 Fix 1+2: construct one BreakerRegistry at daemon boot so the
+  // reflect scheduler's wiki synthesis and any future callers share circuit
+  // state per site. OllamaLLMService ctor is side-effect-free; connection
+  // errors only surface on first generate() and are absorbed by the breaker.
+  const llmRegistry = new BreakerRegistry(new OllamaLLMService());
+
   const drainSched: Scheduler = startDrainLoop(db);
-  const reflectSched: Scheduler = startReflectScheduler(db);
+  const reflectSched: Scheduler = startReflectScheduler(db, {
+    llm: llmRegistry,
+    dataDir,
+  });
   const ingestSched: Scheduler = startIngestWorker(db, {
     embeddingService: embSvc,
     vectorStore,
