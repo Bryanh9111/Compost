@@ -72,14 +72,21 @@ export function recordCorrection(
 
 /**
  * Find facts whose subject/object overlap with the retracted text — candidates
- * for confidence reduction. Heuristic only, no LLM.
+ * for review. Heuristic only, no LLM.
+ *
+ * IMPORTANT (debate 002 §Gemini 1.5 ruling): correction events are SIGNALS,
+ * not direct mutations. The detected facts must be surfaced via `health_signals`
+ * (kind='correction_candidate') for user/agent review. Never auto-decrement
+ * `facts.confidence` from a regex hit — Gemini's "No, I meant…" false-positive
+ * scenario would silently corrode high-quality facts.
  */
 export function findRelatedFacts(
   db: Database,
   retractedText: string,
   limit: number = 5
 ): string[] {
-  // TODO(phase4-batch-d): implement.
+  // TODO(phase4-batch-d): implement subject/object overlap heuristic.
+  // Output flows to triage as health_signal, not directly to facts table.
   void db;
   void retractedText;
   void limit;
