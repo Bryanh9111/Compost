@@ -49,17 +49,16 @@ describe("graph-health (P0-3, Phase 4 Batch D)", () => {
     expect(row!.total_facts).toBe(0);
   });
 
-  test("currentSnapshot returns stub (TS impl is stub even though 0011 view returns real values)", () => {
-    // NOTE: 0011 migration upgraded v_graph_health from NULL stub to real
-    // fact_links-backed implementation, but the TS function `currentSnapshot`
-    // is still a stub that returns nulls until P0-3 lands. After P0-3, this
-    // test must flip to expect real values from v_graph_health (e.g. 0/0/0
-    // on empty DB).
+  test("currentSnapshot returns concrete zeros on empty DB (matches 0011 view contract)", () => {
+    // Debate 005 fix #4: the GraphHealthSnapshot interface no longer admits
+    // null for the four numeric fields. migration 0011 made the underlying
+    // columns NOT NULL DEFAULT 0 and the view returns 0 on empty inputs.
     const snap = currentSnapshot(db);
     expect(snap.totalFacts).toBe(0);
-    expect(snap.orphanFacts).toBeNull();
-    expect(snap.density).toBeNull();
-    expect(snap.clusterCount).toBeNull();
+    expect(snap.orphanFacts).toBe(0);
+    expect(snap.density).toBe(0);
+    expect(snap.clusterCount).toBe(0);
+    expect(snap.staleClusterCount).toBe(0);
   });
 
   test("v_graph_health view (post-0011) returns concrete zeros on empty DB", () => {

@@ -262,4 +262,42 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
     const report = reflect(db);
     expect(report.contradictionsResolved).toBe(2);
   });
+
+  // ---- Debate 005 fix #1: contradiction creates fact_links edges ----
+
+  test("contradiction resolution writes 'contradicts' edges to fact_links", () => {
+    insertFact(db, "winner", "paris", "is-in", "france", { confidence: 0.95 });
+    insertFact(db, "loser", "paris", "is-in", "germany", { confidence: 0.3 });
+
+    reflect(db);
+
+    const edge = db
+      .query(
+        "SELECT from_fact_id, to_fact_id, kind FROM fact_links WHERE from_fact_id = 'loser'"
+      )
+      .get() as { from_fact_id: string; to_fact_id: string; kind: string } | null;
+    expect(edge).not.toBeNull();
+    expect(edge!.from_fact_id).toBe("loser");
+    expect(edge!.to_fact_id).toBe("winner");
+    expect(edge!.kind).toBe("contradicts");
+  });
+
+  test("3-way conflict creates one 'contradicts' edge per loser (not per SQL pair)", () => {
+    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
+    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
+    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+
+    reflect(db);
+
+    const edges = db
+      .query(
+        "SELECT from_fact_id, to_fact_id FROM fact_links WHERE kind = 'contradicts' ORDER BY from_fact_id"
+      )
+      .all() as Array<{ from_fact_id: string; to_fact_id: string }>;
+    expect(edges).toHaveLength(2);
+    for (const e of edges) {
+      expect(e.to_fact_id).toBe("a");
+    }
+    expect(new Set(edges.map((e) => e.from_fact_id))).toEqual(new Set(["b", "c"]));
+  });
 });

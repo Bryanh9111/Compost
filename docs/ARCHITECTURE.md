@@ -158,28 +158,34 @@ compost_ingest/
 
 ### Audit log responsibilities (two tables, no overlap)
 
-| Table | Purpose | Write path | Migration |
-|-------|---------|-----------|-----------|
-| `ranking_audit_log` | **Read path only** -- per-query ranking attribution. One row per (query_id, fact_id). Disabled unless `debug_ranking=true`. | `query/search.ts` | 0004 |
-| `decision_audit` | **Cognitive write path only** -- four kinds: `contradiction_arbitration`, `wiki_rebuild`, `fact_excretion`, `profile_switch`. One row per high-cost decision. Always on. | `cognitive/reflect.ts`, `cognitive/wiki.ts`, future profile switcher | 0010 |
+| Table | Purpose | Write path | Status | Migration |
+|-------|---------|-----------|--------|-----------|
+| `ranking_audit_log` | **Read path only** -- per-query ranking attribution. One row per (query_id, fact_id). Disabled unless `debug_ranking=true`. | `query/search.ts` | ✅ live since Phase 2 | 0004 |
+| `decision_audit` | **Cognitive write path only** -- four kinds: `contradiction_arbitration`, `wiki_rebuild`, `fact_excretion`, `profile_switch`. One row per high-cost decision. | `cognitive/reflect.ts`, `cognitive/wiki.ts`, future profile switcher | ⏳ **schema only; P0-2 (Week 3) wires the `recordDecision()` calls** | 0010 |
 
 Never write the same event to both. If a decision involves ranking (e.g. profile
 switch changes ranking weights), it goes to `decision_audit` -- the ranking
 side-effects show up later in `ranking_audit_log` per query.
+
+> **Audit honesty (debate 005)**: the `decision_audit` table exists from 0010
+> but no caller writes to it until P0-2 lands. Do NOT rely on audit-trail
+> queries (`SELECT * FROM decision_audit WHERE kind = ...`) before Week 3;
+> they will return empty. Consumers that need a pre-P0-2 write trail should
+> read `facts.archive_reason` + `facts.replaced_by_fact_id` directly.
 
 ### `facts.archive_reason` enum (frozen for Phase 4)
 
 Aligned with `decision_audit.kind` so each archival is auditable end-to-end.
 Changes require a new migration -- this enum is **frozen**.
 
-| Value | Semantic | Audit kind |
-|-------|----------|------------|
-| `stale` | Decay formula tombstoned (`reflect.ts` step 2). Bulk operation, no audit row per fact. | (none) |
-| `superseded` | Replaced by newer fact for same (subject, predicate). `replaced_by_fact_id` MUST be set. | `contradiction_arbitration` |
-| `contradicted` | Lost a contradiction arbitration. `replaced_by_fact_id` SHOULD be set. | `contradiction_arbitration` |
-| `duplicate` | Same subject + similarity > 0.92 + lower confidence. `replaced_by_fact_id` MUST be set. | `fact_excretion` |
-| `low_access` | `access_log.count_30d == 0` AND `age > 60d`. No replacement. | `fact_excretion` |
-| `manual` | User-driven excretion. | `fact_excretion` |
+| Value | Semantic | Audit kind | Implementation status |
+|-------|----------|------------|-----------------------|
+| `stale` | Decay formula tombstoned (`reflect.ts` step 2). Bulk operation, no audit row per fact. | (none) | ✅ reflect.ts step 2 |
+| `superseded` | Replaced by newer fact for same (subject, predicate). `replaced_by_fact_id` MUST be set. | `contradiction_arbitration` | ⏳ reserved (may fold into `contradicted`) |
+| `contradicted` | Lost a contradiction arbitration. `replaced_by_fact_id` SHOULD be set. | `contradiction_arbitration` | ✅ reflect.ts step 3 (also writes `fact_links` `contradicts` edge) |
+| `duplicate` | Same subject + similarity > 0.92 + lower confidence. `replaced_by_fact_id` MUST be set. | `fact_excretion` | ⏳ P1 compression 3-criteria |
+| `low_access` | `access_log.count_30d == 0` AND `age > 60d`. No replacement. | `fact_excretion` | ⏳ P1 compression 3-criteria |
+| `manual` | User-driven excretion. | `fact_excretion` | ⏳ future `compost forget` CLI |
 
 `revival_at` is set when an archived fact is re-captured (idempotency hash match)
 and unarchived.
@@ -201,6 +207,10 @@ lock time (5 sites; 4 TS + 1 Python):
 extractor MUST refuse to re-ingest content whose source path matches `wiki/**`
 or whose upstream `source.kind == 'wiki-rebuild'`. Prevents the LLM-generated
 wiki from feeding back into the fact extraction loop.
+
+> **Status (debate 005)**: ⏳ not yet enforced. The guard lands in Week 3
+> (P0-6) alongside the LLM circuit breaker. Until then, manual
+> `compost add wiki/<page>.md` WILL re-ingest and is a known foot-gun.
 
 ### Scheduler hook points + lock-window discipline
 

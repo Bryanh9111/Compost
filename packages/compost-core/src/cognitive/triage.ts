@@ -1,15 +1,21 @@
 import type { Database } from "bun:sqlite";
 
 /**
- * Triage signal kinds — mirror the CHECK constraint in migration 0010.
- * Adding a new kind requires updating both this enum and the SQL CHECK clause.
+ * Triage signal kinds — must mirror the CHECK constraint in migration 0010
+ * (original 5) + 0012 (correction_candidate). Adding a new kind requires
+ * updating both this union and the SQL CHECK clause.
+ *
+ * Debate 005 fix #3: `correction_candidate` was added to the SQL CHECK in
+ * migration 0012 but the TS union lagged behind, causing a silent drop
+ * in the `byKind` histogram and type-unsafe writes from correction-detector.
  */
 export type SignalKind =
   | "stale_fact"
   | "unresolved_contradiction"
   | "stuck_outbox"
   | "orphan_delta"
-  | "stale_wiki";
+  | "stale_wiki"
+  | "correction_candidate";
 
 export type SignalSeverity = "info" | "warn" | "error";
 
@@ -58,6 +64,7 @@ export function triage(db: Database, opts: TriageOptions = {}): TriageReport {
       stuck_outbox: 0,
       orphan_delta: 0,
       stale_wiki: 0,
+      correction_candidate: 0,
     },
     unresolvedTotal: 0,
     computedAt: new Date().toISOString(),

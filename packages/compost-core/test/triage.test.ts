@@ -45,12 +45,10 @@ describe("triage (P0-1, Phase 4 Batch D)", () => {
     expect(report.signals).toHaveLength(0);
   });
 
-  test("triage report contains all signal kinds in byKind", () => {
-    // Note: byKind in the stub only includes the original 5 from 0010.
-    // 0012 added 'correction_candidate' but the stub's byKind shape is frozen
-    // for backwards compat -- P0-1 implementation will extend the type.
+  test("triage report contains all 6 signal kinds in byKind (5 from 0010 + 1 from 0012)", () => {
     const report = triage(db);
     expect(Object.keys(report.byKind).sort()).toEqual([
+      "correction_candidate",
       "orphan_delta",
       "stale_fact",
       "stale_wiki",

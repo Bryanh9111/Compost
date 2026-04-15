@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { addLink } from "./fact-links";
 
 /**
  * Reflection report — returned by reflect(). Spec §8.4.
@@ -236,6 +237,11 @@ export function reflect(db: Database): ReflectionReport {
         for (const cluster of clusters.values()) {
           for (const loserId of cluster.losers.keys()) {
             supStmt.run(cluster.winner, cluster.groupId, cluster.winner, loserId);
+            // Debate 005 fix #1: persist the contradiction as a graph edge
+            // so P0-3 graph_health has real data to compute over. Without
+            // this, fact_links stays empty forever and graph-health metrics
+            // are misleading (all orphans, zero density).
+            addLink(db, loserId, cluster.winner, "contradicts", { weight: 1.0 });
           }
           winStmt.run(cluster.groupId, cluster.winner);
           losersResolved += cluster.losers.size;
