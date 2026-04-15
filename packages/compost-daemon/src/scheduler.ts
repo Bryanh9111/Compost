@@ -392,3 +392,81 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
     },
   };
 }
+
+
+// =====================================================================
+// Backup scheduler (P0-7 stub, locked by debate 003 Pre-P0 fix #5)
+// =====================================================================
+
+const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
+const BACKUP_RETENTION = 30;
+
+export interface BackupSchedulerOpts {
+  ledgerPath: string;
+  backupDir: string;
+  retentionCount?: number;
+}
+
+/**
+ * P0-7 backup scheduler: runs SQLite VACUUM INTO once per day at 03:00 UTC.
+ *
+ * Time window locked at 03:00 UTC to avoid SQLite writer-lock contention with
+ * startReflectScheduler (aligned to 00/06/12/18 UTC). See ARCHITECTURE.md
+ * §"Scheduler hook points" for the full discipline.
+ *
+ * Stub: emits a no-op log line at the right wake-up time so reviewers can
+ * confirm scheduling logic before P0-7 implementation lands the actual
+ * VACUUM INTO + retention cleanup.
+ */
+export function startBackupScheduler(
+  _db: Database,
+  opts: BackupSchedulerOpts
+): Scheduler {
+  let running = true;
+  const retention = opts.retentionCount ?? BACKUP_RETENTION;
+
+  function msUntilNextWindow(): number {
+    const now = new Date();
+    const target = new Date(now);
+    target.setUTCHours(BACKUP_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+    if (target.getTime() <= now.getTime()) {
+      target.setUTCDate(target.getUTCDate() + 1);
+    }
+    return target.getTime() - now.getTime();
+  }
+
+  async function loop() {
+    while (running) {
+      const wait = msUntilNextWindow();
+      log.debug(
+        { waitMs: wait, ledger: opts.ledgerPath, backupDir: opts.backupDir },
+        "backup scheduler: waiting for 03:00 UTC window"
+      );
+      await Bun.sleep(wait);
+      if (!running) break;
+      try {
+        // TODO(P0-7): implement
+        //   1. db.exec(`VACUUM INTO '${opts.backupDir}/YYYY-MM-DD.db'`)
+        //   2. enforce retention by deleting oldest snapshots beyond limit
+        //   3. emit health_signal on failure
+        log.info(
+          { backupDir: opts.backupDir, retention },
+          "backup scheduler: stub fire (P0-7 not implemented)"
+        );
+        await Bun.sleep(BACKUP_INTERVAL_MS);
+      } catch (err) {
+        log.error({ err }, "backup scheduler error");
+        await Bun.sleep(BACKUP_INTERVAL_MS);
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+  };
+}

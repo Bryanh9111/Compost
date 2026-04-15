@@ -147,3 +147,70 @@ compost_ingest/
 4. **Transform policies are immutable** -- new behavior = new policy key, never mutation
 5. **Python extraction boundary** -- ML/NLP lives in a subprocess, Bun never imports Python
 6. **Graceful degradation** -- BM25 works without LanceDB, query works without LLM
+
+---
+
+## Phase 4 Pre-P0 contracts (locked 2026-04-14)
+
+> Source: `debates/003-p0-readiness/synthesis.md`. These contracts must be honored
+> by all P0 implementations to avoid the schema/ordering bugs the readiness
+> debate uncovered.
+
+### Audit log responsibilities (two tables, no overlap)
+
+| Table | Purpose | Write path | Migration |
+|-------|---------|-----------|-----------|
+| `ranking_audit_log` | **Read path only** -- per-query ranking attribution. One row per (query_id, fact_id). Disabled unless `debug_ranking=true`. | `query/search.ts` | 0004 |
+| `decision_audit` | **Cognitive write path only** -- four kinds: `contradiction_arbitration`, `wiki_rebuild`, `fact_excretion`, `profile_switch`. One row per high-cost decision. Always on. | `cognitive/reflect.ts`, `cognitive/wiki.ts`, future profile switcher | 0010 |
+
+Never write the same event to both. If a decision involves ranking (e.g. profile
+switch changes ranking weights), it goes to `decision_audit` -- the ranking
+side-effects show up later in `ranking_audit_log` per query.
+
+### `facts.archive_reason` enum (frozen for Phase 4)
+
+Aligned with `decision_audit.kind` so each archival is auditable end-to-end.
+Changes require a new migration -- this enum is **frozen**.
+
+| Value | Semantic | Audit kind |
+|-------|----------|------------|
+| `stale` | Decay formula tombstoned (`reflect.ts` step 2). Bulk operation, no audit row per fact. | (none) |
+| `superseded` | Replaced by newer fact for same (subject, predicate). `replaced_by_fact_id` MUST be set. | `contradiction_arbitration` |
+| `contradicted` | Lost a contradiction arbitration. `replaced_by_fact_id` SHOULD be set. | `contradiction_arbitration` |
+| `duplicate` | Same subject + similarity > 0.92 + lower confidence. `replaced_by_fact_id` MUST be set. | `fact_excretion` |
+| `low_access` | `access_log.count_30d == 0` AND `age > 60d`. No replacement. | `fact_excretion` |
+| `manual` | User-driven excretion. | `fact_excretion` |
+
+`revival_at` is set when an archived fact is re-captured (idempotency hash match)
+and unarchived.
+
+### LLM call sites (inventory + fallback contract)
+
+Every LLM invocation MUST be wrapped by P0-6's circuit breaker. Inventory at
+lock time (5 sites; 4 TS + 1 Python):
+
+| Site | Purpose | Failure mode | Fallback |
+|------|---------|--------------|----------|
+| `cognitive/wiki.ts:86` `llm.generate` | L3 wiki page synthesis | timeout / 5xx / ECONNREFUSED | mark wiki page `stale_at = now`, return cached version, surface `stale_wiki` triage signal |
+| `query/ask.ts:35` `llm.generate` | Multi-query expansion for retrieval | timeout / 5xx | fall back to original query verbatim, log `expansion_skipped` |
+| `query/ask.ts:152` `llm.generate` | Final answer synthesis | timeout / 5xx | return BM25 top-N facts as plain text with `[LLM unavailable]` banner |
+| `compost-daemon/src/mcp-server.ts:201` `new OllamaLLMService()` | Service instantiation for `ask` MCP tool | constructor throws on missing config | return MCP error with hint (`compost doctor --check-llm`) |
+| `compost-ingest/.../llm_facts.py` (Python) | LLM-based fact extraction during ingest | already has Python-side retry; **out of scope for P0-6 TS wrapper** | (existing Python retry; surface `stuck_outbox` if queue grows) |
+
+**Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): the
+extractor MUST refuse to re-ingest content whose source path matches `wiki/**`
+or whose upstream `source.kind == 'wiki-rebuild'`. Prevents the LLM-generated
+wiki from feeding back into the fact extraction loop.
+
+### Scheduler hook points + lock-window discipline
+
+`compost-daemon/src/scheduler.ts` exposes named factories. New schedulers
+that take a SQLite writer lock for > 1s MUST declare a time window:
+
+| Scheduler | Period | Time window | Notes |
+|-----------|--------|-------------|-------|
+| `startDrainLoop` | 1s | continuous | brief writer lock per drain |
+| `startIngestWorker` | 2s | continuous | drains own outbox first |
+| `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s |
+| `startFreshnessLoop` | 60s | continuous | read-only |
+| `startBackupScheduler` (P0-7) | 24h | **03:00 UTC** (between reflect runs) | VACUUM INTO -- avoids reflect lock by time-window separation |

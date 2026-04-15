@@ -49,13 +49,36 @@ describe("graph-health (P0-3, Phase 4 Batch D)", () => {
     expect(row!.total_facts).toBe(0);
   });
 
-  test("currentSnapshot returns stub with null fact_links-dependent fields", () => {
+  test("currentSnapshot returns stub (TS impl is stub even though 0011 view returns real values)", () => {
+    // NOTE: 0011 migration upgraded v_graph_health from NULL stub to real
+    // fact_links-backed implementation, but the TS function `currentSnapshot`
+    // is still a stub that returns nulls until P0-3 lands. After P0-3, this
+    // test must flip to expect real values from v_graph_health (e.g. 0/0/0
+    // on empty DB).
     const snap = currentSnapshot(db);
     expect(snap.totalFacts).toBe(0);
-    // These will be non-null after fact_links table lands in a follow-up
     expect(snap.orphanFacts).toBeNull();
     expect(snap.density).toBeNull();
     expect(snap.clusterCount).toBeNull();
+  });
+
+  test("v_graph_health view (post-0011) returns concrete zeros on empty DB", () => {
+    // This validates the migration 0011 contract directly, independent of TS stub.
+    // P0-3 must read these via currentSnapshot once it is implemented.
+    const row = db
+      .query(
+        "SELECT total_facts, orphan_facts, density, cluster_count FROM v_graph_health"
+      )
+      .get() as {
+      total_facts: number;
+      orphan_facts: number;
+      density: number;
+      cluster_count: number;
+    };
+    expect(row.total_facts).toBe(0);
+    expect(row.orphan_facts).toBe(0);
+    expect(row.density).toBe(0);
+    expect(row.cluster_count).toBe(0);
   });
 
   // RED tests — will fail until P0-3 implementation + fact_links table

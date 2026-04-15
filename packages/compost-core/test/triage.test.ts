@@ -45,7 +45,10 @@ describe("triage (P0-1, Phase 4 Batch D)", () => {
     expect(report.signals).toHaveLength(0);
   });
 
-  test("triage report contains all 5 signal kinds in byKind", () => {
+  test("triage report contains all signal kinds in byKind", () => {
+    // Note: byKind in the stub only includes the original 5 from 0010.
+    // 0012 added 'correction_candidate' but the stub's byKind shape is frozen
+    // for backwards compat -- P0-1 implementation will extend the type.
     const report = triage(db);
     expect(Object.keys(report.byKind).sort()).toEqual([
       "orphan_delta",
@@ -54,6 +57,17 @@ describe("triage (P0-1, Phase 4 Batch D)", () => {
       "stuck_outbox",
       "unresolved_contradiction",
     ]);
+  });
+
+  test("health_signals CHECK accepts correction_candidate (added by 0012)", () => {
+    db.run(
+      "INSERT INTO health_signals (kind, severity, message, target_ref) VALUES (?, ?, ?, ?)",
+      ["correction_candidate", "info", "test correction signal", "fact-test-1"]
+    );
+    const row = db
+      .query("SELECT kind FROM health_signals WHERE target_ref = 'fact-test-1'")
+      .get() as { kind: string };
+    expect(row.kind).toBe("correction_candidate");
   });
 
   // RED tests — will fail until P0-1 implementation lands
