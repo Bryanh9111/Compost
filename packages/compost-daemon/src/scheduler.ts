@@ -38,6 +38,25 @@ export function startDrainLoop(db: Database): Scheduler {
           await Bun.sleep(DRAIN_EMPTY_SLEEP_MS);
         } else {
           log.debug({ seq: result.seq, observe_id: result.observe_id }, "drained");
+
+          // P0-5: post-drain correction scan. Runs per-observe_id (debate 006
+          // Fix 3) so the cost scales with ingest rate rather than a separate
+          // polling loop. Failures are swallowed — correction detection is a
+          // best-effort signal, not a blocking step.
+          try {
+            const scan = scanObservationForCorrection(db, result.observe_id);
+            if (scan.eventId !== null) {
+              log.info(
+                { observe_id: result.observe_id, correction_event_id: scan.eventId },
+                "correction event recorded"
+              );
+            }
+          } catch (scanErr) {
+            log.error(
+              { err: scanErr, observe_id: result.observe_id },
+              "correction scan failed (continuing)"
+            );
+          }
         }
       } catch (err) {
         log.error({ err }, "drain loop error");
@@ -404,6 +423,7 @@ import {
   DEFAULT_BACKUP_RETENTION,
 } from "../../compost-core/src/persistence/backup";
 import { takeSnapshot as takeGraphHealthSnapshot } from "../../compost-core/src/cognitive/graph-health";
+import { scanObservationForCorrection } from "../../compost-core/src/cognitive/correction-detector";
 import { existsSync } from "fs";
 import { join } from "path";
 

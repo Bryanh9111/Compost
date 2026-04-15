@@ -99,10 +99,49 @@ export function recordCorrection(
     relatedFactIds?: string[];
   }
 ): { id: number } {
-  // TODO(P0-5 Week 2): implement per the 4-step transactional contract above.
-  void db;
-  void args;
-  throw new Error("correction-detector.recordCorrection not implemented (P0-5 stub)");
+  const relatedJson = JSON.stringify(args.relatedFactIds ?? []);
+  let insertedId = 0;
+  const tx = db.transaction(() => {
+    // Step 1: INSERT correction_events (processed_at = NULL)
+    const res = db.run(
+      "INSERT INTO correction_events " +
+        "(session_id, retracted_text, corrected_text, related_fact_ids_json, pattern_matched) " +
+        "VALUES (?, ?, ?, ?, ?)",
+      [
+        args.sessionId,
+        args.retractedText,
+        args.correctedText,
+        relatedJson,
+        args.patternName,
+      ]
+    );
+    insertedId = Number(res.lastInsertRowid);
+
+    // Step 2: INSERT health_signals linked to the correction_event
+    const relatedSummary = args.relatedFactIds && args.relatedFactIds.length > 0
+      ? `${args.relatedFactIds.length} related fact(s): ${args.relatedFactIds.slice(0, 3).join(", ")}`
+      : "related facts TBD (see P0-1 triage)";
+    const preview = args.retractedText.length > 120
+      ? args.retractedText.slice(0, 120) + "…"
+      : args.retractedText;
+    db.run(
+      "INSERT INTO health_signals (kind, severity, message, target_ref) VALUES (?, ?, ?, ?)",
+      [
+        "correction_candidate",
+        "info",
+        `User may have corrected a prior claim — ${relatedSummary}. Context: ${preview}`,
+        `correction_event:${insertedId}`,
+      ]
+    );
+
+    // Step 3: UPDATE correction_events.processed_at = now
+    db.run(
+      "UPDATE correction_events SET processed_at = datetime('now') WHERE id = ?",
+      [insertedId]
+    );
+  });
+  tx();
+  return { id: insertedId };
 }
 
 /**
@@ -141,9 +180,91 @@ export function findRelatedFacts(
     minTokenOverlap?: number;
   }
 ): string[] {
-  // TODO(P0-5 Week 2): pick Option A or Option B and implement.
+  // Option B (debate 006 Fix 4): return [] with explicit signalling. The
+  // recordCorrection path is still useful -- health_signals carries the
+  // retractedText preview, and Week 4 P0-1 triage will do the real related-
+  // fact inference as part of its signal generation.
+  //
+  // The implementer deliberately chose B over the tokenize/session impl to
+  // keep Week 2 within 3-4 days and to avoid committing to a heuristic
+  // shape that triage (P0-1) might need to redo.
   void db;
   void retractedText;
   void opts;
   return [];
+}
+
+/**
+ * Scan a single observation's raw bytes for a self-correction pattern and,
+ * if one is found, call `recordCorrection` to persist the event + linked
+ * health_signal.
+ *
+ * Only runs for `source.kind = 'claude-code'` observations; other sources
+ * don't carry turn-structured hook payloads and would produce false matches.
+ *
+ * Called by the daemon's post-drain hook (see scheduler.ts startDrainLoop).
+ * Idempotency: if the observation was already scanned (a correction_event
+ * exists with matching session_id + pattern + retracted_text prefix),
+ * re-scans are no-ops thanks to the UNIQUE INDEX introduced below at
+ * the first live implementation's schema migration (not yet required --
+ * today the only source of re-scanning would be manual operator action).
+ */
+export function scanObservationForCorrection(
+  db: Database,
+  observeId: string
+): { eventId: number | null } {
+  // Pull observation row + the source.kind (only claude-code carries hooks)
+  const row = db
+    .query(
+      "SELECT o.raw_bytes, o.source_id, s.kind " +
+        "FROM observations o JOIN source s ON s.id = o.source_id " +
+        "WHERE o.observe_id = ?"
+    )
+    .get(observeId) as
+    | { raw_bytes: Uint8Array | Buffer | null; source_id: string; kind: string }
+    | null;
+
+  if (!row) return { eventId: null };
+  if (row.kind !== "claude-code") return { eventId: null };
+  if (!row.raw_bytes) return { eventId: null };
+
+  // source_id format: "claude-code:<session_id>:<cwd>"
+  const sessionId =
+    row.source_id.startsWith("claude-code:")
+      ? row.source_id.split(":", 3)[1] ?? null
+      : null;
+
+  // raw_bytes is the full hook envelope JSON. bun:sqlite returns BLOB as
+  // Uint8Array, not Buffer, so `toString("utf-8")` would silently return the
+  // comma-joined byte list instead of decoded text. Use TextDecoder to be
+  // safe across runtimes.
+  let envelope: unknown;
+  try {
+    const text = new TextDecoder("utf-8").decode(row.raw_bytes);
+    envelope = JSON.parse(text);
+  } catch {
+    return { eventId: null };
+  }
+  // Extract just the payload field -- avoid matching on hook metadata keys
+  // like "hook_event_name": "UserPromptSubmit" which would never be a user
+  // correction.
+  const payload =
+    envelope && typeof envelope === "object" && "payload" in envelope
+      ? (envelope as { payload: unknown }).payload
+      : envelope;
+  const payloadText = JSON.stringify(payload ?? "");
+
+  const hit = detectCorrection(payloadText);
+  if (!hit) return { eventId: null };
+
+  const { id } = recordCorrection(db, {
+    sessionId,
+    retractedText: hit.retractedText,
+    correctedText: hit.correctedText,
+    patternName: hit.patternName,
+    relatedFactIds: findRelatedFacts(db, hit.retractedText, {
+      sessionId: sessionId ?? undefined,
+    }),
+  });
+  return { eventId: id };
 }

@@ -6,9 +6,11 @@ import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
 import {
   CORRECTION_PATTERNS,
+  MAX_RETRACTED_TEXT_CHARS,
   detectCorrection,
   recordCorrection,
   findRelatedFacts,
+  scanObservationForCorrection,
 } from "../src/cognitive/correction-detector";
 
 describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
@@ -68,14 +70,160 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
     expect(detectCorrection("讨论一下这个 PR 的设计")).toBeNull();
   });
 
-  // RED tests — will fail until P0-5 implementation lands
-  test.skip("recordCorrection inserts row and returns id", () => {
-    void recordCorrection;
-    expect(false).toBe(true);
+  // ---- P0-5 Week 2 implementation tests ----
+
+  test("detectCorrection stores full turn text (not match[0])", () => {
+    const turn = "Paris is in France. I was wrong about saying it was in Germany.";
+    const result = detectCorrection(turn);
+    expect(result).not.toBeNull();
+    expect(result!.retractedText).toBe(turn); // full text, not just "I was wrong about"
+    expect(result!.retractedText).not.toBe("I was wrong about");
   });
 
-  test.skip("findRelatedFacts returns fact_ids matching subject/object overlap", () => {
-    void findRelatedFacts;
-    expect(false).toBe(true);
+  test("detectCorrection truncates retractedText at MAX_RETRACTED_TEXT_CHARS", () => {
+    const longPrefix = "x".repeat(MAX_RETRACTED_TEXT_CHARS);
+    const turn = longPrefix + " I was wrong about the thing";
+    const result = detectCorrection(turn);
+    expect(result).not.toBeNull();
+    expect(result!.retractedText.length).toBe(MAX_RETRACTED_TEXT_CHARS);
+  });
+
+  test("recordCorrection inserts correction_events + health_signals transactionally", () => {
+    const { id } = recordCorrection(db, {
+      sessionId: "sess-1",
+      retractedText: "I was wrong about the capital",
+      correctedText: null,
+      patternName: "en.i_was_wrong",
+      relatedFactIds: ["f1", "f2"],
+    });
+    expect(id).toBeGreaterThan(0);
+
+    const event = db
+      .query(
+        "SELECT session_id, retracted_text, pattern_matched, processed_at, related_fact_ids_json FROM correction_events WHERE id = ?"
+      )
+      .get(id) as {
+      session_id: string;
+      retracted_text: string;
+      pattern_matched: string;
+      processed_at: string;
+      related_fact_ids_json: string;
+    };
+    expect(event.session_id).toBe("sess-1");
+    expect(event.pattern_matched).toBe("en.i_was_wrong");
+    expect(event.processed_at).not.toBeNull(); // step 3 of transaction
+    expect(JSON.parse(event.related_fact_ids_json)).toEqual(["f1", "f2"]);
+
+    const signal = db
+      .query(
+        "SELECT kind, severity, target_ref FROM health_signals WHERE target_ref = ?"
+      )
+      .get(`correction_event:${id}`) as {
+      kind: string;
+      severity: string;
+      target_ref: string;
+    };
+    expect(signal.kind).toBe("correction_candidate");
+    expect(signal.severity).toBe("info");
+    expect(signal.target_ref).toBe(`correction_event:${id}`);
+  });
+
+  test("recordCorrection with empty relatedFactIds still works", () => {
+    const { id } = recordCorrection(db, {
+      sessionId: null,
+      retractedText: "scratch that",
+      correctedText: null,
+      patternName: "en.scratch_that",
+    });
+    const event = db
+      .query("SELECT related_fact_ids_json FROM correction_events WHERE id = ?")
+      .get(id) as { related_fact_ids_json: string };
+    expect(JSON.parse(event.related_fact_ids_json)).toEqual([]);
+  });
+
+  test("findRelatedFacts is a stub that returns [] (Option B per debate 006)", () => {
+    const result = findRelatedFacts(db, "anything here", {
+      sessionId: "sess-1",
+      limit: 10,
+      minTokenOverlap: 2,
+    });
+    expect(result).toEqual([]);
+  });
+
+  test("scanObservationForCorrection detects a claude-code hook correction", () => {
+    // Seed source + observation with a hook envelope that contains user text
+    db.run(
+      "INSERT INTO source VALUES ('claude-code:sess-1:/tmp/x','claude-code://sess-1','claude-code',NULL,0.0,'first_party',datetime('now'),NULL)"
+    );
+    const envelope = {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "sess-1",
+      cwd: "/tmp/x",
+      timestamp: "2026-04-15T10:00:00Z",
+      payload: {
+        prompt: "Paris is in France. Actually, I was wrong about the capital.",
+      },
+    };
+    db.run(
+      "INSERT INTO observations VALUES ('obs-corr','claude-code:sess-1:/tmp/x','claude-code://sess-1',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-corr','tp-2026-04',NULL)",
+      [Buffer.from(JSON.stringify(envelope))]
+    );
+
+    const result = scanObservationForCorrection(db, "obs-corr");
+    expect(result.eventId).not.toBeNull();
+
+    const event = db
+      .query(
+        "SELECT session_id, pattern_matched FROM correction_events WHERE id = ?"
+      )
+      .get(result.eventId) as { session_id: string; pattern_matched: string };
+    expect(event.session_id).toBe("sess-1");
+    expect(event.pattern_matched).toMatch(/en\./);
+  });
+
+  test("scanObservationForCorrection skips non-claude-code observations", () => {
+    db.run(
+      "INSERT INTO source VALUES ('file-src','file:///a.md','local-file',NULL,0.0,'user',datetime('now'),NULL)"
+    );
+    const noisyText = "Some markdown with 'I was wrong about' embedded in a quote.";
+    db.run(
+      "INSERT INTO observations VALUES ('obs-file','file-src','file:///a.md',datetime('now'),datetime('now'),'h','r',?,NULL,'text/plain','test',1,'user','idem-file','tp-2026-04',NULL)",
+      [Buffer.from(noisyText)]
+    );
+    const result = scanObservationForCorrection(db, "obs-file");
+    expect(result.eventId).toBeNull();
+  });
+
+  test("scanObservationForCorrection ignores hook metadata keys (no false match)", () => {
+    db.run(
+      "INSERT INTO source VALUES ('claude-code:sess-2:/x','claude-code://sess-2','claude-code',NULL,0.0,'first_party',datetime('now'),NULL)"
+    );
+    const envelope = {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "sess-2",
+      cwd: "/x",
+      timestamp: "2026-04-15T10:00:00Z",
+      payload: { prompt: "hello world" }, // no correction pattern
+    };
+    db.run(
+      "INSERT INTO observations VALUES ('obs-clean','claude-code:sess-2:/x','claude-code://sess-2',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-clean','tp-2026-04',NULL)",
+      [Buffer.from(JSON.stringify(envelope))]
+    );
+    expect(scanObservationForCorrection(db, "obs-clean").eventId).toBeNull();
+  });
+
+  test("scanObservationForCorrection returns null for missing observe_id", () => {
+    expect(scanObservationForCorrection(db, "does-not-exist").eventId).toBeNull();
+  });
+
+  test("scanObservationForCorrection handles invalid JSON in raw_bytes", () => {
+    db.run(
+      "INSERT INTO source VALUES ('claude-code:sess-3:/y','claude-code://sess-3','claude-code',NULL,0.0,'first_party',datetime('now'),NULL)"
+    );
+    db.run(
+      "INSERT INTO observations VALUES ('obs-bad','claude-code:sess-3:/y','claude-code://sess-3',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-bad','tp-2026-04',NULL)",
+      [Buffer.from("not valid json {{")]
+    );
+    expect(scanObservationForCorrection(db, "obs-bad").eventId).toBeNull();
   });
 });
