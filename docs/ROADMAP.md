@@ -98,25 +98,79 @@ Debate 9: 4-way (Opus/Sonnet/Gemini/Codex) plan review, revised to 4 batches
 ## Planned
 
 ### Phase 4: Active Learning (weeks 9-12)
-- Episodic memory materialization (deferred from Phase 3, needs extractor consumer)
-- Fact-to-fact links graph + recursive CTE traversal (deferred from Phase 3, needs caller)
-- Semantic chunking / Savitzky-Golay (deferred from Phase 3, evaluate on real corpus)
-- Curiosity agent: detect knowledge gaps, generate SearchPlan
-- Gap tracker: from query failure signals -> "what you don't know"
-- Autonomous crawl with is_noteworthy semantic gates
-- memory_procedural standalone table (skills, never forgotten)
 
-### Phase 5: Multi-Host (later)
-- Cross-machine sync protocol (explicit export/import)
-- HTTP transport for remote MCP clients
-- compost export / compost import
-- Multi-host concurrency coordination
+> Updated 2026-04-14 after gap audit — see `debates/002-roadmap-gap-audit/synthesis.md`.
+> Original Batch D (5 P0) revised to **8 P0** after 4-way debate found:
+> (a) `fact_links` was hidden P0-3 prerequisite, (b) backup/restore is data-loss
+> insurance not optional, (c) LLM single-point failure needs circuit breaker.
 
-### Phase 6: Ecosystem (later)
-- More adapters: compost-adapter-openclaw, hermes, airi
-- More source types: PDF (docling), code repos, video transcripts
-- compost relearn (re-subscribe sources on new machine)
-- Prometheus/OpenTelemetry metrics export
+**Phase 4 P0 (8 items, 4/4 consensus)**
+
+| # | Item | Depends on |
+|---|------|------------|
+| P0-0 | `fact_links` table + bidirectional FK + recursive CTE API (was Phase 3 carried, promoted) | none |
+| P0-1 | `compost triage` + `health_signals` (5 signal kinds, surface-only) | 0010 |
+| P0-2 | `decision_audit` table + confidence ladder (0.90/0.85/0.75) writes | P0-4 enum stable |
+| P0-3 | `v_graph_health` TS impl + `graph_health_snapshot` (bundled with P0-0 PR) | P0-0 |
+| P0-4 | `facts.archive_reason` + `replaced_by_fact_id` + `revival_at` writes | facts |
+| P0-5 | `correction_events` capture (signal feeds triage; never directly mutates `facts.confidence`) | hook-shim |
+| P0-6 | LLM circuit breaker + `IExtractorClient` provider abstraction + Self-Consumption guard (reject Wiki/ source re-ingest) | none |
+| P0-7 | `compost backup` + `restore` (SQLite VACUUM INTO + 24h cron + 30 retained snapshots) | none |
+
+**Phase 4 P1 (4 items, after P0 lands)**
+- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
+- Inlet `origin_hash` + `method` columns on `observations` (machine-required, user-optional)
+- Performance benchmark harness (`bench/` with reflect-1k/10k/100k.bench.ts + CI > 50% regression alert)
+- PII redactor in hook-shim (regex blocklist for CC / SSH / API-token / .env / "password:" patterns; required before any open-source release)
+
+**Carried from Phase 3 (still scheduled, no tier change)**
+- Episodic memory materialization (`session_turns` FTS5 + episode summary)
+- `memory_procedural` standalone table (P2 candidate — Gemini-Opus disagreement, observe before deciding)
+
+**Phase 4 P2 (defer indefinitely; revisit after P0+P1)**
+- Semantic Cohort Intelligence (query-side experimental)
+- Milestone retrospective scheduler
+- Four-layer self-model dashboard (downgraded: triage already covers A inventory + C decay)
+- `compression_pressure` SQL view (downgraded: `health_signals.stale_fact` already proxies pressure)
+- `memory_procedural` standalone table
+
+**Removed from Phase 4** (4/4 Reject in debate)
+- ~~Curiosity agent~~ (replaced by `open_problems` + triage signals)
+- ~~Gap tracker~~ (replaced by `open_problems`)
+- ~~Autonomous crawl with is_noteworthy gates~~ (breaks first-party principle)
+- ~~`crawl_queue`~~ (duplicates `open_problems` + manual `compost add <url>`)
+- ~~Cross-project `shareable` tag + export~~ (moved to Phase 5 portability)
+- ~~Semantic chunking / Savitzky-Golay~~ (no evaluation framework; heading-based already adequate)
+- ~~Audit log TTL design~~ (YAGNI for personal-tool ingest rates; revisit if `decision_audit` exceeds 100K rows)
+- ~~Migration `down.sql` rollback machinery~~ (P0-7 backup covers recovery; restore-from-backup beats partial revert)
+
+### Phase 5: Portability (later, on demand)
+
+> Renamed from "Multi-Host". Multi-host concurrency was an enterprise pseudo-need;
+> single-user portability (laptop swap, machine reinstall) is the real scenario.
+
+**Planned**
+- `compost export <bundle>` and `compost import <bundle>` (markdown + sqlite dump combo)
+- Conflict-resolution design doc (decide before coding: last-writer-wins / merge / fail)
+
+**Removed**
+- ~~Cross-machine sync protocol~~ (no demonstrated user need)
+- ~~Multi-host concurrency coordination~~ (enterprise)
+- ~~HTTP transport for remote MCP clients~~ (MCP stdio is sufficient)
+
+### Phase 6: Ecosystem (later, minimal scope)
+
+**Planned**
+- `compost-adapter-openclaw` (concrete user need)
+- Multimodal metadata extractor (`attachment` field with URL/MIME/size; **no content parsing**)
+- Prometheus / OpenTelemetry metrics export (operational visibility)
+
+**Removed**
+- ~~PDF (docling) full extraction~~ (workaround: `pdftotext file.pdf | compost add -`)
+- ~~Video transcripts~~ (no observed user demand)
+- ~~Code repos full ingest~~ (code already lives in git; no second-brain value)
+- ~~`hermes` / `airi` adapters~~ (no concrete user request)
+- ~~`compost relearn`~~ (Phase 5 export/import covers it)
 
 ---
 

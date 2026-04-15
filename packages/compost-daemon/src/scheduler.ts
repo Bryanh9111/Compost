@@ -38,6 +38,25 @@ export function startDrainLoop(db: Database): Scheduler {
           await Bun.sleep(DRAIN_EMPTY_SLEEP_MS);
         } else {
           log.debug({ seq: result.seq, observe_id: result.observe_id }, "drained");
+
+          // P0-5: post-drain correction scan. Runs per-observe_id (debate 006
+          // Fix 3) so the cost scales with ingest rate rather than a separate
+          // polling loop. Failures are swallowed — correction detection is a
+          // best-effort signal, not a blocking step.
+          try {
+            const scan = scanObservationForCorrection(db, result.observe_id);
+            if (scan.eventId !== null) {
+              log.info(
+                { observe_id: result.observe_id, correction_event_id: scan.eventId },
+                "correction event recorded"
+              );
+            }
+          } catch (scanErr) {
+            log.error(
+              { err: scanErr, observe_id: result.observe_id },
+              "correction scan failed (continuing)"
+            );
+          }
         }
       } catch (err) {
         log.error({ err }, "drain loop error");
@@ -380,6 +399,194 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
       } catch (err) {
         log.error({ err }, "ingest worker loop error");
         await Bun.sleep(INGEST_EMPTY_SLEEP_MS);
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+  };
+}
+
+
+// =====================================================================
+// Backup scheduler (P0-7, locked by debate 003 Pre-P0 fix #5)
+// =====================================================================
+
+import {
+  backup,
+  pruneOldBackups,
+  DEFAULT_BACKUP_RETENTION,
+} from "../../compost-core/src/persistence/backup";
+import { takeSnapshot as takeGraphHealthSnapshot } from "../../compost-core/src/cognitive/graph-health";
+import { scanObservationForCorrection } from "../../compost-core/src/cognitive/correction-detector";
+import { existsSync } from "fs";
+import { join } from "path";
+
+const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
+const BACKUP_GRACE_WINDOW_MS = 60 * 60 * 1000; // fire immediately if within 1h of 03:00 UTC and no backup today
+const GRAPH_HEALTH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const GRAPH_HEALTH_TIME_WINDOW_HOUR_UTC = 4; // one hour after backup; see ARCHITECTURE.md scheduler table
+
+export interface BackupSchedulerOpts {
+  ledgerPath: string;
+  backupDir: string;
+  retentionCount?: number;
+}
+
+/**
+ * P0-7 backup scheduler: runs SQLite VACUUM INTO once per day at 03:00 UTC.
+ *
+ * Time window locked at 03:00 UTC to avoid SQLite writer-lock contention with
+ * startReflectScheduler (aligned to 00/06/12/18 UTC). See ARCHITECTURE.md
+ * §"Scheduler hook points" for the full discipline.
+ *
+ * Records each successful run via a structured log line and prunes old
+ * snapshots beyond `retentionCount` (default 30).
+ */
+/**
+ * Compute milliseconds until the next 03:00 UTC backup window, with the
+ * audit-fix #5 grace handling: if we are within 1h after 03:00 UTC AND no
+ * backup exists for today, fire immediately. Without this, a daemon
+ * restart at 03:01 UTC would wait ~24h before its next attempt.
+ *
+ * Exported pure helper so tests can pass an explicit `now`.
+ */
+export function msUntilNextBackupWindow(
+  backupDir: string,
+  now: Date = new Date()
+): number {
+  const target = new Date(now);
+  target.setUTCHours(BACKUP_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+
+  const elapsedSinceTarget = now.getTime() - target.getTime();
+  if (elapsedSinceTarget >= 0 && elapsedSinceTarget < BACKUP_GRACE_WINDOW_MS) {
+    const dateStr = now.toISOString().slice(0, 10);
+    const todayPath = join(backupDir, `${dateStr}.db`);
+    if (!existsSync(todayPath)) {
+      return 0;
+    }
+  }
+
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+export function startBackupScheduler(
+  db: Database,
+  opts: BackupSchedulerOpts
+): Scheduler {
+  let running = true;
+  const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
+
+  function msUntilNextWindow(): number {
+    return msUntilNextBackupWindow(opts.backupDir);
+  }
+
+  async function loop() {
+    while (running) {
+      const wait = msUntilNextWindow();
+      log.debug(
+        { waitMs: wait, ledger: opts.ledgerPath, backupDir: opts.backupDir },
+        "backup scheduler: waiting for 03:00 UTC window"
+      );
+      await Bun.sleep(wait);
+      if (!running) break;
+      try {
+        const result = backup(db, opts.backupDir);
+        const pruned = pruneOldBackups(opts.backupDir, retention);
+        log.info(
+          {
+            path: result.path,
+            sizeBytes: result.sizeBytes,
+            durationMs: result.durationMs,
+            prunedCount: pruned,
+            retention,
+          },
+          "backup complete"
+        );
+        // Sleep most of the day to leave the 03:00 window before next check
+        await Bun.sleep(BACKUP_INTERVAL_MS - 60_000);
+      } catch (err) {
+        log.error({ err, backupDir: opts.backupDir }, "backup scheduler error");
+        await Bun.sleep(BACKUP_INTERVAL_MS);
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+  };
+}
+
+// =====================================================================
+// Graph-health scheduler (P0-3 Week 2, debate 006 Fix 6)
+// =====================================================================
+
+/**
+ * Compute milliseconds until the next 04:00 UTC graph-health window.
+ * Exported pure helper so tests can pass an explicit `now`.
+ *
+ * Time window: 04:00 UTC, one hour after `startBackupScheduler`'s 03:00
+ * window. Avoids both the backup VACUUM lock (which can exceed 30min on
+ * large DBs) and the reflect 6h aligned slots (00/06/12/18 UTC).
+ */
+export function msUntilNextGraphHealthWindow(now: Date = new Date()): number {
+  const target = new Date(now);
+  target.setUTCHours(GRAPH_HEALTH_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * P0-3 graph-health scheduler: runs `takeSnapshot` once per day at 04:00 UTC.
+ *
+ * Same-day idempotency is enforced by `takeSnapshot` itself (DELETE-same-date
+ * + INSERT in one transaction), so daemon restarts within the same UTC day
+ * produce at most one row, always reflecting the latest call.
+ */
+export function startGraphHealthScheduler(db: Database): Scheduler {
+  let running = true;
+
+  async function loop() {
+    while (running) {
+      const wait = msUntilNextGraphHealthWindow();
+      log.debug(
+        { waitMs: wait },
+        "graph-health scheduler: waiting for 04:00 UTC window"
+      );
+      await Bun.sleep(wait);
+      if (!running) break;
+      try {
+        const snap = takeGraphHealthSnapshot(db);
+        log.info(
+          {
+            totalFacts: snap.totalFacts,
+            orphanFacts: snap.orphanFacts,
+            clusterCount: snap.clusterCount,
+            staleClusterCount: snap.staleClusterCount,
+            density: snap.density,
+          },
+          "graph-health snapshot taken"
+        );
+        // Sleep most of the day before re-checking the next window
+        await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS - 60_000);
+      } catch (err) {
+        log.error({ err }, "graph-health scheduler error");
+        await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS);
       }
     }
   }

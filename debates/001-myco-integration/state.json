@@ -1,0 +1,28 @@
+{
+  "topic": "Myco 精华集成进 Compost 个人大脑",
+  "style": "thorough",
+  "rounds_completed": 2,
+  "rounds_notes": "R2 complete for all 4 participants (initial Sonnet+Opus, then complement Codex+Gemini)",
+  "participants": ["codex", "gemini", "sonnet", "opus"],
+  "cwd": "/Users/zion/Repos/Zylo/Compost",
+  "myco_path": "/Users/zion/Repos/Personal/Research-and-Integration/memory/Myco",
+  "status": "synthesized_v2",
+  "authoritative_synthesis": "synthesis_v2.md",
+  "legacy_synthesis": "synthesis.md",
+  "p0_count": 5,
+  "p1_count": 8,
+  "p2_count": 3,
+  "reject_count": 6,
+  "unanimous_rejects": 5,
+  "unanimous_p0": 4,
+  "arbitrated_items": ["cross-project-distillation", "inlet-provenance", "semantic-cohort"],
+  "cargo_cults_identified": 6,
+  "self_corrections": {
+    "opus": ["Cross-Project Distillation P0→P1", "config.yaml S→P2"],
+    "sonnet": ["self-correction P2→P1", "open_problems P1→P0 候补"],
+    "codex": ["F cross-project procedural→shareable export", "J后台化 →query-side only"],
+    "gemini": ["evolve.py L 成本撤回", "Item 9 强制→opt-in (under Sonnet CC-3)"]
+  },
+  "created": "2026-04-14T13:00:00Z",
+  "completed": "2026-04-14T19:25:00Z"
+}
