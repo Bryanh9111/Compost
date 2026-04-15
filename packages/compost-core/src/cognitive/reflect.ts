@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { addLink } from "./fact-links";
+import { recordDecision, TIER_FOR_KIND, CONFIDENCE_FLOORS } from "./audit";
 
 /**
  * Reflection report — returned by reflect(). Spec §8.4.
@@ -218,6 +219,16 @@ export function reflect(db: Database): ReflectionReport {
         }
       }
 
+      // Per cluster, we need the (subject, predicate) to include in the
+      // audit row. Pull from the first pair that placed each cluster.
+      const clusterMeta = new Map<string, { subject: string; predicate: string }>();
+      for (const c of conflicts) {
+        const key = `${c.subject}\x00${c.predicate}`;
+        if (!clusterMeta.has(key)) {
+          clusterMeta.set(key, { subject: c.subject, predicate: c.predicate });
+        }
+      }
+
       const resolveTx = db.transaction(() => {
         // P0-4: contradicted loser is archived with archive_reason='contradicted'
         // and replaced_by_fact_id pointing to the cluster winner.
@@ -234,7 +245,8 @@ export function reflect(db: Database): ReflectionReport {
           "UPDATE facts SET conflict_group = ? WHERE fact_id = ? AND conflict_group IS NULL"
         );
         let losersResolved = 0;
-        for (const cluster of clusters.values()) {
+        for (const [key, cluster] of clusters.entries()) {
+          const loserIds: string[] = [];
           for (const loserId of cluster.losers.keys()) {
             supStmt.run(cluster.winner, cluster.groupId, cluster.winner, loserId);
             // Debate 005 fix #1: persist the contradiction as a graph edge
@@ -242,9 +254,33 @@ export function reflect(db: Database): ReflectionReport {
             // this, fact_links stays empty forever and graph-health metrics
             // are misleading (all orphans, zero density).
             addLink(db, loserId, cluster.winner, "contradicts", { weight: 1.0 });
+            loserIds.push(loserId);
           }
           winStmt.run(cluster.groupId, cluster.winner);
           losersResolved += cluster.losers.size;
+
+          // P0-2 (Week 3, debate 007/008): per-cluster audit row.
+          // `confidence_actual` is the floor itself — SQL arbitration has no
+          // model-reported confidence; the floor-level assertion is just
+          // "this decision is classified at instance tier (0.85)".
+          const meta = clusterMeta.get(key);
+          if (meta && loserIds.length > 0) {
+            recordDecision(db, {
+              kind: "contradiction_arbitration",
+              targetId: cluster.groupId,
+              confidenceTier: TIER_FOR_KIND.contradiction_arbitration,
+              confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.contradiction_arbitration],
+              rationale: `arbitrated ${loserIds.length} loser(s) under (${meta.subject}, ${meta.predicate}); winner by newer > higher-confidence > fact_id`,
+              evidenceRefs: {
+                kind: "contradiction_arbitration",
+                winner_id: cluster.winner,
+                loser_ids: loserIds,
+                subject: meta.subject,
+                predicate: meta.predicate,
+              },
+              decidedBy: "reflect",
+            });
+          }
         }
         // Report counts losers (one per archived fact), not raw pair rows.
         report.contradictionsResolved = losersResolved;

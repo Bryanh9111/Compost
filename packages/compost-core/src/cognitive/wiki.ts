@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite";
 import type { LLMService } from "../llm/types";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
+import { recordDecision, TIER_FOR_KIND, CONFIDENCE_FLOORS } from "./audit";
 
 export interface WikiSynthesisResult {
   pages_created: number;
@@ -52,7 +53,7 @@ async function synthesizePage(
   // Gather all active facts for this topic
   const facts = db
     .query(
-      `SELECT f.subject, f.predicate, f.object, f.confidence, f.created_at,
+      `SELECT f.fact_id, f.subject, f.predicate, f.object, f.confidence, f.created_at,
               o.source_uri
        FROM facts f
        JOIN observations o ON o.observe_id = f.observe_id
@@ -61,6 +62,7 @@ async function synthesizePage(
        LIMIT 50`
     )
     .all(topic) as Array<{
+      fact_id: string;
       subject: string;
       predicate: string;
       object: string;
@@ -140,6 +142,23 @@ Write the wiki page in markdown:`;
   for (const row of observeIds) {
     insertWpo.run(pagePath, row.observe_id);
   }
+
+  // P0-2 (Week 3): record wiki_rebuild audit row. Shape locked by debate 008
+  // Q5: evidence references `input_fact_ids`, not observe_ids.
+  recordDecision(db, {
+    kind: "wiki_rebuild",
+    targetId: pagePath,
+    confidenceTier: TIER_FOR_KIND.wiki_rebuild,
+    confidenceActual: CONFIDENCE_FLOORS[TIER_FOR_KIND.wiki_rebuild],
+    rationale: `${existing ? "updated" : "created"} wiki page for topic "${topic}" from ${facts.length} facts`,
+    evidenceRefs: {
+      kind: "wiki_rebuild",
+      page_path: pagePath,
+      input_fact_ids: facts.map((f) => f.fact_id),
+      input_fact_count: facts.length,
+    },
+    decidedBy: "wiki",
+  });
 
   return { created: !existing, updated: !!existing };
 }
