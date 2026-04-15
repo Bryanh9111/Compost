@@ -9,8 +9,12 @@ import {
   resolveSignal,
   scanStuckOutbox,
   scanStaleWiki,
+  scanStaleFact,
+  scanUnresolvedContradiction,
+  scanOrphanDelta,
   type SignalKind,
 } from "../src/cognitive/triage";
+import { addLink } from "../src/cognitive/fact-links";
 
 /**
  * P0-1 Week 4 Day 2 — first 2 of 6 scanners (stuck_outbox + stale_wiki),
@@ -21,9 +25,52 @@ import {
 
 const SOURCE_ROW =
   "INSERT INTO source VALUES ('s1','file:///x','local-file',NULL,0.0,'user',datetime('now'),NULL)";
+const OBS_ROW =
+  "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','payload',1,'user','idem','tp-2026-04',NULL)";
 
 function seedSource(db: Database): void {
   db.run(SOURCE_ROW);
+}
+
+function seedSourceAndObs(db: Database): void {
+  db.run(SOURCE_ROW);
+  db.run(OBS_ROW);
+}
+
+function insertFact(
+  db: Database,
+  factId: string,
+  subject: string,
+  predicate: string,
+  object: string,
+  opts: {
+    confidence?: number;
+    pinned?: boolean;
+    reinforcedDaysAgo?: number;
+    createdAtSqlExpr?: string;
+    conflictGroup?: number | null;
+  } = {}
+): void {
+  const reinforceSec =
+    Math.floor(Date.now() / 1000) - (opts.reinforcedDaysAgo ?? 0) * 86_400;
+  const createdAtExpr = opts.createdAtSqlExpr ?? "datetime('now')";
+  db.run(
+    `INSERT INTO facts(
+       fact_id, subject, predicate, object, observe_id,
+       confidence, importance, importance_pinned,
+       last_reinforced_at_unix_sec, half_life_seconds, created_at, conflict_group
+     ) VALUES (?, ?, ?, ?, 'obs1', ?, 0.5, ?, ?, 2592000, ${createdAtExpr}, ?)`,
+    [
+      factId,
+      subject,
+      predicate,
+      object,
+      opts.confidence ?? 0.8,
+      opts.pinned ? 1 : 0,
+      reinforceSec,
+      opts.conflictGroup ?? null,
+    ]
+  );
 }
 
 function insertOutboxRow(
@@ -255,6 +302,174 @@ describe("triage P0-1 scanStaleWiki", () => {
   test("does NOT emit for fresh page with no stale_at", () => {
     insertWikiPage(db, "tokyo.md", "tokyo", "datetime('now', '-5 days')", null);
     expect(scanStaleWiki(db, 30, 100)).toBe(0);
+  });
+});
+
+describe("triage P0-1 scanStaleFact", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "compost-triage-stalefact-"));
+    db = new Database(join(tmpDir, "ledger.db"));
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(db);
+    seedSourceAndObs(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("emits signal for unpinned active fact past reinforce window", () => {
+    insertFact(db, "f1", "a", "b", "c", { reinforcedDaysAgo: 120 });
+    expect(scanStaleFact(db, 90, 100)).toBe(1);
+
+    const row = db
+      .query("SELECT kind, target_ref FROM health_signals")
+      .get() as { kind: string; target_ref: string };
+    expect(row.kind).toBe("stale_fact");
+    expect(row.target_ref).toBe("fact:f1");
+  });
+
+  test("does NOT emit for pinned fact, archived fact, or recently reinforced", () => {
+    insertFact(db, "f1", "a", "b", "c", {
+      reinforcedDaysAgo: 200,
+      pinned: true,
+    });
+    insertFact(db, "f2", "a", "b", "d", { reinforcedDaysAgo: 200 });
+    db.run("UPDATE facts SET archived_at = datetime('now') WHERE fact_id = 'f2'");
+    insertFact(db, "f3", "a", "b", "e", { reinforcedDaysAgo: 30 });
+    expect(scanStaleFact(db, 90, 100)).toBe(0);
+  });
+});
+
+describe("triage P0-1 scanUnresolvedContradiction", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "compost-triage-contra-"));
+    db = new Database(join(tmpDir, "ledger.db"));
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(db);
+    seedSourceAndObs(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("emits one signal per unresolved conflict_group with 2+ active facts, older than days", () => {
+    // Two active facts in same conflict_group, created 10d ago, neither
+    // archived nor superseded -> unresolved.
+    insertFact(db, "fw", "paris", "capital-of", "france", {
+      conflictGroup: 42,
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "fl", "paris", "capital-of", "england", {
+      conflictGroup: 42,
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(1);
+    const row = db
+      .query("SELECT kind, target_ref, severity FROM health_signals")
+      .get() as { kind: string; target_ref: string; severity: string };
+    expect(row.kind).toBe("unresolved_contradiction");
+    expect(row.target_ref).toBe("conflict_group:42");
+    expect(row.severity).toBe("warn");
+  });
+
+  test("does NOT emit when one side archived (resolved) or within age threshold", () => {
+    // Resolved: winner active, loser archived
+    insertFact(db, "fw", "paris", "capital-of", "france", {
+      conflictGroup: 42,
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "fl", "paris", "capital-of", "england", {
+      conflictGroup: 42,
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    db.run(
+      "UPDATE facts SET archived_at = datetime('now'), superseded_by = 'fw' WHERE fact_id = 'fl'"
+    );
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
+
+    // Fresh unresolved (age < threshold): don't surface yet, give reflect
+    // a chance to resolve.
+    insertFact(db, "gw", "berlin", "capital-of", "germany", {
+      conflictGroup: 43,
+      createdAtSqlExpr: "datetime('now', '-1 days')",
+    });
+    insertFact(db, "gl", "berlin", "capital-of", "austria", {
+      conflictGroup: 43,
+      createdAtSqlExpr: "datetime('now', '-1 days')",
+    });
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
+  });
+});
+
+describe("triage P0-1 scanOrphanDelta", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "compost-triage-orphan-"));
+    db = new Database(join(tmpDir, "ledger.db"));
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(db);
+    seedSourceAndObs(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("emits signal for old fact with no links and no access", () => {
+    insertFact(db, "f1", "a", "b", "c", {
+      createdAtSqlExpr: "datetime('now', '-60 days')",
+    });
+    expect(scanOrphanDelta(db, 30, 100)).toBe(1);
+
+    const row = db
+      .query("SELECT target_ref FROM health_signals WHERE kind = 'orphan_delta'")
+      .get() as { target_ref: string };
+    expect(row.target_ref).toBe("fact:f1");
+  });
+
+  test("does NOT emit for linked fact, recently accessed fact, or young fact", () => {
+    // Linked (has an incoming edge)
+    insertFact(db, "f1", "a", "b", "c", {
+      createdAtSqlExpr: "datetime('now', '-60 days')",
+    });
+    insertFact(db, "f2", "x", "y", "z", {
+      createdAtSqlExpr: "datetime('now', '-60 days')",
+    });
+    addLink(db, "f2", "f1", "supports", { weight: 1.0 });
+
+    // Recently accessed
+    insertFact(db, "f3", "m", "n", "o", {
+      createdAtSqlExpr: "datetime('now', '-60 days')",
+    });
+    db.run(
+      "INSERT INTO access_log (fact_id, accessed_at_unix_sec) VALUES ('f3', ?)",
+      [Math.floor(Date.now() / 1000) - 5 * 86_400]
+    );
+
+    // Young (< threshold)
+    insertFact(db, "f4", "p", "q", "r", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+
+    // f1 has incoming from f2; f2 has outgoing to f1 -- both linked. f3 accessed. f4 young.
+    expect(scanOrphanDelta(db, 30, 100)).toBe(0);
   });
 });
 

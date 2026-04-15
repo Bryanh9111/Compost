@@ -126,6 +126,144 @@ export function scanStuckOutbox(
 }
 
 /**
+ * `stale_fact`: active, unpinned facts that have not been reinforced within
+ * `days`. `last_reinforced_at_unix_sec` is set on every reinforce hit
+ * (query + feedback paths); facts that stop being reinforced slide toward
+ * decay tombstone via reflect step 2. Surface them here BEFORE reflect
+ * archives them so the user can pin if needed.
+ */
+export function scanStaleFact(
+  db: Database,
+  days: number,
+  maxPerKind: number
+): number {
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86_400;
+  const rows = db
+    .query(
+      `SELECT fact_id, subject, predicate, last_reinforced_at_unix_sec
+       FROM facts
+       WHERE archived_at IS NULL
+         AND importance_pinned = FALSE
+         AND last_reinforced_at_unix_sec < ?
+       ORDER BY last_reinforced_at_unix_sec ASC
+       LIMIT ?`
+    )
+    .all(cutoff, maxPerKind) as Array<{
+    fact_id: string;
+    subject: string;
+    predicate: string;
+    last_reinforced_at_unix_sec: number;
+  }>;
+
+  let inserted = 0;
+  for (const row of rows) {
+    const targetRef = `fact:${row.fact_id}`;
+    const msg = `fact (${row.subject}, ${row.predicate}) has not been reinforced since unix_sec=${row.last_reinforced_at_unix_sec} (> ${days}d)`;
+    if (upsertSignal(db, "stale_fact", "info", msg, targetRef)) {
+      inserted++;
+    }
+  }
+  return inserted;
+}
+
+/**
+ * `unresolved_contradiction`: two or more active facts share the same
+ * `conflict_group` and none has been archived. Normally reflect step 3
+ * resolves within the same transaction, but a partial failure or a newly
+ * detected SP-pair between reflect cycles can leave this state.
+ *
+ * Surface rule: one signal per `conflict_group`, not per fact. Target_ref
+ * is `conflict_group:<gid>` so repeated scans dedupe via upsert.
+ */
+export function scanUnresolvedContradiction(
+  db: Database,
+  days: number,
+  maxPerKind: number
+): number {
+  const rows = db
+    .query(
+      `SELECT conflict_group, COUNT(*) AS active_count,
+              MIN(subject) AS sample_subject,
+              MIN(predicate) AS sample_predicate,
+              MIN(created_at) AS oldest_created_at
+       FROM facts
+       WHERE conflict_group IS NOT NULL
+         AND archived_at IS NULL
+         AND superseded_by IS NULL
+         AND created_at < datetime('now', '-' || ? || ' days')
+       GROUP BY conflict_group
+       HAVING active_count >= 2
+       ORDER BY oldest_created_at ASC
+       LIMIT ?`
+    )
+    .all(days, maxPerKind) as Array<{
+    conflict_group: number;
+    active_count: number;
+    sample_subject: string;
+    sample_predicate: string;
+    oldest_created_at: string;
+  }>;
+
+  let inserted = 0;
+  for (const row of rows) {
+    const targetRef = `conflict_group:${row.conflict_group}`;
+    const msg = `${row.active_count} active facts still share conflict_group=${row.conflict_group} (e.g. ${row.sample_subject}/${row.sample_predicate}, oldest ${row.oldest_created_at})`;
+    if (upsertSignal(db, "unresolved_contradiction", "warn", msg, targetRef)) {
+      inserted++;
+    }
+  }
+  return inserted;
+}
+
+/**
+ * `orphan_delta`: active facts with no incoming/outgoing `fact_links` edges
+ * AND no access_log hit in the last `days` window. Contract (0010 comment):
+ * "new orphan facts vs baseline > 5". Day 3 ships the per-fact surfacing;
+ * true delta-vs-baseline aggregation requires `graph_health_snapshot`
+ * comparison and is scheduled for Week 5+ once baseline stability is
+ * observable.
+ */
+export function scanOrphanDelta(
+  db: Database,
+  days: number,
+  maxPerKind: number
+): number {
+  const accessCutoff = Math.floor(Date.now() / 1000) - days * 86_400;
+  const rows = db
+    .query(
+      `SELECT f.fact_id, f.subject, f.predicate
+       FROM facts f
+       WHERE f.archived_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM fact_links l
+           WHERE l.from_fact_id = f.fact_id OR l.to_fact_id = f.fact_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM access_log a
+           WHERE a.fact_id = f.fact_id AND a.accessed_at_unix_sec >= ?
+         )
+         AND f.created_at < datetime('now', '-' || ? || ' days')
+       ORDER BY f.created_at ASC
+       LIMIT ?`
+    )
+    .all(accessCutoff, days, maxPerKind) as Array<{
+    fact_id: string;
+    subject: string;
+    predicate: string;
+  }>;
+
+  let inserted = 0;
+  for (const row of rows) {
+    const targetRef = `fact:${row.fact_id}`;
+    const msg = `orphan fact (${row.subject}, ${row.predicate}): no links, no access in ${days}d`;
+    if (upsertSignal(db, "orphan_delta", "info", msg, targetRef)) {
+      inserted++;
+    }
+  }
+  return inserted;
+}
+
+/**
  * `stale_wiki`: pages whose last synthesis failed (`stale_at` set by wiki.ts
  * P0-6 fallback) OR whose last synthesis is older than `days`. Both paths
  * emit a single signal per page (upsert dedupes).
@@ -172,19 +310,27 @@ export function scanStaleWiki(
  *
  * Hard rule: NEVER auto-executes any remediation. Surface only.
  *
- * Day 2 scope: stuck_outbox + stale_wiki scanners land. Remaining 4
- * (stale_fact / unresolved_contradiction / orphan_delta / correction_candidate)
- * are scheduled for Day 3 alongside the CLI.
+ * Day 2-3 scope: 5 active scanners run. `correction_candidate` is NOT scanned
+ * here -- `correction-detector.scanObservationForCorrection` writes those
+ * rows directly during the drain hook (debate 006 Pre-Week-2 Fix 5). triage()
+ * only aggregates them into the report below.
  */
 export function triage(db: Database, opts: TriageOptions = {}): TriageReport {
+  const staleFactDays = opts.staleFactDays ?? 90;
+  const contradictionAgeDays = opts.contradictionAgeDays ?? 7;
   const stuckOutboxHours = opts.stuckOutboxHours ?? 24;
   const staleWikiDays = opts.staleWikiDays ?? 30;
+  // orphanDeltaThreshold is the "delta baseline" knob for Week 5+; for now
+  // we reuse staleFactDays as the access-window length (per contract.md).
+  const orphanAccessDays = opts.staleFactDays ?? 90;
   const maxPerKind = opts.maxPerKind ?? DEFAULT_MAX_PER_KIND;
 
+  scanStaleFact(db, staleFactDays, maxPerKind);
+  scanUnresolvedContradiction(db, contradictionAgeDays, maxPerKind);
   scanStuckOutbox(db, stuckOutboxHours, maxPerKind);
+  scanOrphanDelta(db, orphanAccessDays, maxPerKind);
   scanStaleWiki(db, staleWikiDays, maxPerKind);
-  // Day 3: scanStaleFact, scanUnresolvedContradiction, scanOrphanDelta,
-  // scanCorrectionCandidate land here.
+  // correction_candidate: no scanner -- written by correction-detector directly.
 
   // Aggregate: read ALL unresolved signals (including ones written by
   // correction-detector outside triage()) so the report reflects the full
@@ -217,6 +363,50 @@ export function triage(db: Database, opts: TriageOptions = {}): TriageReport {
     unresolvedTotal: signals.length,
     computedAt: new Date().toISOString(),
   };
+}
+
+export interface ListSignalsFilter {
+  kind?: SignalKind;
+  sinceIso?: string;
+  includeResolved?: boolean; // default false (show unresolved only)
+  limit?: number; // default 100; CLI caps at 10_000
+}
+
+/**
+ * Read-only signal listing for CLI (`compost triage list`). Never scans or
+ * writes -- pairs with `triage()` which does the write-side work.
+ *
+ * Normalizes `sinceIso` by dropping fractional seconds + Z since SQLite
+ * stores `datetime('now')` at 1s resolution without TZ suffix.
+ */
+export function listSignals(
+  db: Database,
+  filter: ListSignalsFilter = {}
+): HealthSignal[] {
+  const limit = filter.limit ?? 100;
+  const since = filter.sinceIso
+    ? filter.sinceIso.replace("T", " ").slice(0, 19)
+    : null;
+  const includeResolved = filter.includeResolved ?? false;
+
+  const rows = db
+    .query(
+      `SELECT id, kind, severity, message, target_ref, created_at,
+              resolved_at, resolved_by
+       FROM health_signals
+       WHERE (?1 IS NULL OR kind = ?1)
+         AND (?2 IS NULL OR created_at >= ?2)
+         AND (?3 = 1 OR resolved_at IS NULL)
+       ORDER BY created_at DESC
+       LIMIT ?4`
+    )
+    .all(
+      filter.kind ?? null,
+      since,
+      includeResolved ? 1 : 0,
+      limit
+    ) as HealthSignal[];
+  return rows;
 }
 
 /**
