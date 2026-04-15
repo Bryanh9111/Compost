@@ -83,6 +83,12 @@ export interface ReflectSchedulerOpts {
   llm?: BreakerRegistry | LLMService;
   /** Required when `llm` is provided; wiki pages land under `<dataDir>/wiki`. */
   dataDir?: string;
+  /**
+   * Test-only override for the 6h reflect cadence. Production callers must
+   * leave this unset; tests pass a small value (e.g. 5ms) to drive one or
+   * two cycles in sub-second wall time (Week 4 Day 4 scheduler integration).
+   */
+  intervalMs?: number;
 }
 
 /**
@@ -99,10 +105,11 @@ export function startReflectScheduler(
   opts: ReflectSchedulerOpts = {}
 ): Scheduler {
   let running = true;
+  const intervalMs = opts.intervalMs ?? REFLECT_INTERVAL_MS;
 
   async function loop() {
     while (running) {
-      await Bun.sleep(REFLECT_INTERVAL_MS);
+      await Bun.sleep(intervalMs);
       if (!running) break;
       try {
         const report = reflect(db);

@@ -37,6 +37,10 @@ export function registerDoctor(program: Command): void {
     )
     .option("--rebuild <layer>", "Rebuild a derivation layer (e.g. L1)")
     .option("--policy <name>", "Policy name for --rebuild")
+    .option(
+      "--check-llm",
+      "Ping Ollama with a short probe and report latency / model / setup hint"
+    )
     .action(async (opts) => {
       if (opts.reconcile) {
         const db = openDb();
@@ -295,8 +299,60 @@ export function registerDoctor(program: Command): void {
         return;
       }
 
+      if (opts.checkLlm) {
+        // Debate 011 Day 4: single-shot Ollama probe with a tight 3s
+        // timeout so `compost doctor --check-llm` can run in a keyboard-
+        // friendly window even when Ollama is hung. Exit code 0 on
+        // success, non-zero on failure with a setup hint.
+        const { OllamaLLMService } = await import(
+          "../../../compost-core/src/llm/ollama"
+        );
+        const llm = new OllamaLLMService();
+        const t0 = performance.now();
+        try {
+          const answer = await llm.generate("ping", {
+            maxTokens: 8,
+            timeoutMs: 3_000,
+          });
+          const latencyMs = +(performance.now() - t0).toFixed(1);
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: true,
+                model: llm.model,
+                latency_ms: latencyMs,
+                sample_response: answer.slice(0, 80),
+              },
+              null,
+              2
+            ) + "\n"
+          );
+          return;
+        } catch (err) {
+          const latencyMs = +(performance.now() - t0).toFixed(1);
+          const name = err instanceof Error ? err.name : "unknown";
+          const message = err instanceof Error ? err.message : String(err);
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: false,
+                model: llm.model,
+                latency_ms: latencyMs,
+                error: { name, message },
+                hint:
+                  "Is Ollama running? Try `ollama serve` and confirm " +
+                  "http://localhost:11434 responds, then re-run `compost doctor --check-llm`.",
+              },
+              null,
+              2
+            ) + "\n"
+          );
+          process.exit(1);
+        }
+      }
+
       process.stderr.write(
-        "doctor: specify --reconcile, --measure-hook, --drain-retry, or --rebuild\n"
+        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, or --check-llm\n"
       );
       process.exit(1);
     });
