@@ -166,14 +166,60 @@ export function reflect(db: Database): ReflectionReport {
     }>;
 
     if (conflicts.length > 0) {
-      const groupId = `cg-${Date.now()}`;
+      // Audit fix #1 (debate 004): two correctness bugs in Phase 3 logic:
+      //
+      // (a) `cg-${Date.now()}` was shared across ALL conflict pairs in a
+      //     single reflect call. Five unrelated arbitrations would all be
+      //     stamped with the same conflict_group, making the audit trail
+      //     useless ("which arbitration tagged this group?").
+      // (b) For 3+ different objects under the same (subject, predicate),
+      //     the SQL returns N*(N-1)/2 pairs. The same loser appears in
+      //     multiple pairs (a > b, a > c, b > c -> b is loser in two rows).
+      //     Without dedup, supStmt runs twice on b with different winners,
+      //     and `replaced_by_fact_id` ends up nondeterministic.
+      //
+      // Fix: group pairs by (subject, predicate), assign one conflict_group
+      // per cluster, and per loser keep only the single strongest winner.
+      // The SQL already returns pairs in winner-first order (lines 154-157),
+      // so the FIRST appearance of each loser is paired with its strongest
+      // contender.
+      type Cluster = {
+        groupId: string;
+        winner: string;            // strongest fact in the cluster
+        losers: Map<string, string>; // loser_id -> winner_id (deduped)
+      };
+      const clusters = new Map<string, Cluster>();
+      const ts = Date.now();
+      for (const c of conflicts) {
+        const key = `${c.subject}\x00${c.predicate}`;
+        let cluster = clusters.get(key);
+        if (!cluster) {
+          cluster = {
+            // Deterministic-ish group id: ts + counter + short subject hash.
+            // Subject can be long; truncate to keep id readable.
+            groupId: `cg-${ts}-${clusters.size}`,
+            winner: c.winner_id,
+            losers: new Map(),
+          };
+          clusters.set(key, cluster);
+        }
+        // Promote winner if this row's winner is stronger (SQL order means
+        // first row of each cluster has the strongest f1, but be defensive).
+        if (c.winner_id !== cluster.winner) {
+          // The cluster's reigning winner appears as f1 in any pair where
+          // it dominates; if a different winner appears here it means this
+          // row pits two non-dominant facts against each other. Keep the
+          // existing cluster.winner as authoritative.
+        }
+        // Dedupe: each loser maps to the strongest contender it sees first.
+        if (!cluster.losers.has(c.loser_id) && c.loser_id !== cluster.winner) {
+          cluster.losers.set(c.loser_id, cluster.winner);
+        }
+      }
+
       const resolveTx = db.transaction(() => {
-        // P0-4: a contradicted loser is now archived immediately with
-        // archive_reason='contradicted' and replaced_by_fact_id pointing
-        // to the winner. Previously the loser was only marked superseded_by
-        // but stayed active in queries; the new behavior aligns with the
-        // ARCHITECTURE.md frozen enum and removes the loser from triage's
-        // contradiction-detection input.
+        // P0-4: contradicted loser is archived with archive_reason='contradicted'
+        // and replaced_by_fact_id pointing to the cluster winner.
         const supStmt = db.prepare(
           "UPDATE facts " +
             "SET superseded_by = ?, " +
@@ -186,13 +232,18 @@ export function reflect(db: Database): ReflectionReport {
         const winStmt = db.prepare(
           "UPDATE facts SET conflict_group = ? WHERE fact_id = ? AND conflict_group IS NULL"
         );
-        for (const c of conflicts) {
-          supStmt.run(c.winner_id, groupId, c.winner_id, c.loser_id);
-          winStmt.run(groupId, c.winner_id);
+        let losersResolved = 0;
+        for (const cluster of clusters.values()) {
+          for (const loserId of cluster.losers.keys()) {
+            supStmt.run(cluster.winner, cluster.groupId, cluster.winner, loserId);
+          }
+          winStmt.run(cluster.groupId, cluster.winner);
+          losersResolved += cluster.losers.size;
         }
+        // Report counts losers (one per archived fact), not raw pair rows.
+        report.contradictionsResolved = losersResolved;
       });
       resolveTx();
-      report.contradictionsResolved = conflicts.length;
     }
   } catch (err) {
     report.errors.push({

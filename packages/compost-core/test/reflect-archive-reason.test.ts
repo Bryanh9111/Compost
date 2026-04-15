@@ -191,4 +191,75 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
       .get() as { archive_reason: string };
     expect(row.archive_reason).toBe("contradicted");
   });
+
+  // ---- Audit fix #1 (debate 004): multi-conflict cg + loser dedup ----
+
+  test("3-way conflict: each loser points to single strongest winner (deterministic)", () => {
+    // Same (subject, predicate), three different objects with descending confidence.
+    // Strongest is 'a' (0.95), then 'b' (0.7), then 'c' (0.4).
+    insertFact(db, "a", "earth", "is", "round", { confidence: 0.95 });
+    insertFact(db, "b", "earth", "is", "ellipsoid", { confidence: 0.7 });
+    insertFact(db, "c", "earth", "is", "flat", { confidence: 0.4 });
+
+    const report = reflect(db);
+    // Both b and c should be archived as losers, exactly once each.
+    expect(report.contradictionsResolved).toBe(2);
+
+    const b = db
+      .query(
+        "SELECT archive_reason, replaced_by_fact_id, superseded_by FROM facts WHERE fact_id = 'b'"
+      )
+      .get() as {
+      archive_reason: string;
+      replaced_by_fact_id: string;
+      superseded_by: string;
+    };
+    const c = db
+      .query(
+        "SELECT archive_reason, replaced_by_fact_id, superseded_by FROM facts WHERE fact_id = 'c'"
+      )
+      .get() as {
+      archive_reason: string;
+      replaced_by_fact_id: string;
+      superseded_by: string;
+    };
+
+    // Both losers point to the cluster's strongest winner ('a'), not each other
+    expect(b.archive_reason).toBe("contradicted");
+    expect(b.replaced_by_fact_id).toBe("a");
+    expect(b.superseded_by).toBe("a");
+    expect(c.archive_reason).toBe("contradicted");
+    expect(c.replaced_by_fact_id).toBe("a");
+    expect(c.superseded_by).toBe("a");
+  });
+
+  test("two unrelated arbitrations get distinct conflict_group ids", () => {
+    // Cluster 1: earth.is.round vs earth.is.flat
+    insertFact(db, "earth-w", "earth", "is", "round", { confidence: 0.9 });
+    insertFact(db, "earth-l", "earth", "is", "flat", { confidence: 0.4 });
+    // Cluster 2: sky.is.blue vs sky.is.green
+    insertFact(db, "sky-w", "sky", "is", "blue", { confidence: 0.9 });
+    insertFact(db, "sky-l", "sky", "is", "green", { confidence: 0.4 });
+
+    reflect(db);
+
+    const winnerEarth = db
+      .query("SELECT conflict_group FROM facts WHERE fact_id = 'earth-w'")
+      .get() as { conflict_group: string };
+    const winnerSky = db
+      .query("SELECT conflict_group FROM facts WHERE fact_id = 'sky-w'")
+      .get() as { conflict_group: string };
+    expect(winnerEarth.conflict_group).not.toBe(winnerSky.conflict_group);
+    expect(winnerEarth.conflict_group).toMatch(/^cg-/);
+    expect(winnerSky.conflict_group).toMatch(/^cg-/);
+  });
+
+  test("3-way conflict: report.contradictionsResolved counts losers, not raw pairs", () => {
+    // 3 objects -> SQL returns 3 pairs (a>b, a>c, b>c) but only 2 losers
+    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
+    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
+    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+    const report = reflect(db);
+    expect(report.contradictionsResolved).toBe(2);
+  });
 });

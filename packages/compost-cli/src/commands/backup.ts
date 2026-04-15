@@ -1,6 +1,6 @@
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
 import {
@@ -85,13 +85,36 @@ export function registerRestore(program: Command): void {
     )
     .action((date) => {
       const selector = date ?? "latest";
-      // Refuse if daemon is running -- restore would clobber an open file.
+      // Audit fix #4 (debate 004): verify the PID is actually alive before
+      // refusing. existsSync alone treats stale PID files (daemon crashed,
+      // file remains) as live -> restore is permanently blocked until the
+      // user manually rms the file, which is dangerous (might rm a real
+      // PID by accident).
       if (existsSync(pidFile())) {
-        process.stderr.write(
-          `error: daemon appears to be running (${pidFile()} exists). ` +
-            `Stop it with 'compost daemon stop' before restoring.\n`
-        );
-        process.exit(2);
+        let pid: number | null = null;
+        try {
+          pid = Number(readFileSync(pidFile(), "utf-8").trim());
+        } catch {
+          /* unreadable -> treat as stale */
+        }
+        let alive = false;
+        if (pid && Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0); // signal 0 = check existence, no signal sent
+            alive = true;
+          } catch {
+            /* ESRCH -> process gone, PID file is stale */
+          }
+        }
+        if (alive) {
+          process.stderr.write(
+            `error: daemon running (pid ${pid}). ` +
+              `Stop it with 'compost daemon stop' before restoring.\n`
+          );
+          process.exit(2);
+        }
+        // Stale PID file: clean up and proceed.
+        try { unlinkSync(pidFile()); } catch { /* best effort */ }
       }
       try {
         const snap = resolveBackup(backupDir(), selector);

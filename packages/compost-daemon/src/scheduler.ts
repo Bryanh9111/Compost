@@ -403,9 +403,12 @@ import {
   pruneOldBackups,
   DEFAULT_BACKUP_RETENTION,
 } from "../../compost-core/src/persistence/backup";
+import { existsSync } from "fs";
+import { join } from "path";
 
 const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
+const BACKUP_GRACE_WINDOW_MS = 60 * 60 * 1000; // fire immediately if within 1h of 03:00 UTC and no backup today
 
 export interface BackupSchedulerOpts {
   ledgerPath: string;
@@ -423,6 +426,36 @@ export interface BackupSchedulerOpts {
  * Records each successful run via a structured log line and prunes old
  * snapshots beyond `retentionCount` (default 30).
  */
+/**
+ * Compute milliseconds until the next 03:00 UTC backup window, with the
+ * audit-fix #5 grace handling: if we are within 1h after 03:00 UTC AND no
+ * backup exists for today, fire immediately. Without this, a daemon
+ * restart at 03:01 UTC would wait ~24h before its next attempt.
+ *
+ * Exported pure helper so tests can pass an explicit `now`.
+ */
+export function msUntilNextBackupWindow(
+  backupDir: string,
+  now: Date = new Date()
+): number {
+  const target = new Date(now);
+  target.setUTCHours(BACKUP_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+
+  const elapsedSinceTarget = now.getTime() - target.getTime();
+  if (elapsedSinceTarget >= 0 && elapsedSinceTarget < BACKUP_GRACE_WINDOW_MS) {
+    const dateStr = now.toISOString().slice(0, 10);
+    const todayPath = join(backupDir, `${dateStr}.db`);
+    if (!existsSync(todayPath)) {
+      return 0;
+    }
+  }
+
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
 export function startBackupScheduler(
   db: Database,
   opts: BackupSchedulerOpts
@@ -431,13 +464,7 @@ export function startBackupScheduler(
   const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
 
   function msUntilNextWindow(): number {
-    const now = new Date();
-    const target = new Date(now);
-    target.setUTCHours(BACKUP_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
-    if (target.getTime() <= now.getTime()) {
-      target.setUTCDate(target.getUTCDate() + 1);
-    }
-    return target.getTime() - now.getTime();
+    return msUntilNextBackupWindow(opts.backupDir);
   }
 
   async function loop() {

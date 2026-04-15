@@ -1,5 +1,13 @@
-import type { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, copyFileSync } from "fs";
+import { Database } from "bun:sqlite";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  copyFileSync,
+  renameSync,
+} from "fs";
 import { join, basename } from "path";
 
 /**
@@ -48,16 +56,29 @@ export function backup(db: Database, backupDir: string): BackupResult {
   const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const targetPath = join(backupDir, `${dateStr}.db`);
 
-  // VACUUM INTO replaces target file atomically. Remove any stale prior
-  // copy first to avoid SQLite "target exists" semantics on some versions.
-  if (existsSync(targetPath)) {
-    unlinkSync(targetPath);
+  // P0-7 audit fix #2 (debate 004): write to .tmp first, then renameSync
+  // atomically. Previously we unlinked the existing same-day backup before
+  // VACUUM INTO -- if VACUUM failed (disk full, SQLite error), the prior
+  // good snapshot was permanently lost. Now the prior snapshot survives
+  // any VACUUM failure.
+  const tmpPath = `${targetPath}.tmp.${process.pid}`;
+  if (existsSync(tmpPath)) {
+    unlinkSync(tmpPath);
   }
 
-  // SQLite literal — backup path is operator-controlled, but escape single
-  // quotes defensively in case operator passes a path with ' in it.
-  const escaped = targetPath.replace(/'/g, "''");
-  db.exec(`VACUUM INTO '${escaped}'`);
+  const escaped = tmpPath.replace(/'/g, "''");
+  try {
+    db.exec(`VACUUM INTO '${escaped}'`);
+  } catch (err) {
+    // Clean up partial tmp on failure so future runs aren't confused.
+    if (existsSync(tmpPath)) {
+      try { unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
+    throw err;
+  }
+
+  // Atomic swap. Same-day backups overwrite (idempotent within a day).
+  renameSync(tmpPath, targetPath);
 
   const stat = statSync(targetPath);
   return {
@@ -111,12 +132,21 @@ export function pruneOldBackups(
 }
 
 /**
- * Restore by file-copying `backupPath` over `targetPath`.
+ * Restore by file-copying `backupPath` over `targetPath`. Steps:
+ *  1. Validate backup naming + existence
+ *  2. Move existing target to .pre-restore.<ts> safety net (recoverable
+ *     if user runs restore by mistake)
+ *  3. Copy backup over target
+ *  4. Remove stale `target-wal` / `target-shm` sidecars (otherwise SQLite
+ *     replays old WAL into new db on next open -> corruption)
+ *  5. Verify restored db with PRAGMA integrity_check
  *
  * SAFETY: Caller MUST ensure no daemon process holds `targetPath` open.
- * This function does not coordinate with running daemons; it just copies.
- * The CLI wrapper is responsible for refusing restore when the daemon PID
- * file is live.
+ * This function does not coordinate with running daemons; the CLI wrapper
+ * (commands/backup.ts) enforces the PID-file check.
+ *
+ * P0-7 audit fixes #3 (debate 004): integrity_check + WAL/SHM cleanup +
+ * pre-restore safety net.
  */
 export function restore(backupPath: string, targetPath: string): void {
   if (!existsSync(backupPath)) {
@@ -128,7 +158,44 @@ export function restore(backupPath: string, targetPath: string): void {
       `(expected YYYY-MM-DD.db)`
     );
   }
+
+  // (a) Pre-restore safety net: keep the current target around in case
+  // the operator changes their mind or the backup turns out to be bad.
+  // We rename rather than delete; a follow-up cleanup is the operator's job.
+  if (existsSync(targetPath)) {
+    const preRestorePath = `${targetPath}.pre-restore.${Date.now()}`;
+    renameSync(targetPath, preRestorePath);
+  }
+
+  // (b) Copy the backup into place.
   copyFileSync(backupPath, targetPath);
+
+  // (c) Remove stale WAL/SHM sidecars from the previous ledger. SQLite WAL
+  // mode persists uncommitted-but-fsync'd transactions in `<db>-wal`; if a
+  // fresh db is dropped in without clearing them, the next open will replay
+  // those transactions against a database they were never written for ->
+  // logical corruption.
+  for (const sidecar of [`${targetPath}-wal`, `${targetPath}-shm`]) {
+    if (existsSync(sidecar)) {
+      unlinkSync(sidecar);
+    }
+  }
+
+  // (d) Verify the restored ledger passes SQLite's own integrity check.
+  // Open read-only so we don't accidentally mutate it before the daemon does.
+  const verify = new Database(targetPath, { readonly: true });
+  try {
+    const row = verify
+      .query("PRAGMA integrity_check")
+      .get() as { integrity_check: string };
+    if (row.integrity_check !== "ok") {
+      throw new Error(
+        `restored ledger failed integrity_check: ${row.integrity_check}`
+      );
+    }
+  } finally {
+    verify.close();
+  }
 }
 
 /**
