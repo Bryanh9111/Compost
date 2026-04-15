@@ -1,0 +1,26 @@
+{
+  "topic": "Phase 4 Batch D Cumulative Diff Review",
+  "predecessors": ["001-myco-integration", "002-roadmap-gap-audit", "003-p0-readiness", "004-week1-audit"],
+  "rounds_completed": 1,
+  "participants": ["codex", "gemini", "sonnet", "opus"],
+  "status": "synthesized",
+  "decision": "CONDITIONAL_GO_FOR_WEEK_2",
+  "consensus": "4/4 Conditional Go",
+  "dominant_theme": "Schema 先行, runtime 落后 — 7 commits 把 API/schema/docs 全放好, 但没连成循环",
+  "must_fix_count": 5,
+  "estimated_hours": 1,
+  "unanimous_4of4": [
+    "fact_links contradicts edges never written (Opus/Sonnet/Codex/Gemini)",
+    "decision_audit 'always on' but not wired into reflect/wiki (Opus/Sonnet/Codex/Gemini)"
+  ],
+  "unique_finds": {
+    "sonnet": ["SignalKind TS union missing correction_candidate (shared with Codex)", "graph-health TS null vs 0011 NOT NULL", "stale_cluster_count column no compute source"],
+    "gemini": ["Self-Consumption guard documented but not implemented"],
+    "opus": ["No src/ import of any new cognitive module (all islands)"],
+    "codex": ["graph-health TS returns null/throws vs 0011 real view"]
+  },
+  "key_insight": "No runtime crash despite throwing stubs — because no src/ caller imports them. Contract-reality gap is the real risk, not crashes.",
+  "meta_lesson": "per-commit audit (debate 004) missed cross-commit contract drift. Run cumulative audit every 3-5 commits.",
+  "created": "2026-04-15T00:15:00Z",
+  "completed": "2026-04-15T00:45:00Z"
+}

@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 9 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 12 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(9);
+    expect(result.applied).toHaveLength(12);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -35,6 +35,9 @@ describe("migrator", () => {
       "0007_phase2_search",
       "0008_phase3_ranking",
       "0009_phase3_contradiction_and_wiki_versions",
+      "0010_phase4_myco_integration",
+      "0011_fact_links_and_health_fix",
+      "0012_correction_signal_kind",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -47,7 +50,7 @@ describe("migrator", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  test("all 19 expected tables exist after migration (+ FTS5 virtual table)", () => {
+  test("all expected tables exist after migration (+ FTS5 virtual table)", () => {
     applyMigrations(db);
 
     const tables = db
@@ -62,11 +65,16 @@ describe("migrator", () => {
       "captured_item",
       "chunks",
       "context",
+      "correction_events",        // 0010 P0-5
+      "decision_audit",           // 0010 P0-2
       "derivation_run",
       "expected_item",
       "fact_context",
+      "fact_links",               // 0011 P0-0
       "facts",
       "facts_fts",
+      "graph_health_snapshot",    // 0010 P0-3 (rebuilt in 0011 with DEFAULTs)
+      "health_signals",           // 0010 P0-1
       "ingest_queue",
       "observations",
       "observe_outbox",
@@ -158,12 +166,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(9);
+    expect(before.pending).toHaveLength(12);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(9);
+    expect(after.applied).toHaveLength(12);
     expect(after.pending).toHaveLength(0);
   });
 

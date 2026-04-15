@@ -51,3 +51,4 @@ logs/
 # Test artifacts
 coverage/
 .nyc_output/
+.claude/

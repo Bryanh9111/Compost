@@ -1,0 +1,31 @@
+{
+  "topic": "Phase 4 Week 1 Implementation Audit",
+  "predecessors": ["001-myco-integration", "002-roadmap-gap-audit", "003-p0-readiness"],
+  "rounds_completed": 1,
+  "participants": ["codex", "gemini", "sonnet", "opus"],
+  "status": "synthesized",
+  "decision": "CONDITIONAL_GO_FOR_WEEK_2",
+  "consensus": "4/4 Conditional Go",
+  "must_fix_count": 5,
+  "estimated_hours": 3,
+  "deferred_to_later_count": 6,
+  "positive_finding": "P0-4 inadvertently fixed a latent search.ts ranking bug (contradicted losers were appearing in results pre-P0-4)",
+  "must_fix": [
+    "reflect.ts multi-conflict shared cg + loser dedup (Sonnet P1 + Codex Issue 2)",
+    "backup.ts same-day overwrite loses snapshot on VACUUM failure (Codex Issue 1)",
+    "restore lacks PRAGMA integrity_check + WAL/SHM sidecar cleanup (Opus Issue 1+5)",
+    "PID stale detection needs process.kill(pid, 0) (Opus Issue 4 + Codex Issue 4)",
+    "backup scheduler 03:01 startup waits 24h (Codex Issue 5 + Gemini)"
+  ],
+  "deferred": [
+    "chmod 0600 backup files (Opus Issue 3) -> bundle with P1 PII redact",
+    "Wiki rebuild misses Sensory GC topics (Gemini) -> Phase 3 legacy",
+    "Multi-source contradiction tiebreak (Gemini) -> Phase 3 legacy",
+    "decision_audit writes not yet wired (Codex Issue 3) -> Week 3 P0-2 by plan",
+    "traverse path-string perf benchmark -> Week 4 P1",
+    "connectedComponents memory benchmark -> Week 4 P1"
+  ],
+  "tests_to_add": 5,
+  "created": "2026-04-14T23:30:00Z",
+  "completed": "2026-04-14T23:50:00Z"
+}

@@ -1,0 +1,31 @@
+{
+  "topic": "Compost Phase 4-6 路线图 Gap 审计",
+  "predecessor_debate": "001-myco-integration",
+  "rounds_completed": 2,
+  "participants": ["codex", "gemini", "sonnet", "opus"],
+  "status": "synthesized",
+  "structural_bugs_found": 3,
+  "true_blindspots_found": 4,
+  "cargo_cults_found": 5,
+  "p0_count": 8,
+  "p1_count": 4,
+  "p2_count": 5,
+  "reject_count": 4,
+  "key_findings": [
+    "fact_links 是 P0-3 的隐性必修前置 (4/4 共识)",
+    "Backup/Disaster Recovery 必须 P0 (4/4 共识)",
+    "LLM 单点故障无降级 (3/4 共识)",
+    "graph_health_snapshot NOT NULL bug (Sonnet 发现)",
+    "Self-Consumption Pollution 长期风险 (Gemini 独到)",
+    "ROADMAP 17 项缩减到 16 项 (8 P0 + 4 P1 + 5 P2)"
+  ],
+  "phase5_revision": "改名 Portability, 砍 multi-host concurrency 和 HTTP transport, 保留 export/import",
+  "phase6_revision": "砍 PDF/video/code-repos full extraction, 保留 openclaw + multimodal metadata + telemetry",
+  "next_steps": [
+    "修 ROADMAP.md (6 项 delta)",
+    "下周开 P0-0 fact_links + P0-7 backup 并行",
+    "Phase 4 P0 落地后再评估 P1"
+  ],
+  "created": "2026-04-14T21:50:00Z",
+  "completed": "2026-04-14T22:25:00Z"
+}
