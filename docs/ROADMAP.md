@@ -132,7 +132,7 @@ Test suite (post Day 4 cross-P0 integration): 286 pass / 0 fail / 3 skip across 
 - Day 5 hygiene: `ask()` hits=0 wiki title-slug fallback (Known-risks row 3 resolved); `compost audit` + `compost triage` CLI argument-validation tests (subprocess-based); `correction-detector.ts:65` comment updated per debate 012 (correctedText deferred Week 5+, no naive substring); stale `schema/0010:82` TODO comment retired per migration 0011 supersession
 - Debate 012: `correctedText` naive-substring proposal **rejected** 3/3 (zero consumers today; field-semantics drift risk > 10-LoC implementation value). Week 5+ item pinned.
 
-Test suite (post Week 4): 315 pass / 0 fail / 3 skip across 31 files.
+Test suite (post Week 4 + debate 013 fixes): 318 pass / 0 fail / 3 skip across 31 files.
 
 ---
 
@@ -165,7 +165,7 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 | # | Item | Depends on |
 |---|------|------------|
 | P0-0 | `fact_links` table + bidirectional FK + recursive CTE API (was Phase 3 carried, promoted) | none |
-| P0-1 | `compost triage` + `health_signals` (5 signal kinds, surface-only) | 0010 |
+| P0-1 | `compost triage` + `health_signals` (6 signal kinds: 5 scanners + 1 drain-hook producer; surface-only) | 0010 |
 | P0-2 | `decision_audit` table + confidence ladder (0.90/0.85/0.75) writes | P0-4 enum stable |
 | P0-3 | `v_graph_health` TS impl + `graph_health_snapshot` (bundled with P0-0 PR) | P0-0 |
 | P0-4 | `facts.archive_reason` + `replaced_by_fact_id` + `revival_at` writes | facts |

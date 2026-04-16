@@ -191,4 +191,36 @@ describe("startReflectScheduler wiki hook (Week 4 Day 4)", () => {
     expect(wikiCount.c).toBe(0);
     expect(auditCount.c).toBe(0);
   });
+
+  test("scheduler runs triage() after reflect so scanners fire autonomously (F2)", async () => {
+    // Seed an old un-drained outbox row so scanStuckOutbox fires.
+    db.run(
+      `INSERT INTO observe_outbox (
+         seq, adapter, source_id, source_kind, source_uri,
+         idempotency_key, trust_tier, transform_policy, payload,
+         appended_at
+       ) VALUES (99, 'test-adapter', 's1', 'local-file', 'file:///x',
+         'idem-99', 'user', 'tp-2026-04', '{}',
+         datetime('now', '-48 hours'))`
+    );
+
+    const sched = startReflectScheduler(db, { intervalMs: 5 });
+    const fired = await waitFor(() => {
+      const row = db
+        .query(
+          "SELECT COUNT(*) AS c FROM health_signals WHERE kind = 'stuck_outbox'"
+        )
+        .get() as { c: number };
+      return row.c >= 1;
+    });
+    sched.stop();
+
+    expect(fired).toBe(true);
+    const sig = db
+      .query(
+        "SELECT target_ref FROM health_signals WHERE kind = 'stuck_outbox'"
+      )
+      .get() as { target_ref: string };
+    expect(sig.target_ref).toBe("outbox:99");
+  });
 });

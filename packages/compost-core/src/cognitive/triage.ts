@@ -47,7 +47,13 @@ export interface TriageOptions {
   staleFactDays?: number;        // default 90
   contradictionAgeDays?: number; // default 7
   stuckOutboxHours?: number;     // default 24
-  orphanDeltaThreshold?: number; // default 5
+  /** Access-log window (days) used by `scanOrphanDelta`. Default 30. */
+  orphanAccessDays?: number;
+  /**
+   * Reserved for the Week 5+ delta-vs-baseline semantic (vs current
+   * snapshot). See `debates/013-week4-audit/synthesis.md`.
+   */
+  orphanDeltaThreshold?: number; // default 5 (unused today)
   staleWikiDays?: number;        // default 30
   maxPerKind?: number;           // default 100 (contract cap)
 }
@@ -168,12 +174,16 @@ export function scanStaleFact(
 
 /**
  * `unresolved_contradiction`: two or more active facts share the same
- * `conflict_group` and none has been archived. Normally reflect step 3
- * resolves within the same transaction, but a partial failure or a newly
- * detected SP-pair between reflect cycles can leave this state.
+ * `(subject, predicate)` pair but disagree on `object`, and reflect has not
+ * yet resolved them (age > `days`). Grouping by `conflict_group` would miss
+ * the real signal because reflect.ts sets `conflict_group` + `archived_at`
+ * on the loser in the same transaction -- so by the time a scan fires,
+ * contradictions processed by reflect show only the winner as active and
+ * trip no detection. The value this scanner provides is catching
+ * contradictions **before** reflect cycles (or when reflect is stuck).
  *
- * Surface rule: one signal per `conflict_group`, not per fact. Target_ref
- * is `conflict_group:<gid>` so repeated scans dedupe via upsert.
+ * Surface rule: one signal per `(subject, predicate)` pair. `target_ref` is
+ * `contradiction:<subject>/<predicate>` so repeated scans dedupe via upsert.
  */
 export function scanUnresolvedContradiction(
   db: Database,
@@ -182,32 +192,29 @@ export function scanUnresolvedContradiction(
 ): number {
   const rows = db
     .query(
-      `SELECT conflict_group, COUNT(*) AS active_count,
-              MIN(subject) AS sample_subject,
-              MIN(predicate) AS sample_predicate,
+      `SELECT subject, predicate,
+              COUNT(DISTINCT object) AS active_objects,
               MIN(created_at) AS oldest_created_at
        FROM facts
-       WHERE conflict_group IS NOT NULL
-         AND archived_at IS NULL
+       WHERE archived_at IS NULL
          AND superseded_by IS NULL
          AND created_at < datetime('now', '-' || ? || ' days')
-       GROUP BY conflict_group
-       HAVING active_count >= 2
+       GROUP BY subject, predicate
+       HAVING active_objects >= 2
        ORDER BY oldest_created_at ASC
        LIMIT ?`
     )
     .all(days, maxPerKind) as Array<{
-    conflict_group: number;
-    active_count: number;
-    sample_subject: string;
-    sample_predicate: string;
+    subject: string;
+    predicate: string;
+    active_objects: number;
     oldest_created_at: string;
   }>;
 
   let inserted = 0;
   for (const row of rows) {
-    const targetRef = `conflict_group:${row.conflict_group}`;
-    const msg = `${row.active_count} active facts still share conflict_group=${row.conflict_group} (e.g. ${row.sample_subject}/${row.sample_predicate}, oldest ${row.oldest_created_at})`;
+    const targetRef = `contradiction:${row.subject}/${row.predicate}`;
+    const msg = `${row.active_objects} active objects for (${row.subject}, ${row.predicate}); unresolved since ${row.oldest_created_at}`;
     if (upsertSignal(db, "unresolved_contradiction", "warn", msg, targetRef)) {
       inserted++;
     }
@@ -278,15 +285,16 @@ export function scanStaleWiki(
       `SELECT path, title, stale_at, last_synthesis_at
        FROM wiki_pages
        WHERE stale_at IS NOT NULL
+          OR last_synthesis_at IS NULL
           OR last_synthesis_at < datetime('now', '-' || ? || ' days')
-       ORDER BY COALESCE(stale_at, last_synthesis_at) ASC
+       ORDER BY COALESCE(stale_at, last_synthesis_at, '0000-00-00') ASC
        LIMIT ?`
     )
     .all(days, maxPerKind) as Array<{
     path: string;
     title: string;
     stale_at: string | null;
-    last_synthesis_at: string;
+    last_synthesis_at: string | null;
   }>;
 
   let inserted = 0;
@@ -294,7 +302,9 @@ export function scanStaleWiki(
     const targetRef = `wiki:${row.path}`;
     const reason = row.stale_at
       ? `last rebuild failed at ${row.stale_at}`
-      : `last synthesis at ${row.last_synthesis_at} is older than ${days}d`;
+      : row.last_synthesis_at
+        ? `last synthesis at ${row.last_synthesis_at} is older than ${days}d`
+        : `never synthesized`;
     const msg = `wiki page "${row.title}" is stale: ${reason}`;
     if (upsertSignal(db, "stale_wiki", "info", msg, targetRef)) {
       inserted++;
@@ -310,19 +320,18 @@ export function scanStaleWiki(
  *
  * Hard rule: NEVER auto-executes any remediation. Surface only.
  *
- * Day 2-3 scope: 5 active scanners run. `correction_candidate` is NOT scanned
- * here -- `correction-detector.scanObservationForCorrection` writes those
- * rows directly during the drain hook (debate 006 Pre-Week-2 Fix 5). triage()
- * only aggregates them into the report below.
+ * Coverage: 5 scanners run here + 1 drain-hook producer = 6 SignalKind total.
+ * `correction_candidate` is NOT scanned here -- `correction-detector.
+ * scanObservationForCorrection` writes those rows directly during the drain
+ * hook (debate 006 Pre-Week-2 Fix 5); `triage()` aggregates them into the
+ * report below alongside whatever the 5 scanners wrote this cycle.
  */
 export function triage(db: Database, opts: TriageOptions = {}): TriageReport {
   const staleFactDays = opts.staleFactDays ?? 90;
   const contradictionAgeDays = opts.contradictionAgeDays ?? 7;
   const stuckOutboxHours = opts.stuckOutboxHours ?? 24;
   const staleWikiDays = opts.staleWikiDays ?? 30;
-  // orphanDeltaThreshold is the "delta baseline" knob for Week 5+; for now
-  // we reuse staleFactDays as the access-window length (per contract.md).
-  const orphanAccessDays = opts.staleFactDays ?? 90;
+  const orphanAccessDays = opts.orphanAccessDays ?? 30;
   const maxPerKind = opts.maxPerKind ?? DEFAULT_MAX_PER_KIND;
 
   scanStaleFact(db, staleFactDays, maxPerKind);
@@ -411,18 +420,20 @@ export function listSignals(
 
 /**
  * Mark a signal resolved (user or agent action acknowledged it).
- * Idempotent: re-resolving a resolved signal is a no-op (keeps first
- * resolved_at / resolved_by).
+ * Returns `true` if a row actually moved from unresolved -> resolved, `false`
+ * if the id was missing or already resolved. CLI callers should exit non-0
+ * on `false` to avoid reporting fake success (debate 013 F4).
  */
 export function resolveSignal(
   db: Database,
   signalId: number,
   resolvedBy: "user" | "agent" | "auto-cleared"
-): void {
-  db.run(
+): boolean {
+  const result = db.run(
     "UPDATE health_signals " +
       "SET resolved_at = datetime('now'), resolved_by = ? " +
       "WHERE id = ? AND resolved_at IS NULL",
     [resolvedBy, signalId]
   );
+  return result.changes > 0;
 }

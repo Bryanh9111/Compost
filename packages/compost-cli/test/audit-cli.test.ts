@@ -121,4 +121,13 @@ describe("compost triage CLI argument validation", () => {
     expect(code).toBe(2);
     expect(stderr).toContain("<id> must be a positive integer");
   });
+
+  test("triage resolve <missing-id> returns exit 1 with error message (F4)", async () => {
+    const { code, stderr } = await runCli(
+      ["triage", "resolve", "999999"],
+      dataDir
+    );
+    expect(code).toBe(1);
+    expect(stderr).toContain("not found or already resolved");
+  });
 });

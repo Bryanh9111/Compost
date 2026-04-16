@@ -11,14 +11,14 @@ list is **incorrect** and must not be followed).
 The 6 kinds, aligned with migration 0010 `health_signals.kind` CHECK + 0012
 amendment:
 
-| Kind | Semantic | Scanner (Day 2-3) | Source table |
+| Kind | Semantic | Producer | Source table |
 |---|---|---|---|
 | `stale_fact` | A fact not reinforced and not archived for > 90d | `scanStaleFact` | `facts` |
-| `unresolved_contradiction` | `conflict_group` present but no archived loser | `scanUnresolvedContradiction` | `facts` |
+| `unresolved_contradiction` | (Debate 013 F1 revision) `(subject, predicate)` with 2+ distinct active objects, none archived, older than `contradictionAgeDays` (default 7) — catches contradictions *before* reflect has processed them | `scanUnresolvedContradiction` | `facts` |
 | `stuck_outbox` | outbox row age > 24h, not drained, not quarantined | `scanStuckOutbox` | `observe_outbox` |
-| `orphan_delta` | `fact_links` in-degree = 0 AND access_count = 0 for > 30d | `scanOrphanDelta` | `facts` + `fact_links` + `access_log` |
-| `stale_wiki` | `wiki_pages.stale_at IS NOT NULL` | `scanStaleWiki` | `wiki_pages` |
-| `correction_candidate` | Aggregated from `correction_events` (one signal per event) | `scanCorrectionCandidate` | `correction_events` |
+| `orphan_delta` | `fact_links` in-degree + out-degree = 0 AND no `access_log` hit in `orphanAccessDays` (default 30) AND created before the window | `scanOrphanDelta` | `facts` + `fact_links` + `access_log` |
+| `stale_wiki` | `wiki_pages.stale_at IS NOT NULL` OR `last_synthesis_at IS NULL` OR `last_synthesis_at < now - staleWikiDays` | `scanStaleWiki` | `wiki_pages` |
+| `correction_candidate` | One row per `correction_events` entry; **no scanner** — written directly by `correction-detector.scanObservationForCorrection` during the drain hook (debate 006 Pre-Week-2 Fix 5). `triage()` only aggregates it into the report. | drain-hook producer | `correction_events` |
 
 **Contract rules (freeze)**:
 - Enum lives in `triage.ts`; CLI imports from there (never hardcoded).

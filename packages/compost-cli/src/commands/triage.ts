@@ -43,7 +43,7 @@ export function registerTriage(program: Command): void {
   cmd
     .command("scan")
     .description(
-      "Run a triage pass: scan the 5 signal kinds, insert new rows, report counts"
+      "Run a triage pass: scan the 6 signal kinds (5 scanners + 1 drain-hook producer), insert new rows, report counts"
     )
     .action(() => {
       const db = openDb();
@@ -113,7 +113,13 @@ export function registerTriage(program: Command): void {
 
       const db = openDb();
       try {
-        resolveSignal(db, id, opts.by as "user" | "agent");
+        const ok = resolveSignal(db, id, opts.by as "user" | "agent");
+        if (!ok) {
+          process.stderr.write(
+            `error: signal ${id} not found or already resolved\n`
+          );
+          process.exit(1);
+        }
         process.stdout.write(`resolved signal ${id} by ${opts.by}\n`);
       } finally {
         db.close();

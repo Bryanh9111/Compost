@@ -364,15 +364,15 @@ describe("triage P0-1 scanUnresolvedContradiction", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("emits one signal per unresolved conflict_group with 2+ active facts, older than days", () => {
-    // Two active facts in same conflict_group, created 10d ago, neither
-    // archived nor superseded -> unresolved.
+  test("emits one signal per (subject,predicate) with 2+ distinct active objects older than days", () => {
+    // Two active facts with same (subject, predicate) but different objects,
+    // created 10d ago, neither archived nor superseded -> unresolved.
+    // No conflict_group set: debate 013 F1 SQL rewrite catches contradictions
+    // BEFORE reflect has processed them.
     insertFact(db, "fw", "paris", "capital-of", "france", {
-      conflictGroup: 42,
       createdAtSqlExpr: "datetime('now', '-10 days')",
     });
     insertFact(db, "fl", "paris", "capital-of", "england", {
-      conflictGroup: 42,
       createdAtSqlExpr: "datetime('now', '-10 days')",
     });
 
@@ -381,18 +381,16 @@ describe("triage P0-1 scanUnresolvedContradiction", () => {
       .query("SELECT kind, target_ref, severity FROM health_signals")
       .get() as { kind: string; target_ref: string; severity: string };
     expect(row.kind).toBe("unresolved_contradiction");
-    expect(row.target_ref).toBe("conflict_group:42");
+    expect(row.target_ref).toBe("contradiction:paris/capital-of");
     expect(row.severity).toBe("warn");
   });
 
   test("does NOT emit when one side archived (resolved) or within age threshold", () => {
-    // Resolved: winner active, loser archived
+    // Resolved: winner active, loser archived -> only 1 active object
     insertFact(db, "fw", "paris", "capital-of", "france", {
-      conflictGroup: 42,
       createdAtSqlExpr: "datetime('now', '-10 days')",
     });
     insertFact(db, "fl", "paris", "capital-of", "england", {
-      conflictGroup: 42,
       createdAtSqlExpr: "datetime('now', '-10 days')",
     });
     db.run(
@@ -403,11 +401,9 @@ describe("triage P0-1 scanUnresolvedContradiction", () => {
     // Fresh unresolved (age < threshold): don't surface yet, give reflect
     // a chance to resolve.
     insertFact(db, "gw", "berlin", "capital-of", "germany", {
-      conflictGroup: 43,
       createdAtSqlExpr: "datetime('now', '-1 days')",
     });
     insertFact(db, "gl", "berlin", "capital-of", "austria", {
-      conflictGroup: 43,
       createdAtSqlExpr: "datetime('now', '-1 days')",
     });
     expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);

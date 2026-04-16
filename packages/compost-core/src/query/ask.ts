@@ -135,23 +135,27 @@ export async function ask(
       if (page) wikiPages.push(page);
     }
   } else {
-    // Week 4 Day 5 (ROADMAP known-risk row 3): when the retrieval step
-    // returned no hits, the prior logic dropped any wiki coverage entirely,
-    // so a direct "paris" question would miss an existing paris.md wiki
-    // page + its stale_at banner. Fall back to a title match against the
-    // raw question so the wiki surface + stale signal survive the
-    // empty-hits path. Cheap SQL, no FTS rebuild.
-    const slug = question.toLowerCase().trim();
-    const page = db
-      .query(
-        "SELECT path, title, stale_at FROM wiki_pages " +
-          "WHERE LOWER(title) = ? OR LOWER(path) = ? OR LOWER(path) = ? " +
-          "LIMIT 1"
-      )
-      .get(slug, slug, slug + ".md") as
-      | { path: string; title: string; stale_at: string | null }
-      | null;
-    if (page) wikiPages.push(page);
+    // Week 4 Day 5 + debate 013 F5: hits=0 path must still surface a wiki
+    // page if the user's question slug matches one. Use the SAME slug
+    // regex as wiki.ts:120 so multi-word questions like "Paris France"
+    // resolve to "paris-france.md" instead of silently missing.
+    const titleSlug = question
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    if (titleSlug.length > 0) {
+      const page = db
+        .query(
+          "SELECT path, title, stale_at FROM wiki_pages " +
+            "WHERE LOWER(title) = ? OR LOWER(path) = ? " +
+            "ORDER BY last_synthesis_at DESC " +
+            "LIMIT 1"
+        )
+        .get(titleSlug, titleSlug + ".md") as
+        | { path: string; title: string; stale_at: string | null }
+        | null;
+      if (page) wikiPages.push(page);
+    }
   }
 
   // Step 3: Read wiki page content from disk

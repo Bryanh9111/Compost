@@ -270,6 +270,37 @@ describe("cross-P0 integration (Phase 4 Batch D Day 4)", () => {
   });
 
   // -------------------------------------------------------------------
+  // Debate 013 F5: hits=0 slug fallback must handle multi-word questions
+  // by slugifying through the same regex as wiki.ts page-path generator.
+  // -------------------------------------------------------------------
+  test("ask(hits=0) multi-word question slugifies to match wiki page", async () => {
+    // Synthesize a page whose generated path is "new-york.md".
+    const happyRegistry = new BreakerRegistry(
+      new MockLLMService({ mode: "happy", response: "# New York\n\nseeded" })
+    );
+    insertFact(db, "fny", "new york", "is-in", "usa", { confidence: 0.95 });
+    await synthesizeWiki(db, happyRegistry, dataDir);
+
+    // Sanity: page exists with slugified path.
+    const pageRow = db
+      .query("SELECT path FROM wiki_pages WHERE title = 'new york'")
+      .get() as { path: string };
+    expect(pageRow.path).toBe("new-york.md");
+
+    // Query drops the fact out of retrieval (keyword 'unknown') so hits=0,
+    // forcing the slug fallback. Answer registry happy so we don't need
+    // the BM25 banner to prove wiki_pages_used.
+    const askRegistry = new BreakerRegistry(
+      new MockLLMService({ mode: "happy", response: "OK" })
+    );
+    const result = await ask(db, "New York", askRegistry, {
+      budget: 5,
+      expandQueries: false,
+    });
+    expect(result.wiki_pages_used).toContain("new-york.md");
+  });
+
+  // -------------------------------------------------------------------
   // Scenario C: happy path composition. reflect (contradiction) +
   // synthesizeWiki + ask run end-to-end; the audit trail shows both
   // kinds and ask consumes the fresh wiki page.

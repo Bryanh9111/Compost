@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { drainOne } from "../../compost-core/src/ledger/outbox";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
+import { triage } from "../../compost-core/src/cognitive/triage";
 import { synthesizeWiki } from "../../compost-core/src/cognitive/wiki";
 import type { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import type { LLMService } from "../../compost-core/src/llm/types";
@@ -116,7 +117,19 @@ export function startReflectScheduler(
         log.info({ report }, "reflect complete");
       } catch (err) {
         log.error({ err }, "reflect error");
-        continue; // skip wiki synth when reflect failed
+        continue; // skip triage + wiki synth when reflect failed
+      }
+
+      // Debate 013 F2: run triage after reflect so the 5 scanners produce
+      // signals autonomously (correction_candidate is already drain-hook
+      // written). Without this, `stale_fact` / `stuck_outbox` / `stale_wiki`
+      // / `orphan_delta` / `unresolved_contradiction` would only surface
+      // when the user manually invoked `compost triage scan`.
+      try {
+        const triageReport = triage(db);
+        log.info({ triageReport }, "triage complete");
+      } catch (err) {
+        log.error({ err }, "triage error (continuing)");
       }
 
       if (opts.llm && opts.dataDir) {
