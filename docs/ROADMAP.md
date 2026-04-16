@@ -121,6 +121,19 @@ Branch `feat/phase4-batch-d-myco-integration`. 9 debates (003-009), all 4/4 or 3
 
 Test suite (post Day 4 cross-P0 integration): 286 pass / 0 fail / 3 skip across 29 files.
 
+### Phase 4 Batch D — Week 4 (2026-04-15)
+
+**P0-1 triage complete.** See `debates/011-week4-plan/synthesis.md` + `contract.md`.
+
+- Day 1: single daemon-wide `BreakerRegistry` (main.ts owns it; mcp-server.ts + startReflectScheduler receive it as parameter). Contract frozen: 6 `SignalKind` values per `triage.ts:12-18`, surface-only, per-scan LIMIT 100.
+- Day 2: `scanStuckOutbox` + `scanStaleWiki` with idempotent upsert (dedupes against *unresolved* signals only — resolving a signal permits a fresh one on the next scan if the target is still stuck)
+- Day 3: `scanStaleFact` + `scanUnresolvedContradiction` (per `conflict_group`) + `scanOrphanDelta` (zero fact_links edges + no access within window); `correction_candidate` written directly by `correction-detector` drain hook, `triage()` aggregates only; `compost triage scan/list/resolve` CLI mirroring `audit` CLI enum-validation pattern
+- Day 4: `startReflectScheduler` test-injectable `intervalMs` + 3 integration tests (happy / LLM fail → stale_at / no-llm skip); `compost doctor --check-llm` single-shot Ollama probe with 3s timeout + setup hint
+- Day 5 hygiene: `ask()` hits=0 wiki title-slug fallback (Known-risks row 3 resolved); `compost audit` + `compost triage` CLI argument-validation tests (subprocess-based); `correction-detector.ts:65` comment updated per debate 012 (correctedText deferred Week 5+, no naive substring); stale `schema/0010:82` TODO comment retired per migration 0011 supersession
+- Debate 012: `correctedText` naive-substring proposal **rejected** 3/3 (zero consumers today; field-semantics drift risk > 10-LoC implementation value). Week 5+ item pinned.
+
+Test suite (post Week 4): 315 pass / 0 fail / 3 skip across 31 files.
+
 ---
 
 ## Planned
@@ -133,7 +146,7 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 |---|---|---|---|
 | ~~Two `BreakerRegistry` instances~~ | **Resolved 2026-04-15 Week 4 Day 1**: `main.ts` builds a single `BreakerRegistry` at daemon boot and passes it to both `startReflectScheduler` and `startMcpServer(db, registry)`. `mcp-server.ts` no longer holds a per-server closure variable. | n/a |
 | `synthesizeWiki` + `ask` union signature detects registry via `instanceof BreakerRegistry` | `cognitive/wiki.ts:213`, `query/ask.ts:73` | Adding a new breaker class (e.g. retry-only wrapper) breaks the branch | Convert to duck-typed `get(site)` check or refactor to interface when a second wrapper type lands |
-| `ask.ts` BM25 fallback drops `wikiContext` when `hits.length === 0` | `query/ask.ts:155` | Stale wiki banner is only surfaced if the query yielded a hit whose subject matches a wiki title. User's `stale_wiki` signal is lost for direct topic questions with no fact hits. | Day 4 cross-P0 test must cover the empty-hits path; re-evaluate if false-negatives observed in dogfood |
+| ~~`ask.ts` BM25 fallback drops `wikiContext` when `hits.length === 0`~~ | **Resolved 2026-04-15 Week 4 Day 5**: `ask()` now queries `wiki_pages` by question slug (case-insensitive match against `title` / `path` / `path.md`) when the retrieval step returns zero hits, so the `stale_at` banner + wiki content survive the empty-hits path. Covered by `cross-p0-integration.test.ts` Scenario B2. | n/a |
 | `Self-Consumption` regex only matches Unix paths (`file://.../.compost/wiki/*.md`) | `ledger/outbox.ts isWikiSelfConsumption` | Windows paths (`file:///C:/...`) and `wiki/topic/sub.md` nested pages are not blocked | Low priority while macOS-only; revisit before any Windows / nested-wiki support |
 | `reconstructConfidenceTier` uses float equality (`=== 0.9` / `=== 0.85`) | `cognitive/audit.ts listDecisions` | SQLite stores `REAL` as IEEE754; values round-tripped may not `===` literal | No production incident yet (migration `DEFAULT 0.85` is exact). Switch to `<` / `>` bands if a future migration introduces computed floors |
 | `decision_audit.profile_switch` variant declared in `EvidenceRefs` union but has no caller | `cognitive/audit.ts` | Schema CHECK permits the kind; `listDecisions` would return such rows silently if someone inserts directly | Add CHECK or producer when Week 5+ profile switcher lands |

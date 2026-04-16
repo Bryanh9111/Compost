@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS graph_health_snapshot (
 CREATE VIEW IF NOT EXISTS v_graph_health AS
 SELECT
   (SELECT COUNT(*) FROM facts WHERE archived_at IS NULL) AS total_facts,
-  NULL AS orphan_facts,           -- TODO: compute when fact_links table exists
+  NULL AS orphan_facts,           -- stub; superseded by migration 0011 (fact_links-backed view)
   NULL AS density,
   NULL AS cluster_count,
   datetime('now') AS computed_at;
