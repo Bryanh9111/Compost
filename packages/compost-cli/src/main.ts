@@ -9,6 +9,7 @@ import { registerReflect } from "./commands/reflect";
 import { registerDrain } from "./commands/drain";
 import { registerBackup, registerRestore } from "./commands/backup";
 import { registerAudit } from "./commands/audit";
+import { registerTriage } from "./commands/triage";
 
 const program = new Command()
   .name("compost")
@@ -25,5 +26,6 @@ registerDrain(program);
 registerBackup(program);
 registerRestore(program);
 registerAudit(program);
+registerTriage(program);
 
 program.parse(process.argv);

@@ -102,7 +102,7 @@ export async function startDaemon(
   if (withMcp) {
     try {
       const { startMcpServer } = await import("./mcp-server");
-      mcpHandle = await startMcpServer(db);
+      mcpHandle = await startMcpServer(db, llmRegistry);
       log.info("MCP stdio server started");
     } catch (err) {
       log.warn({ err }, "MCP server failed to start (SDK may not be installed)");

@@ -240,11 +240,27 @@ time (5 sites; 4 TS + 1 Python):
 
 | Site | Purpose | Failure mode | Fallback |
 |------|---------|--------------|----------|
-| `cognitive/wiki.ts:86` `llm.generate` | L3 wiki page synthesis | timeout / 5xx / ECONNREFUSED | mark wiki page `stale_at = now`, return cached version, surface `stale_wiki` triage signal |
-| `query/ask.ts:35` `llm.generate` | Multi-query expansion for retrieval | timeout / 5xx | fall back to original query verbatim, log `expansion_skipped` |
-| `query/ask.ts:152` `llm.generate` | Final answer synthesis | timeout / 5xx | return BM25 top-N facts as plain text with `[LLM unavailable]` banner |
-| `compost-daemon/src/mcp-server.ts` lazy `new BreakerRegistry(new OllamaLLMService())` in `compost.ask` handler | Per-MCP-server singleton registry (debate 009 Fix 1). Holds circuit state across MCP requests; `ask()` receives the registry and calls `registry.get("ask.expand")` / `registry.get("ask.answer")` internally. **Note**: `compost-daemon/src/main.ts` builds a *separate* registry at daemon boot for `startReflectScheduler`'s wiki synthesis; the two do not share circuit state (ROADMAP known-risks row 1, Week 4 consolidation planned). | first `generate()` call fails with network error; surfaces via circuit breaker (no ctor-time validation today) | return MCP error with hint (`compost doctor --check-llm` is a Week 4 deliverable) |
+| `cognitive/wiki.ts synthesizePage` `llm.generate` (site key `wiki.synthesis`) | L3 wiki page synthesis | timeout / 5xx / ECONNREFUSED | mark wiki page `stale_at = now`, return cached version, surface `stale_wiki` triage signal |
+| `query/ask.ts expandQuery` `llm.generate` (site key `ask.expand`) | Multi-query expansion for retrieval | timeout / 5xx | fall back to original query verbatim, log warning with err.name + message |
+| `query/ask.ts ask` answer-synthesis `llm.generate` (site key `ask.answer`) | Final answer synthesis | timeout / 5xx | return BM25 top-N facts as plain text with `[LLM unavailable]` banner; if `hits.length === 0`, also tries slug-matching question against `wiki_pages.title` / `path` |
+| `compost-daemon/src/main.ts` boot-time `new BreakerRegistry(new OllamaLLMService())` | **Single daemon-wide registry** (Week 4 Day 1 consolidation). Injected into both `startMcpServer(db, registry)` and `startReflectScheduler(db, { llm: registry, dataDir })`, so circuit state for `ask.*` and `wiki.synthesis` lives in one place. | first `generate()` call fails with network error; surfaces via circuit breaker (no ctor-time validation today) | return MCP error with hint; `compost doctor --check-llm` ships a manual single-shot probe (Week 4 Day 4). |
 | `compost-ingest/.../llm_facts.py` (Python) | LLM-based fact extraction during ingest | already has Python-side retry; **out of scope for P0-6 TS wrapper** | (existing Python retry; surface `stuck_outbox` if queue grows) |
+
+### CLI surface inventory (Week 4)
+
+Enum-validated subcommands; all return exit 2 on invalid arg, exit 1 on
+missing-target / runtime failure, exit 0 otherwise. JSON on stdout.
+
+| Command | Purpose | Key options |
+|---|---|---|
+| `compost audit list` | Read `decision_audit` trail (P0-2) | `--kind` / `--since` / `--target` / `--decided-by` / `--limit` |
+| `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport` | (none) |
+| `compost triage list` | Read `health_signals` | `--kind` / `--since` / `--include-resolved` / `--limit` |
+| `compost triage resolve <id>` | Mark signal resolved (surface-only; does NOT fix the underlying cause) | `--by <user\|agent>`; exit 1 if id missing or already resolved |
+| `compost doctor --check-llm` | Single-shot Ollama probe (3s timeout); JSON report + setup hint | (none) |
+| `compost doctor --reconcile` | Observations vs facts delta | (none) |
+| `compost doctor --rebuild L1` | Atomic LanceDB rebuild from SQLite chunks | (none) |
+| `compost backup` / `compost restore` | P0-7 backup/restore | see command `--help` |
 
 **Self-Consumption guard** (Gemini insight, P0-6 sub-requirement): prevents
 the LLM-generated wiki from feeding back into the fact extraction loop.

@@ -62,7 +62,7 @@ export function detectCorrection(turnText: string): {
       return {
         patternName: name,
         retractedText: retracted,
-        correctedText: null, // TODO(P0-5 Week 2 or later): extract corrected span via context window
+        correctedText: null, // Deferred to Week 5+ per debate 012 (zero consumers today; P0-5 surface-only contract permits null; see docs/ROADMAP.md Week 5+ backlog).
       };
     }
   }

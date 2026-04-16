@@ -2,7 +2,7 @@
 -- Source: debates/001-myco-integration/synthesis_v2.md (2026-04-14)
 -- Phase 4 Batch D: 5 P0 schema additions from Myco design distillation
 --
--- P0-1: health_signals — boot-time triage surface (5 signal kinds, no auto-execute)
+-- P0-1: health_signals — boot-time triage surface (6 signal kinds with 0012 amendment, no auto-execute)
 -- P0-2: decision_audit — high-cost decision audit trail with confidence ladder
 -- P0-3: graph_health_snapshot + v_graph_health view — structural decay perception
 -- P0-4: facts.archive_reason / replaced_by_fact_id / revival_at — compression 3-criteria
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS graph_health_snapshot (
 CREATE VIEW IF NOT EXISTS v_graph_health AS
 SELECT
   (SELECT COUNT(*) FROM facts WHERE archived_at IS NULL) AS total_facts,
-  NULL AS orphan_facts,           -- TODO: compute when fact_links table exists
+  NULL AS orphan_facts,           -- stub; superseded by migration 0011 (fact_links-backed view)
   NULL AS density,
   NULL AS cluster_count,
   datetime('now') AS computed_at;
