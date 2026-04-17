@@ -364,13 +364,31 @@ Opus; Codex timed out).
     equivalent subcommand, so write-path concrete transport is deferred
     — read path was the strategic priority (Phase 6 Curiosity needs
     Engram events flowing into Compost).
-- 📋 **Session 6 slice 2** (next) — write-path concrete + reconcile
-  - Concrete `EngramMcpClient` for S4 writer: needs MCP-over-stdio to
-    reach `mcp__engram__remember` + `mcp__engram__invalidate_compost_fact`
-    (Engram CLI lacks the invalidate subcommand).
-  - `compost doctor --reconcile-engram` cross-checks
-    `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
-    orphaned invalidate-without-remember (R5 blind-write mitigation).
+- ✅ **Session 6 slice 2** (commit `b2ef329`, 2026-04-17) — write-path concrete MCP transport
+  - `mcp-stdio-client.ts` — `StdioEngramMcpClient` implements
+    `EngramMcpClient` from S4 writer via MCP `tools/call`. Supports
+    both `structuredContent` (MCP 1.x preferred) and `content[0].text`
+    JSON fallback. `createStdioMcpClient` factory lazy-imports
+    `@modelcontextprotocol/sdk` Client + StdioClientTransport and
+    spawns `engram-server`; injectable `McpToolClient` keeps MCP SDK
+    out of the test path.
+  - `compost-daemon/src/engram-flusher.ts` — `startEngramFlusher`
+    periodically invokes `EngramWriter.flushPending()` (5 min default
+    cadence), mirrors engram-poller shape. `runEngramFlushOnce` for
+    CLI.
+  - `compost-cli`: `compost engram-push [--dry-run] [--queue-path]
+    [--engram-server-cmd]` — manual flush trigger, dry-run shows queue
+    stats (by kind / oldest enqueue time), real run spawns the MCP
+    transport and flushes with JSON stats on stdout.
+  - Tests: 462 → 479 (+17). 12 mcp-stdio-client + 5 engram-flusher.
+- 📋 **Future** — `compost doctor --reconcile-engram` cross-checks
+  `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
+  orphaned invalidate-without-remember (R5 blind-write mitigation).
+  Deferred until one live dogfood cycle validates the new loop.
+
+**Anchor v2 双向核心 satisfied**: Compost can now both pull Engram
+events (read runtime in S6-slice-1) AND push insights + invalidations
+(write runtime in S6-slice-2). Phase 5 loop closed end-to-end.
 
 **Engram coupling invariants honored**:
 
