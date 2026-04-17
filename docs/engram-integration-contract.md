@@ -51,7 +51,7 @@ Proposed payload (Engram may adjust schema):
 {
   "origin": "compost",
   "kind": "insight",
-  "content": "<synthesized text, target length <= 2000 chars>",
+  "content": "<synthesized text, Compost must pre-split to <= 2000 chars>",
   "project": "<compost-project-name or null for cross-project insights>",
   "scope": "project | global | meta",
   "source_trace": {
@@ -60,33 +60,43 @@ Proposed payload (Engram may adjust schema):
     "derivation_run_id": "<compost derivation id>",
     "synthesized_at": "<ISO-8601 timestamp>"
   },
-  "ttl_seconds": 7776000,
+  "expires_at": "<ISO-8601 absolute timestamp, MANDATORY>",
   "confidence": 0.85,
   "tags": ["auto-generated", "compost-insight", "<optional-topic-tags>"]
 }
 ```
 
+> **Schema notes** (per Engram debate 019 revisions, 2026-04-16):
+> - `origin="compost"` is a **schema-enforced literal** (Engram CHECK constraint:
+>   `origin IN ('human', 'agent', 'compost')`). Not a code-level variant.
+> - `expires_at` replaces the older `ttl_seconds` (absolute timestamp is clock-drift-safe).
+> - `source_trace` and `expires_at` are **both mandatory** — no optional fields.
+> - Engram schema permits `content` up to 4000 chars for other kinds, but Compost
+>   must self-split to 2000 chars per insight entry (Compost side owns the splitter).
+
 ### Compost's guarantees
 
-- `content` is always <=2000 chars (splits long synthesis into multiple linked entries)
+- `content` is always <=2000 chars — Compost splits long synthesis into multiple linked entries (parent_id linkage TBD in Phase 5 splitter design)
 - `source_trace` always present — insights are always traceable back to Compost facts
+- `expires_at` always computed before push (default: synthesized_at + 90 days; overridable per synthesis)
 - `synthesized_at` monotonic per insight (allows Engram to detect staleness)
 - Idempotency: same `(project, source_trace.compost_fact_ids)` produces the same deterministic insight ID — Compost won't spam Engram with duplicates on repeated synthesis
 
-### What Compost expects from Engram
+### What Compost expects from Engram (per debate 019 revisions)
 
-- Engram exposes a write API that accepts this payload (MCP tool or local Bun interface)
+- Write API: **MCP tool** (Engram session decides exact name; expected `mcp__engram__write_compost_insight` or similar)
 - Engram marks `origin=compost` entries distinguishably in recall output (user can filter)
-- Engram may GC / archive Compost-origin entries based on TTL, user action, or source invalidation (Compost provides source-change webhooks in Phase 5+)
+- Engram implements `expires_at` semantics: hide expired entries from default recall + **30-day physical delete grace window** after expiration (debate 019 Q6)
+- Engram **excludes `origin=compost` entries from the return stream by default** (prevents Compost-generated insights looping back into Compost as new source — debate 019 Q7 + prior contract HC)
 - Write failure returns a clear error so Compost can log it — Compost will not retry aggressively
 
 ### Invalidation semantics (Compost side)
 
 When a Compost fact underlying an insight changes or gets superseded:
 
-- Compost emits an invalidation signal to Engram with the affected `source_trace.compost_fact_ids`
-- Engram may mark the matching insight entries as stale / hidden — exact semantics Engram-side
-- If Engram is down at invalidation time, Compost queues the signal with idempotent retry
+- Compost invokes **MCP tool `mcp__engram__invalidate_compost_fact`** with the affected `compost_fact_ids[]` (per debate 019 Q7 — no HTTP webhook)
+- Engram marks matching insight entries as hidden immediately, physical delete after 30-day grace
+- If Engram is unreachable at invalidation time, Compost queues the signal in `~/.compost/pending-engram-writes.db` with idempotent retry on next Engram availability
 
 ## Engram → Compost (event source)
 
@@ -94,13 +104,12 @@ When a Compost fact underlying an insight changes or gets superseded:
 
 Compost treats selected Engram entries (primarily `kind=event`, `kind=note`, `kind=reflection`) as new ingest sources, feeding them through Compost's observe → extract → facts pipeline. This lets Compost synthesize across both the user's work artifacts (current source) and their personal memories (new source).
 
-### What Engram exposes
+### What Engram exposes (per debate 019 Q4 decision)
 
-Proposed API (Engram may adjust):
-
-- `engram export-stream --kinds=event,note,reflection --since=<timestamp>` — NDJSON output
-- Or MCP tool `mcp__engram__stream_for_compost(since, kinds)` — streaming query
+- **MCP tool `mcp__engram__stream_for_compost(since, kinds)`** — primary, streaming query
+- CLI `engram export-stream --kinds=... --since=...` — same handler underneath, for scripted batch
 - Each entry includes: `memory_id`, `kind`, `content`, `project`, `scope`, `created_at`, `updated_at`, `tags`, `origin`
+- **`origin=compost` entries excluded by default** from the return set (prevents feedback loop — Compost's own output coming back as input)
 
 ### What Compost does with it
 
