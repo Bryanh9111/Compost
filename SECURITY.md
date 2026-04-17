@@ -11,15 +11,44 @@ Compost is designed for single-user local use. Your knowledge base never leaves 
 
 ## PII protection
 
-The hook-shim (Phase 4 P1) includes a regex-based PII redactor that filters:
+The hook-shim includes a regex-based PII redactor (`packages/compost-hook-shim/src/pii.ts`) that runs automatically before every envelope is written to `observe_outbox`. It redacts:
 
-- Credit card numbers
-- SSH keys and private key blocks
-- API tokens (`sk-*`, `ghp_*`, `github_pat_*`, `AKIA*`, `AIza*`)
-- `.env` file patterns (`KEY=value` with sensitive keys)
-- Explicit password-like strings
+- Credit card numbers (Luhn-validated; 13-19 digits)
+- SSH/PGP private key blocks (`-----BEGIN ... PRIVATE KEY-----`)
+- API tokens (`sk-ant-*`, `sk-*`, `ghp_*`, `github_pat_*`, `AKIA*`, `AIza*`, `xox[baprs]-*`)
+- Bearer authorization tokens (`Bearer <token>`)
+- `.env`-style assignments for sensitive keys (`SECRET=`, `PASSWORD=`, `TOKEN=`, `APIKEY=`, `ACCESS_KEY=`, `PRIVATE_KEY=`, `CLIENT_SECRET=`)
+- `password: xxx` / `password=xxx` forms (case-insensitive)
 
-**The redactor is conservative (may over-redact) but cannot catch everything.** If you use Compost in contexts where confidential data flows through Claude Code hooks, review the `packages/compost-hook-shim/` regex list and add patterns for your own sensitive strings.
+Replacements use distinguishable placeholders (`[REDACTED_CC]`, `[REDACTED_TOKEN]`, `[REDACTED_PRIVATE_KEY]`, `[REDACTED]`) so audits can tell which pattern triggered.
+
+### Strict mode (opt-in)
+
+Set `COMPOST_PII_STRICT=true` in the hook environment to also redact any raw 13-19 digit sequence that fails Luhn validation. This catches non-CC tabular leaks (support IDs, order numbers that happen to look like cards) at the cost of higher false-positive rate.
+
+### Auditing existing data
+
+Two doctor commands expose the PII / integrity posture of an already-running Compost instance:
+
+```bash
+# Scan existing observe_outbox rows for PII patterns (report only, no mutation)
+compost doctor --check-pii
+
+# One-shot schema integrity audit (orphan observations, dangling fact_links,
+# stale wiki_pages, unknown transform_policy references)
+compost doctor --check-integrity
+```
+
+Both emit JSON to stdout. Neither modifies the database — remediation (purge rows, re-ingest with strict mode, manual migration) is user-driven based on the report.
+
+### Limitations (documented)
+
+- Regex-based redactor cannot defend against homograph attacks (e.g. Cyrillic `о` vs Latin `o`)
+- Novel token formats not in the blocklist are missed — add patterns for your own sensitive strings in `packages/compost-hook-shim/src/pii.ts`
+- LLM-generated wiki synthesis output is not re-scanned for PII — if source content had PII that slipped through the hook-shim, it can surface in wiki pages
+- Backup files (`~/.compost/backups/`) contain the full DB including any PII — protect them the same as your main DB
+
+**The redactor is a defense-in-depth layer, not a guarantee.** Review your hook envelopes periodically if you handle confidential data.
 
 ## Local disk only — no cloud sync
 

@@ -12,6 +12,7 @@ import { Database } from "bun:sqlite";
 import { join } from "path";
 import { homedir } from "os";
 import { createHash } from "crypto";
+import { scrubEnvelope } from "./pii";
 
 const ADAPTER_NAME = "compost-adapter-claude-code";
 
@@ -66,11 +67,23 @@ async function main(): Promise<void> {
   // Inject hook_event into top-level metadata so drain writes it to observations.metadata
   envelope.metadata = { ...envelope.metadata, hook_event: eventName };
 
+  // PII scrub: regex blocklist redacts CC/SSH keys/API tokens/env secrets
+  // from envelope.payload before it touches disk. Strict mode (opt-in via
+  // COMPOST_PII_STRICT=true env) additionally redacts raw 13-19 digit
+  // sequences that fail Luhn — catches non-CC numeric leaks at higher FP rate.
+  const strictMode = process.env.COMPOST_PII_STRICT === "true";
+  const scrubResult = scrubEnvelope(envelope, { strict: strictMode });
+  envelope = scrubResult.envelope;
+  // Optional: telemetry hook could log scrubResult.redactions here.
+
   const dataDir = process.env.COMPOST_DATA_DIR || join(homedir(), ".compost");
   const dbPath = join(dataDir, "ledger.db");
 
   const sourceId = `claude-code:${envelope.session_id}:${envelope.cwd}`;
   const sourceUri = `claude-code://${envelope.cwd}`;
+  // Idempotency key computed over SCRUBBED payload — ensures a secret and
+  // its redacted form do not produce two separate outbox rows for the same
+  // user event. Replay idempotency relies on envelope content equivalence.
   const idempotencyKey = computeIdempotencyKey(
     ADAPTER_NAME,
     sourceId,

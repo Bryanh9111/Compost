@@ -117,4 +117,108 @@ describe("compost-hook-shim", () => {
     // The real ship gate (p95 < 30ms) is enforced by compost doctor --measure-hook
     expect(elapsed).toBeLessThan(200);
   });
+
+  test("shim redacts PII (credit card) from payload before writing outbox", async () => {
+    const dirtyEnvelope = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "pii-test-cc",
+      cwd: "/tmp/test-project",
+      timestamp: new Date().toISOString(),
+      payload: { user_said: "my card is 4532015112830366 please charge" },
+    });
+    const proc = Bun.spawn(["bun", SHIM_PATH, "pre-tool-use"], {
+      stdin: new Blob([dirtyEnvelope]),
+      env: { ...process.env, COMPOST_DATA_DIR: dataDir },
+    });
+    const exitCode = await proc.exited;
+    expect(exitCode).toBe(0);
+
+    const db = new Database(join(dataDir, "ledger.db"));
+    const row = db
+      .query("SELECT payload FROM observe_outbox WHERE source_id LIKE '%pii-test-cc%'")
+      .get() as { payload: string };
+    db.close();
+
+    expect(row).toBeTruthy();
+    expect(row.payload).not.toContain("4532015112830366");
+    expect(row.payload).toContain("[REDACTED_CC]");
+  });
+
+  test("shim redacts API token from payload", async () => {
+    const dirtyEnvelope = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "pii-test-token",
+      cwd: "/tmp/test-project",
+      timestamp: new Date().toISOString(),
+      payload: {
+        command: "curl -H 'Authorization: Bearer abc.def.ghijklmnopqrstuv'",
+      },
+    });
+    const proc = Bun.spawn(["bun", SHIM_PATH, "pre-tool-use"], {
+      stdin: new Blob([dirtyEnvelope]),
+      env: { ...process.env, COMPOST_DATA_DIR: dataDir },
+    });
+    await proc.exited;
+
+    const db = new Database(join(dataDir, "ledger.db"));
+    const row = db
+      .query("SELECT payload FROM observe_outbox WHERE source_id LIKE '%pii-test-token%'")
+      .get() as { payload: string };
+    db.close();
+
+    expect(row.payload).not.toContain("abc.def.ghijklmnopqrstuv");
+    expect(row.payload).toContain("REDACTED_TOKEN");
+  });
+
+  test("COMPOST_PII_STRICT=true redacts raw 13-19 digit sequences (non-Luhn)", async () => {
+    const dirtyEnvelope = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "pii-strict",
+      cwd: "/tmp/test-project",
+      timestamp: new Date().toISOString(),
+      payload: { order: "Order #1234567890123 placed" },
+    });
+    const proc = Bun.spawn(["bun", SHIM_PATH, "pre-tool-use"], {
+      stdin: new Blob([dirtyEnvelope]),
+      env: {
+        ...process.env,
+        COMPOST_DATA_DIR: dataDir,
+        COMPOST_PII_STRICT: "true",
+      },
+    });
+    await proc.exited;
+
+    const db = new Database(join(dataDir, "ledger.db"));
+    const row = db
+      .query("SELECT payload FROM observe_outbox WHERE source_id LIKE '%pii-strict%'")
+      .get() as { payload: string };
+    db.close();
+
+    expect(row.payload).not.toContain("1234567890123");
+    expect(row.payload).toContain("[REDACTED_CC]");
+  });
+
+  test("clean payload passes through unchanged", async () => {
+    const cleanEnvelope = JSON.stringify({
+      hook_event_name: "SessionStart",
+      session_id: "clean-session",
+      cwd: "/tmp/test-project",
+      timestamp: new Date().toISOString(),
+      payload: { note: "Just a plain hello world" },
+    });
+    const proc = Bun.spawn(["bun", SHIM_PATH, "session-start"], {
+      stdin: new Blob([cleanEnvelope]),
+      env: { ...process.env, COMPOST_DATA_DIR: dataDir },
+    });
+    await proc.exited;
+
+    const db = new Database(join(dataDir, "ledger.db"));
+    const row = db
+      .query("SELECT payload FROM observe_outbox WHERE source_id LIKE '%clean-session%'")
+      .get() as { payload: string };
+    db.close();
+
+    expect(row.payload).toContain("Just a plain hello world");
+    expect(row.payload).not.toContain("REDACTED");
+  });
 });

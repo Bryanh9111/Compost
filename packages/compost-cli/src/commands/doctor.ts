@@ -41,6 +41,14 @@ export function registerDoctor(program: Command): void {
       "--check-llm",
       "Ping Ollama with a short probe and report latency / model / setup hint"
     )
+    .option(
+      "--check-pii",
+      "Scan observe_outbox.payload for PII patterns (CC / tokens / keys); report only, no mutation"
+    )
+    .option(
+      "--check-integrity",
+      "Audit schema integrity: orphan observations, dangling fact_links, stale wiki_pages, unknown transform_policy"
+    )
     .action(async (opts) => {
       if (opts.reconcile) {
         const db = openDb();
@@ -351,8 +359,146 @@ export function registerDoctor(program: Command): void {
         }
       }
 
+      if (opts.checkPii) {
+        // Phase 4 P1 / fork-ready open-source gate: surface-only scan for
+        // PII patterns in observe_outbox.payload. No mutation; findings are
+        // reported as JSON so the user can decide remediation (re-ingest
+        // with COMPOST_PII_STRICT=true, quarantine rows, or purge).
+        const { scrub } = await import(
+          "../../../compost-hook-shim/src/pii"
+        );
+        const db = openDb();
+        try {
+          const rows = db
+            .query(
+              "SELECT seq, source_id, payload FROM observe_outbox ORDER BY seq"
+            )
+            .all() as Array<{ seq: number; source_id: string; payload: string }>;
+
+          let rowsWithPii = 0;
+          let totalRedactions = 0;
+          const sampleSources: Array<{ seq: number; source_id: string; redactions: number }> = [];
+
+          for (const row of rows) {
+            const { redactions } = scrub(row.payload);
+            if (redactions > 0) {
+              rowsWithPii++;
+              totalRedactions += redactions;
+              if (sampleSources.length < 5) {
+                sampleSources.push({
+                  seq: row.seq,
+                  source_id: row.source_id,
+                  redactions,
+                });
+              }
+            }
+          }
+
+          process.stdout.write(
+            JSON.stringify(
+              {
+                rows_scanned: rows.length,
+                rows_with_pii: rowsWithPii,
+                total_redactions: totalRedactions,
+                sample_sources: sampleSources,
+                hint:
+                  rowsWithPii > 0
+                    ? "PII found in existing rows. hook-shim scrubs new observations automatically. To scrub existing rows, manually purge or re-ingest with COMPOST_PII_STRICT=true."
+                    : "No PII patterns detected in observe_outbox.",
+              },
+              null,
+              2
+            ) + "\n"
+          );
+          return;
+        } finally {
+          db.close();
+        }
+      }
+
+      if (opts.checkIntegrity) {
+        // Phase 4 P1 / debate 017: one-shot schema integrity audit. Reports
+        // findings as JSON (no fixes applied). Categories:
+        //   orphan_observations: observations with no derivation_run (extraction never happened)
+        //   dangling_fact_links: fact_links whose src/dst fact no longer exists
+        //   stale_wiki_pages: wiki_pages marked stale_at but never resynthesized
+        //   unknown_transform_policies: observations/outbox rows referencing policy ids not in policies table
+        const db = openDb();
+        try {
+          const orphanObs = db
+            .query(
+              `SELECT COUNT(*) AS c FROM observations o
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM derivation_run dr WHERE dr.observe_id = o.observe_id
+               )`
+            )
+            .get() as { c: number };
+
+          const danglingLinks = db
+            .query(
+              `SELECT COUNT(*) AS c FROM fact_links fl
+               WHERE NOT EXISTS (SELECT 1 FROM facts f WHERE f.fact_id = fl.from_fact_id)
+                  OR NOT EXISTS (SELECT 1 FROM facts f WHERE f.fact_id = fl.to_fact_id)`
+            )
+            .get() as { c: number };
+
+          const staleWikiCount = db
+            .query(
+              `SELECT COUNT(*) AS c FROM wiki_pages
+               WHERE stale_at IS NOT NULL
+                 AND (last_synthesis_at IS NULL OR last_synthesis_at < stale_at)`
+            )
+            .get() as { c: number };
+
+          const unknownPolicyOutbox = db
+            .query(
+              `SELECT COUNT(*) AS c FROM observe_outbox o
+               WHERE NOT EXISTS (SELECT 1 FROM policies p WHERE p.policy_id = o.transform_policy)`
+            )
+            .get() as { c: number };
+
+          const unknownPolicyObs = db
+            .query(
+              `SELECT COUNT(*) AS c FROM observations o
+               WHERE NOT EXISTS (SELECT 1 FROM policies p WHERE p.policy_id = o.transform_policy)`
+            )
+            .get() as { c: number };
+
+          const totalIssues =
+            orphanObs.c +
+            danglingLinks.c +
+            staleWikiCount.c +
+            unknownPolicyOutbox.c +
+            unknownPolicyObs.c;
+
+          process.stdout.write(
+            JSON.stringify(
+              {
+                orphan_observations: orphanObs.c,
+                dangling_fact_links: danglingLinks.c,
+                stale_wiki_pages: staleWikiCount.c,
+                unknown_transform_policies: {
+                  in_observe_outbox: unknownPolicyOutbox.c,
+                  in_observations: unknownPolicyObs.c,
+                },
+                total_issues: totalIssues,
+                hint:
+                  totalIssues > 0
+                    ? "Integrity issues detected. Review via `docs/dogfood-notes.md` workflow; no automatic fix applied."
+                    : "Schema integrity checks passed.",
+              },
+              null,
+              2
+            ) + "\n"
+          );
+          return;
+        } finally {
+          db.close();
+        }
+      }
+
       process.stderr.write(
-        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, or --check-llm\n"
+        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, --check-llm, --check-pii, or --check-integrity\n"
       );
       process.exit(1);
     });
