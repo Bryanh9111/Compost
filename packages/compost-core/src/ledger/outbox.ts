@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { v7 as uuidv7 } from "uuid";
+import { computeOriginHash } from "./origin";
 
 /**
  * OutboxEvent — what writers (hook shim, adapters) pass to appendToOutbox.
@@ -177,14 +178,22 @@ export function drainOne(db: Database): DrainResult | null {
         );
       }
 
-      // STEP 4: INSERT the observation
+      // STEP 4: INSERT the observation.
+      // origin_hash + method (Migration 0014) capture the inlet-provenance
+      // signature distinct from content_hash/raw_hash. method mirrors adapter
+      // so the ingest-method taxonomy can diverge later without schema churn.
+      const originHash = computeOriginHash(
+        pending.adapter,
+        pending.source_uri,
+        pending.idempotency_key
+      );
       db.run(
         `INSERT OR IGNORE INTO observations (
           observe_id, source_id, source_uri, occurred_at, captured_at,
           content_hash, raw_hash, raw_bytes, blob_ref, mime_type,
           adapter, adapter_sequence, trust_tier, idempotency_key,
-          transform_policy, metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          transform_policy, metadata, origin_hash, method
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           observeId,
           pending.source_id,
@@ -206,6 +215,8 @@ export function drainOne(db: Database): DrainResult | null {
           parsedPayload.metadata
             ? JSON.stringify(parsedPayload.metadata)
             : null,
+          originHash,
+          pending.adapter,
         ]
       );
 

@@ -87,7 +87,7 @@ describe("graph-health (P0-3, Phase 4 Batch D)", () => {
       "INSERT INTO source VALUES ('s1','file:///x','local-file',NULL,0.0,'user',datetime('now'),NULL)"
     );
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','t',1,'user','i','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','t',1,'user','i','tp-2026-04',NULL,NULL,NULL)"
     );
     for (const f of facts) {
       db.run(

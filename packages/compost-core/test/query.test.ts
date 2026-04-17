@@ -108,7 +108,7 @@ describe("query/search (BM25-only, no vectorStore)", () => {
     db.run("INSERT INTO source VALUES ('s1','file:///test','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
       `INSERT INTO observations VALUES ('obs1','s1','file:///test',datetime('now'),datetime('now'),
-       'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL)`
+       'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)`
     );
     db.run(
       `INSERT INTO facts(fact_id, subject, predicate, object, confidence, importance, observe_id,

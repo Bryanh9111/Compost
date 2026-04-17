@@ -165,7 +165,7 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
       },
     };
     db.run(
-      "INSERT INTO observations VALUES ('obs-corr','claude-code:sess-1:/tmp/x','claude-code://sess-1',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-corr','tp-2026-04',NULL)",
+      "INSERT INTO observations VALUES ('obs-corr','claude-code:sess-1:/tmp/x','claude-code://sess-1',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-corr','tp-2026-04',NULL,NULL,NULL)",
       [Buffer.from(JSON.stringify(envelope))]
     );
 
@@ -187,7 +187,7 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
     );
     const noisyText = "Some markdown with 'I was wrong about' embedded in a quote.";
     db.run(
-      "INSERT INTO observations VALUES ('obs-file','file-src','file:///a.md',datetime('now'),datetime('now'),'h','r',?,NULL,'text/plain','test',1,'user','idem-file','tp-2026-04',NULL)",
+      "INSERT INTO observations VALUES ('obs-file','file-src','file:///a.md',datetime('now'),datetime('now'),'h','r',?,NULL,'text/plain','test',1,'user','idem-file','tp-2026-04',NULL,NULL,NULL)",
       [Buffer.from(noisyText)]
     );
     const result = scanObservationForCorrection(db, "obs-file");
@@ -206,7 +206,7 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
       payload: { prompt: "hello world" }, // no correction pattern
     };
     db.run(
-      "INSERT INTO observations VALUES ('obs-clean','claude-code:sess-2:/x','claude-code://sess-2',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-clean','tp-2026-04',NULL)",
+      "INSERT INTO observations VALUES ('obs-clean','claude-code:sess-2:/x','claude-code://sess-2',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-clean','tp-2026-04',NULL,NULL,NULL)",
       [Buffer.from(JSON.stringify(envelope))]
     );
     expect(scanObservationForCorrection(db, "obs-clean").eventId).toBeNull();
@@ -221,7 +221,7 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
       "INSERT INTO source VALUES ('claude-code:sess-3:/y','claude-code://sess-3','claude-code',NULL,0.0,'first_party',datetime('now'),NULL)"
     );
     db.run(
-      "INSERT INTO observations VALUES ('obs-bad','claude-code:sess-3:/y','claude-code://sess-3',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-bad','tp-2026-04',NULL)",
+      "INSERT INTO observations VALUES ('obs-bad','claude-code:sess-3:/y','claude-code://sess-3',datetime('now'),datetime('now'),'h','r',?,NULL,'application/json','claude-code',1,'first_party','idem-bad','tp-2026-04',NULL,NULL,NULL)",
       [Buffer.from("not valid json {{")]
     );
     expect(scanObservationForCorrection(db, "obs-bad").eventId).toBeNull();

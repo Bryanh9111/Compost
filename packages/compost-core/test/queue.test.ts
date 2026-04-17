@@ -22,7 +22,7 @@ function seedTestData(db: Database, count: number = 1): string[] {
     const obsId = `obs-${i}`;
     observeIds.push(obsId);
     db.run(
-      `INSERT INTO observations VALUES (?,  's1','file:///test',datetime('now'),datetime('now'),'h${i}','r${i}',NULL,NULL,'text/plain','test',${i},'user','idem${i}','tp-2026-04',NULL)`,
+      `INSERT INTO observations VALUES (?,  's1','file:///test',datetime('now'),datetime('now'),'h${i}','r${i}',NULL,NULL,'text/plain','test',${i},'user','idem${i}','tp-2026-04',NULL,NULL,NULL)`,
       [obsId]
     );
     db.run(

@@ -36,7 +36,7 @@ describe("facts.archive_reason / replaced_by_fact_id / revival_at (P0-4)", () =>
     // Seed minimal observation chain
     db.run("INSERT INTO source VALUES ('s1','file:///t','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)"
     );
     db.run(
       "INSERT INTO facts(fact_id, subject, predicate, object, observe_id) VALUES ('f1','s','p','o','obs1')"
@@ -52,7 +52,7 @@ describe("facts.archive_reason / replaced_by_fact_id / revival_at (P0-4)", () =>
   test("archive_reason accepts all 6 valid values", () => {
     db.run("INSERT INTO source VALUES ('s1','file:///t','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)"
     );
     const validReasons = [
       "stale",
@@ -78,7 +78,7 @@ describe("facts.archive_reason / replaced_by_fact_id / revival_at (P0-4)", () =>
   test("replaced_by_fact_id REFERENCES facts(fact_id)", () => {
     db.run("INSERT INTO source VALUES ('s1','file:///t','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///t',datetime('now'),datetime('now'),'h1','r1',NULL,NULL,'text/plain','test',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)"
     );
     db.run(
       "INSERT INTO facts(fact_id, subject, predicate, object, observe_id) VALUES ('f1','s','p','o','obs1')"

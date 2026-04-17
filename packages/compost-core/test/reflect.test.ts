@@ -20,7 +20,7 @@ function insertObservation(
   daysAgo: number
 ): void {
   db.run(
-    `INSERT INTO observations VALUES (?,?,?,datetime('now', ? || ' days'),datetime('now', ? || ' days'),'h','r',NULL,NULL,'text/plain','test',1,'user',?,'tp-2026-04',NULL)`,
+    `INSERT INTO observations VALUES (?,?,?,datetime('now', ? || ' days'),datetime('now', ? || ' days'),'h','r',NULL,NULL,'text/plain','test',1,'user',?,'tp-2026-04',NULL,NULL,NULL)`,
     [obsId, sourceId, `file:///${sourceId}`, -daysAgo, -daysAgo, `idem-${obsId}`]
   );
 }

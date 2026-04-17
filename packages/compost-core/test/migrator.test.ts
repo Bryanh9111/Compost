@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 13 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 14 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(13);
+    expect(result.applied).toHaveLength(14);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -39,6 +39,7 @@ describe("migrator", () => {
       "0011_fact_links_and_health_fix",
       "0012_correction_signal_kind",
       "0013_wiki_stale_at",
+      "0014_origin_hash_and_method",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -123,7 +124,7 @@ describe("migrator", () => {
     // Insert test data chain: source -> observation -> facts + ingest_queue + captured_item
     db.run("INSERT INTO source VALUES ('s1','file:///test','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///test',datetime('now'),datetime('now'),'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///test',datetime('now'),datetime('now'),'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)"
     );
     db.run("INSERT INTO ingest_queue(observe_id, source_kind, priority) VALUES ('obs1','local-file',1)");
     db.run("INSERT INTO captured_item VALUES ('s1','ext1',datetime('now'),'obs1')");
@@ -149,7 +150,7 @@ describe("migrator", () => {
 
     db.run("INSERT INTO source VALUES ('s1','file:///test','local-file',NULL,0.0,'user',datetime('now'),NULL)");
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///test',datetime('now'),datetime('now'),'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///test',datetime('now'),datetime('now'),'hash1','raw1',NULL,NULL,'text/plain','test-adapter',1,'user','idem1','tp-2026-04',NULL,NULL,NULL)"
     );
     db.run(
       "INSERT INTO observe_outbox(adapter,source_id,source_kind,source_uri,idempotency_key,trust_tier,transform_policy,payload,drained_at,observe_id) VALUES ('test','s1','local-file','file:///test','idem1','user','tp-2026-04','{}',datetime('now'),'obs1')"
@@ -167,12 +168,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(13);
+    expect(before.pending).toHaveLength(14);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(13);
+    expect(after.applied).toHaveLength(14);
     expect(after.pending).toHaveLength(0);
   });
 

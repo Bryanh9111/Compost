@@ -292,7 +292,7 @@ describe("backup (P0-7, Phase 4 Batch D)", () => {
       "INSERT INTO source VALUES ('s1','file:///x','local-file',NULL,0.0,'user',datetime('now'),NULL)"
     );
     db.run(
-      "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','t',1,'user','i','tp-2026-04',NULL)"
+      "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','t',1,'user','i','tp-2026-04',NULL,NULL,NULL)"
     );
     db.run(
       "INSERT INTO facts(fact_id, subject, predicate, object, observe_id) VALUES ('f1','a','b','c','obs1')"

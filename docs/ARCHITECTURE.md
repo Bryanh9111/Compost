@@ -1,5 +1,22 @@
 # Compost Architecture
 
+## Product identity
+
+Compost is a **personal AI brain and analysis partner** (not a tool, a
+partner). Single-user, local-first, designed for 10+ year continuous
+personalization. Distributed as a fork template — you clone it empty
+and grow it; there is no server, no account, no shared instance.
+
+Compost is the **substrate** side of a two-system stack. The sibling
+system, [Engram](https://github.com/Bryanh9111/Engram), is the
+hippocampus — zero-LLM fast recall over personal memory. They talk
+through a **bidirectional core channel** (not opt-in): Engram events
+flow into Compost as a new ingest source; Compost's synthesized
+insights flow back to Engram as new entries. Either side works alone.
+
+See `docs/CONCEPTS.md` for the L1-L6 self-evolution model and the
+provenance chain, `docs/QUICKSTART.md` for a 5-minute hands-on.
+
 ## System overview
 
 Compost is a **4-layer knowledge base** with an append-only provenance ledger as the source of truth. All knowledge flows through a single write pipeline (`observe -> drain -> extract -> store`), regardless of whether the source is a local file, web URL, or Claude Code conversation.

@@ -31,7 +31,7 @@ import { CircuitBreakerLLM } from "../src/llm/circuit-breaker";
 const SOURCE_ROW =
   "INSERT INTO source VALUES ('s1','file:///x','local-file',NULL,0.0,'user',datetime('now'),NULL)";
 const OBS_ROW =
-  "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','payload',1,'user','idem','tp-2026-04',NULL)";
+  "INSERT INTO observations VALUES ('obs1','s1','file:///x',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','payload',1,'user','idem','tp-2026-04',NULL,NULL,NULL)";
 
 function seedBase(db: Database): void {
   db.run(SOURCE_ROW);
