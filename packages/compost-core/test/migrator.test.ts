@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 14 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 15 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(14);
+    expect(result.applied).toHaveLength(15);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -40,6 +40,7 @@ describe("migrator", () => {
       "0012_correction_signal_kind",
       "0013_wiki_stale_at",
       "0014_origin_hash_and_method",
+      "0015_user_model_schema",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -85,6 +86,9 @@ describe("migrator", () => {
       "ranking_profile",
       "source",
       "source_context",
+      "user_pattern_events",      // 0015 user model schema
+      "user_pattern_observations",// 0015
+      "user_patterns",            // 0015
       "web_fetch_state",
       "wiki_page_observe",
       "wiki_page_versions",
@@ -168,12 +172,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(14);
+    expect(before.pending).toHaveLength(15);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(14);
+    expect(after.applied).toHaveLength(15);
     expect(after.pending).toHaveLength(0);
   });
 
