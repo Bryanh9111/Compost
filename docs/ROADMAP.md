@@ -349,14 +349,28 @@ Opus; Codex timed out).
     unnecessary: Migration 0014 was always adapter|source_uri|idempotency
     based, never content-hash. Zero migration needed.
   - Tests: 416 → 443 (+27). 16 stream-puller + 11 ingest-adapter.
-- 📋 **Session 6** (next) — concrete MCP clients + reconcile tool
-  - Concrete `EngramMcpClient` (S4 writer dependency) and
-    `EngramStreamClient` (S5 puller dependency) MCP transport
-    implementations — live in compost-daemon or CLI layer, not adapter.
+- ✅ **Session 6 slice 1** (commit `39bec88`, 2026-04-17) — concrete read transport + daemon poller + CLI
+  - `cli-stream-client.ts` — `CliEngramStreamClient` spawns
+    `engram export-stream` subprocess, parses JSONL, re-validates via
+    the S5 zod schema. Injectable `SpawnFn` for tests. All failures
+    surface as `MCPCallResult` errors with line number + memory_id for
+    drift diagnosis.
+  - `compost-daemon/src/engram-poller.ts` — `startEngramPoller(db, opts)`
+    mirrors `startIngestWorker` shape; wraps `StreamPuller.pullAll` +
+    `ingestEngramEntry`. `runEngramPullOnce` exposed for CLI trigger.
+  - `compost-cli`: `compost engram-pull [--dry-run] [--project] [--kinds]`
+    manual trigger. JSON stats to stdout.
+  - Tests: 443 → 462 (+19). Engram CLI `invalidate_compost_fact` has no
+    equivalent subcommand, so write-path concrete transport is deferred
+    — read path was the strategic priority (Phase 6 Curiosity needs
+    Engram events flowing into Compost).
+- 📋 **Session 6 slice 2** (next) — write-path concrete + reconcile
+  - Concrete `EngramMcpClient` for S4 writer: needs MCP-over-stdio to
+    reach `mcp__engram__remember` + `mcp__engram__invalidate_compost_fact`
+    (Engram CLI lacks the invalidate subcommand).
   - `compost doctor --reconcile-engram` cross-checks
     `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
-    orphaned invalidate-without-remember (R5 blind-write mitigation
-    materializes via this tool once both directions are runtime-stable).
+    orphaned invalidate-without-remember (R5 blind-write mitigation).
 
 **Engram coupling invariants honored**:
 
