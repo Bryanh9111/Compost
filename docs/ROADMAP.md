@@ -290,43 +290,72 @@ Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
   - Docs split: `QUICKSTART.md` / `CONCEPTS.md` / augmented `ARCHITECTURE.md`; +8 tests
   - Bench regression verified: reflect-10k -0.3%, query-10k +1% (well under 5% threshold)
 
-### Phase 5 — Engram integration + user model foundation (🔓 unblocked 2026-04-17)
+### Phase 5 — Engram integration + user model foundation (🚧 in progress)
 
-**Blocker cleared**: Engram v3.4 Slice B Phase 2 S2 shipped at `main @ ea223fa`.
-See `docs/phase-5-open-questions.md` + `docs/phase-5-user-model-design.md` for
-pre-work (commit `d88f98d`); contract + probe aligned in commit `e750222`.
+**Blocker cleared** 2026-04-17: Engram v3.4 Slice B Phase 2 S2 shipped at
+`main @ ea223fa` (Engram now `main @ 0ee0580` with ARCHITECTURE.md §7 as
+canonical contract reference; zero structural drift from our plan).
 
-- `packages/compost-engram-adapter` — bidirectional channel implementation
-  - **Pull**: Compost subscribes to Engram event stream via
-    `mcp__engram__stream_for_compost(since, kinds, project, limit=1000)` —
-    batched polling, dedupe by `memory_id`
-  - **Push**: Compost writes back synthesized `insight` entries via
-    `mcp__engram__remember(origin='compost', kind='insight', source_trace={...}, expires_at=...)`.
-    The write path reuses existing `remember`; no separate tool. Engram's
-    `_map_insight_sources` auto-fills the sources table from `compost_fact_ids`.
-  - **Invalidate**: `mcp__engram__invalidate_compost_fact(fact_ids[])` on
-    fact supersession. Soft delete, 30-day grace, pinned entries also affected
-    by design.
-  - Failure modes: either side down → the other runs normally (HC-1). Pending
-    writes queue in `~/.compost/pending-engram-writes.db`.
-  - Start-of-work check: `bun scripts/probe-engram-readiness.ts`.
-- `user_patterns` schema (Compost side derivation layer, not raw user state)
-  - See `docs/phase-5-user-model-design.md` for the Compost/Engram boundary:
-    raw `preference` / `goal` / `habit` kinds live in Engram; Compost derives
-    `writing_style` / `decision_heuristic` / `blind_spot` / `recurring_question` /
-    `skill_growth` patterns with provenance back to observations.
-  - Proposed migration 0015: `user_patterns` + `user_pattern_observations` +
-    `user_pattern_events`. Schema ships in Phase 5; populating logic in Phase 7.
-- `compost.observe` extension: support Engram-origin observations
-  (`adapter=engram`, metadata includes `memory_id`)
+Session plan per debate 020 synthesis (Compost side,
+`debates/020-phase-5-session-4-slicing/`): split the full ~800 LoC scope
+into write-path-first / read-path-next / reconcile-last to let each
+session ship independently and testable. Debate 020 verdict Option B
+(write-path vertical) was unanimous across 3 respondents (Gemini, Sonnet,
+Opus; Codex timed out).
 
-**Two open questions resolved** (`docs/phase-5-open-questions.md`):
+- ✅ **Session 4** (commit `1e6837b`, 2026-04-17) — write path + user model schema
+  - Migration 0015: `user_patterns` + `user_pattern_observations` +
+    `user_pattern_events` (derived user model, Phase 7 populates)
+  - `packages/compost-engram-adapter/` new workspace:
+    - `constants.ts` — frozen UUIDv5 namespace, 90-day `expires_at`, 2000-char
+      cap, 0.75 Engram dedupe ceiling, `~/.compost/pending-engram-writes.db`
+    - `splitter.ts` — deterministic `root_insight_id` from
+      `uuidv5(ns, project + '|' + sorted_fact_ids)`; paragraph →
+      sentence → hard-cut fallback; `checkAdjacentSimilarity` Jaccard
+      detector (R6 — Engram's `INSERT OR IGNORE` + content-similarity
+      dedupe would silently merge adjacent chunks crossing 0.75)
+    - `pending-writes.ts` — SQLite offline queue with `pair_id` two-phase
+      log (R1 — invalidate+re-remember gap) and `pruneExpired(graceMs)`
+      (R2 — TTL drift from long-delayed flushes)
+    - `writer.ts` — `validateSourceTrace` zod at the writer boundary
+      (R3 — catches typo'd field names like `compost_fact_id` singular
+      that would silently slip past Engram's `_map_insight_sources`);
+      `writeInsight` / `invalidateFacts` / `flushPending`; takes
+      `EngramMcpClient` interface so the concrete MCP glue lives outside
+      the adapter
+  - Tests: 374 → 416 (+42), typecheck clean, bench unchanged
+- 🚧 **Session 5** (next) — read path + ingest adapter
+  - `stream-puller.ts` polling
+    `mcp__engram__stream_for_compost(since, limit=1000)` with
+    cursor-based batching; dedupe by `memory_id`
+  - Ingest adapter: Engram entry → observation with `source_kind=engram`,
+    `idempotency_key=engram:<memory_id>`
+  - **Pre-work**: reconcile with Migration 0014 `origin_hash` path —
+    Engram-sourced observations need `origin_hash` computed from
+    `memory_id`, not content hash (else Engram content-edits would look
+    like new observations). Decide: Migration 0016 for `source_kind=engram`
+    bypass, or adapter-side convention using `idempotency_key` as the
+    hash input.
+- 📋 **Session 6** (follow-up) — reconcile tool
+  - `compost doctor --reconcile-engram` cross-checks
+    `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
+    orphaned invalidate-without-remember (R5 blind-write mitigation
+    materializes via Session 5's read path + this tool)
 
-- Insight chunking uses `source_trace` JSON (`root_insight_id` + `chunk_index` +
-  `total_chunks`) — zero Engram schema change.
-- `expires_at` default = `synthesized_at + 90 days`, overridable per synthesis
-  producer. 2000-char per-entry self-split retained; revisit after real
-  insight length distribution is observable.
+**Engram coupling invariants honored**:
+
+- Pull (Engram → Compost): `mcp__engram__stream_for_compost(since, kinds, project, include_compost=False, limit=1000)` excludes `origin=compost` entries by default to prevent Compost re-ingesting its own outputs (Engram ARCHITECTURE §7.1).
+- Push (Compost → Engram): reuses `mcp__engram__remember(origin='compost', kind='insight', source_trace, expires_at)`. Engram's `_map_insight_sources` auto-fills `compost_insight_sources` from `source_trace.compost_fact_ids`. No separate write tool.
+- Invalidate: `mcp__engram__invalidate_compost_fact(fact_ids[])` — soft delete with 30-day physical-purge grace; pinned `origin=compost` entries also invalidated by design (Compost is not a human — Engram ARCHITECTURE §4.2).
+- Independence (HC-1): either side down, the other runs normally. Failed writes queue locally in `~/.compost/pending-engram-writes.db`.
+- Readiness probe: `bun scripts/probe-engram-readiness.ts`.
+
+**Open questions resolved** (`docs/phase-5-open-questions.md`):
+
+- Insight chunking uses `source_trace` JSON (`root_insight_id` + `chunk_index` + `total_chunks`) — zero Engram schema change.
+- `expires_at` default = `synthesized_at + 90 days`, overridable per synthesis producer. 2000-char per-entry self-split retained.
+
+**Compost/Engram user model boundary**: raw `preference` / `goal` / `habit` kinds live in Engram (its anchor v2). Compost derives `writing_style` / `decision_heuristic` / `blind_spot` / `recurring_question` / `skill_growth` patterns over observations + facts. See `docs/phase-5-user-model-design.md`.
 
 ### Phase 6 — Autonomous exploration (L4)
 
