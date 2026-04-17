@@ -191,19 +191,19 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - `docs/QUICKSTART.md` — 5-minute hands-on from clone to first query
 - `docs/CONCEPTS.md` — L1-L6 self-evolution, provenance, decay, Compost ↔ Engram bridge
 - `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
-- `docs/ROADMAP.md` — Phase 4 (shipped) → Phase 5 S4 (write path shipped) → S5 (read path next) → 6-8
+- `docs/ROADMAP.md` — Phase 4 (shipped) → Phase 5 S4+S5 (write + read paths shipped) → S6 (reconcile next) → 6-8
 - `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
 - `docs/phase-5-open-questions.md`, `docs/phase-5-user-model-design.md` — Phase 5 pre-work
 - `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`
 - Full v2 spec: `docs/compost-v2-spec.md`
-- Debate records: `debates/001-020/` (020 = Phase 5 S4 slicing verdict)
+- Debate records: `debates/001-021/` (021 = Phase 5 S5 slicing verdict, read path)
 
 ## Stats
 
 - **~17K lines** of TypeScript + ~800 lines Python
-- **416 tests**, 0 failures
+- **443 tests**, 0 failures
 - **15 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema shipped in 0015)
-- **21 architecture debates** with 4 AI reviewers (`debates/001-020`)
+- **22 architecture debates** with 4 AI reviewers (`debates/001-021`)
 - **3 transform policies** (local file, web content, LLM fact extraction)
 - **Provenance**: 4 hashes per observation (content, raw, origin, idempotency)
 

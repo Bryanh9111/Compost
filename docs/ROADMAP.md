@@ -324,23 +324,39 @@ Opus; Codex timed out).
       `EngramMcpClient` interface so the concrete MCP glue lives outside
       the adapter
   - Tests: 374 → 416 (+42), typecheck clean, bench unchanged
-- 🚧 **Session 5** (next) — read path + ingest adapter
-  - `stream-puller.ts` polling
-    `mcp__engram__stream_for_compost(since, limit=1000)` with
-    cursor-based batching; dedupe by `memory_id`
-  - Ingest adapter: Engram entry → observation with `source_kind=engram`,
-    `idempotency_key=engram:<memory_id>`
-  - **Pre-work**: reconcile with Migration 0014 `origin_hash` path —
-    Engram-sourced observations need `origin_hash` computed from
-    `memory_id`, not content hash (else Engram content-edits would look
-    like new observations). Decide: Migration 0016 for `source_kind=engram`
-    bypass, or adapter-side convention using `idempotency_key` as the
-    hash input.
-- 📋 **Session 6** (follow-up) — reconcile tool
+- ✅ **Session 5** (commit `9bedac7`, 2026-04-17) — read path + ingest adapter
+  - Verdict via debate 021 (Option E over F; synthesis in
+    `debates/021-phase-5-session-5-slicing/`). F was rejected on two
+    concrete blockers: (1) schema/0005_merged_outbox.sql:14 source_kind
+    CHECK excludes 'engram'; (2) scheduler.ts:286 Python extractor
+    subprocess would hallucinate facts from pre-structured Engram
+    payloads. 2-1 (Gemini F, Sonnet E, Opus E), Codex non-participating.
+  - `stream-puller.ts` — `EngramStreamClient` interface, 9-key zod
+    schema (`engramStreamEntrySchema`) per ARCHITECTURE.md §7.1,
+    cursor at `~/.compost/engram-cursor.json` (since + last_memory_id),
+    crash-safe `pullAll(onBatch)` saving cursor only after successful
+    ingest, `include_compost=false` hardcoded.
+  - `ingest-adapter.ts` — `ensureEngramSource(db)` seeds
+    `source.id='engram-stream', kind='sensory'` (reused per debate 021
+    synthesis; Migration 0017 only if Phase 7 exposes ambiguity).
+    `ingestEngramEntry` directly INSERTs observations + facts + chunks
+    in one transaction, skipping ingest_queue + Python extractor (R2
+    mitigation — pre-structured Engram payloads don't need NLP).
+    origin_hash = SHA-256(adapter|source_uri|idempotency_key) per
+    Migration 0014 contract. `defaultSpoMapper` best-effort
+    kind→predicate mapping; injectable for Phase 7 refinement (R3).
+  - Origin-hash reconciliation (flagged in S4 wrap as pre-work) was
+    unnecessary: Migration 0014 was always adapter|source_uri|idempotency
+    based, never content-hash. Zero migration needed.
+  - Tests: 416 → 443 (+27). 16 stream-puller + 11 ingest-adapter.
+- 📋 **Session 6** (next) — concrete MCP clients + reconcile tool
+  - Concrete `EngramMcpClient` (S4 writer dependency) and
+    `EngramStreamClient` (S5 puller dependency) MCP transport
+    implementations — live in compost-daemon or CLI layer, not adapter.
   - `compost doctor --reconcile-engram` cross-checks
     `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
     orphaned invalidate-without-remember (R5 blind-write mitigation
-    materializes via Session 5's read path + this tool)
+    materializes via this tool once both directions are runtime-stable).
 
 **Engram coupling invariants honored**:
 
