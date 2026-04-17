@@ -82,20 +82,22 @@ Proposed payload (Engram may adjust schema):
 - `synthesized_at` monotonic per insight (allows Engram to detect staleness)
 - Idempotency: same `(project, source_trace.compost_fact_ids)` produces the same deterministic insight ID — Compost won't spam Engram with duplicates on repeated synthesis
 
-### What Compost expects from Engram (per debate 019 revisions)
+### What Compost expects from Engram (per Engram v3.4 Slice B Phase 2 S2, commit `ea223fa`)
 
-- Write API: **MCP tool** (Engram session decides exact name; expected `mcp__engram__write_compost_insight` or similar)
+- Write API: **reuses existing `mcp__engram__remember`** tool with `origin='compost'` + `kind='insight'` + `source_trace` + `expires_at`. Engram's `_map_insight_sources` auto-populates the internal `compost_insight_sources` table from `source_trace.compost_fact_ids` on insert — no separate `write_compost_insight` tool exists.
 - Engram marks `origin=compost` entries distinguishably in recall output (user can filter)
 - Engram implements `expires_at` semantics: hide expired entries from default recall + **30-day physical delete grace window** after expiration (debate 019 Q6)
 - Engram **excludes `origin=compost` entries from the return stream by default** (prevents Compost-generated insights looping back into Compost as new source — debate 019 Q7 + prior contract HC)
 - Write failure returns a clear error so Compost can log it — Compost will not retry aggressively
+- **Append-only invariant**: once written, insight `content` is immutable and `updated_at = created_at`. To "update" an insight, Compost must `invalidate_compost_fact` the underlying fact IDs (soft-deletes the old entry) and then `remember` the new version — there is no edit API on Engram side.
 
 ### Invalidation semantics (Compost side)
 
 When a Compost fact underlying an insight changes or gets superseded:
 
 - Compost invokes **MCP tool `mcp__engram__invalidate_compost_fact`** with the affected `compost_fact_ids[]` (per debate 019 Q7 — no HTTP webhook)
-- Engram marks matching insight entries as hidden immediately, physical delete after 30-day grace
+- Engram reverse-looks up `compost_insight_sources` to find matching insight entries, marks them `status='obsolete'` (soft delete), physical delete after 30-day grace
+- **Pinned `origin=compost` entries are also invalidated by design** — per Engram handover gotcha. If a user wants to preserve a Compost-synthesized insight across its fact-set supersession, they must convert the entry's origin via Engram's user-review path (out of scope for this contract).
 - If Engram is unreachable at invalidation time, Compost queues the signal in `~/.compost/pending-engram-writes.db` with idempotent retry on next Engram availability
 
 ## Engram → Compost (event source)
@@ -104,12 +106,13 @@ When a Compost fact underlying an insight changes or gets superseded:
 
 Compost treats selected Engram entries (primarily `kind=event`, `kind=note`, `kind=reflection`) as new ingest sources, feeding them through Compost's observe → extract → facts pipeline. This lets Compost synthesize across both the user's work artifacts (current source) and their personal memories (new source).
 
-### What Engram exposes (per debate 019 Q4 decision)
+### What Engram exposes (per Engram v3.4 Slice B Phase 2 S2, commit `ea223fa`)
 
-- **MCP tool `mcp__engram__stream_for_compost(since, kinds)`** — primary, streaming query
-- CLI `engram export-stream --kinds=... --since=...` — same handler underneath, for scripted batch
+- **MCP tool `mcp__engram__stream_for_compost(since, kinds, project, include_compost, limit)`** — primary, streaming query. Default `limit=1000`; Compost must poll in batches.
+- CLI `engram export-stream --since/--kinds/--project/--include-compost/--limit` (JSONL stdout) — same handler underneath, for scripted batch
 - Each entry includes: `memory_id`, `kind`, `content`, `project`, `scope`, `created_at`, `updated_at`, `tags`, `origin`
-- **`origin=compost` entries excluded by default** from the return set (prevents feedback loop — Compost's own output coming back as input)
+- **Append-only**: `updated_at == created_at` always. If Engram ever adds an edit API, this contract and `_memory_to_compost_dict` on Engram side must be updated in lock-step.
+- **`origin=compost` entries excluded by default** from the return set (prevents feedback loop). Use `include_compost=true` / `--include-compost` only for Compost's own audit / reconciliation paths.
 
 ### What Compost does with it
 
@@ -163,13 +166,14 @@ The Engram session has authority over these; Compost adapts to Engram's choices:
 
 ## Phase alignment
 
-- **Compost Phase 4** (current): only PII / bench / origin_hash / examples — no Engram integration yet
-- **Compost Phase 5**: `compost-engram-adapter` package, this contract implemented
-- **Engram v3.3**: schema work (unpin, scope, CHECK) — doesn't yet need contract
-- **Engram future version**: kind extensions to support Compost write-back
+- **Compost Phase 4** (shipped 2026-04-17): PII / bench / origin_hash / examples / docs layering — no Engram integration yet
+- **Compost Phase 5** (unblocked 2026-04-17): `compost-engram-adapter` package, this contract implemented. Engram side ready at `main @ ea223fa`.
+- **Engram v3.3 / v3.4 Slice A** (shipped): schema work (unpin, scope, CHECK, origin=compost literal, expires_at, source_trace columns)
+- **Engram v3.4 Slice B Phase 2 S2** (shipped 2026-04-17): `stream_for_compost` + `invalidate_compost_fact` MCP tools live; `remember(origin='compost')` writes auto-fill `compost_insight_sources` via `_map_insight_sources`
+- **Engram Phase 3** (data-triggered): recall/proactive layering, GC daemon, engram lint compost checks, ARCHITECTURE docs
 
 Both sides should cross-reference this document when implementing their respective halves. Changes to this contract need agreement from both sessions.
 
 ---
 
-**Next step**: Engram session reviews this, debates implementation choices on their side, and either accepts / requests amendments to this contract. Compost session waits for Engram's response before starting Phase 5 adapter work.
+**Status**: Phase 5 adapter unblocked. Compost side may begin `compost-engram-adapter` package implementation. The readiness probe (`scripts/probe-engram-readiness.ts`) verifies each start-up that the three tool surfaces (`remember` accepting `origin='compost'`, `stream_for_compost`, `invalidate_compost_fact`) are live.

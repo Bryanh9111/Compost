@@ -3,18 +3,26 @@
  * Phase 5 gate: probe whether Engram is ready for `compost-engram-adapter`
  * implementation to begin.
  *
- * Per v7 handover + debate 019, the Engram Phase 2 first commit must
- * expose the three MCP tools Compost will consume, plus the API-surface
- * invariant test and the schema/drift-whitelist doc:
+ * Per Engram handover `af46ee1753a1` (v3.4 Slice B Phase 2 S2 complete,
+ * main @ ea223fa), the three write/read/invalidate surfaces Compost
+ * needs are:
  *
- *   mcp__engram__write_compost_insight
- *   mcp__engram__stream_for_compost
- *   mcp__engram__invalidate_compost_fact
+ *   remember(origin='compost', kind='insight', ...)   [reused existing tool]
+ *   stream_for_compost(since, kinds, project, ...)    [new]
+ *   invalidate_compost_fact(fact_ids[])               [new]
+ *
+ * Plus the API-surface invariant test and drift-whitelist doc on the
+ * Engram side:
+ *
  *   tests/test_api_surface_coverage.py  (Engram repo)
  *   docs/non-exposed-schema-fields.md   (Engram repo)
  *
- * The schema side must also include `origin=compost` as a CHECK-enforced
- * literal (debate 019) and the `compost_cache` table DDL (debate 016).
+ * Schema side (already shipped in Engram v3.3 / v3.4 Slice A):
+ *   memories.origin CHECK includes 'compost'
+ *   memories.scope column present
+ *   memories.expires_at column present
+ *   memories.source_trace column present
+ *   compost_cache table DDL present
  *
  * Usage:
  *   bun scripts/probe-engram-readiness.ts
@@ -25,6 +33,11 @@
  *   0  — all required signals present, Phase 5 adapter coding can start
  *   1  — at least one required signal missing
  *   2  — probe itself failed (unexpected error)
+ *
+ * Note: this script cannot call MCP directly. It verifies schema via
+ * the on-disk SQLite DB and reports the expected MCP tool manifest. An
+ * agent session must cross-check tool availability via ToolSearch /
+ * equivalent MCP introspection.
  */
 import { existsSync, readFileSync } from "fs";
 import { join, resolve } from "path";
@@ -40,11 +53,17 @@ interface Check {
   required: boolean;
 }
 
+// Two new MCP tools from Engram v3.4 Slice B Phase 2 S2. The write path
+// reuses the existing `mcp__engram__remember` with `origin='compost'`;
+// Engram's `_map_insight_sources` auto-fills the insight-sources table.
 const REQUIRED_MCP_TOOLS = [
-  "mcp__engram__write_compost_insight",
   "mcp__engram__stream_for_compost",
   "mcp__engram__invalidate_compost_fact",
 ];
+
+// The write path reuses an existing tool. Verified via its schema description
+// (must mention `compost` in the origin vocabulary).
+const REUSED_WRITE_TOOL = "mcp__engram__remember";
 
 const REQUIRED_ENGRAM_FILES = [
   "tests/test_api_surface_coverage.py",
@@ -236,21 +255,30 @@ function checkEngramRepo(repoPath: string | undefined): Check[] {
 }
 
 function checkMcpTools(): Check[] {
-  // Compost has no direct MCP introspection. This probe checks the contract
-  // doc's declared tool list — the actual availability check must happen in
-  // an agent session with MCP access (Claude Code's ToolSearch), or by
-  // invoking a tool and catching the MethodNotFound error.
-  //
-  // We still emit the expected-tool manifest so the operator can cross-check
-  // by hand or pipe to a downstream agent.
-  return REQUIRED_MCP_TOOLS.map((tool) => ({
+  // Compost has no direct MCP introspection. This probe emits the expected
+  // tool manifest and requires an agent session (Claude Code's ToolSearch or
+  // equivalent MCP introspection) to cross-verify tool availability. We mark
+  // each as unverifiable-from-here with status=fail so the gate remains
+  // conservative — the agent must explicitly confirm.
+  const checks: Check[] = REQUIRED_MCP_TOOLS.map((tool) => ({
     id: `mcp:${tool}`,
     label: `MCP tool declared: ${tool}`,
     pass: false,
     detail:
-      "probe cannot call MCP directly — verify in an agent session via ToolSearch",
+      "probe cannot call MCP directly — agent session must verify via ToolSearch",
     required: true,
   }));
+  // Reused write tool: describe but don't gate (its existence is assumed —
+  // it's the baseline Engram tool).
+  checks.push({
+    id: `mcp:${REUSED_WRITE_TOOL}-compost-origin`,
+    label: `${REUSED_WRITE_TOOL} accepts origin='compost'`,
+    pass: false,
+    detail:
+      "probe cannot call MCP directly — agent must inspect tool schema to confirm 'compost' is in Origins vocabulary",
+    required: true,
+  });
+  return checks;
 }
 
 function main(): never {

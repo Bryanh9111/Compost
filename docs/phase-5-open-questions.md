@@ -151,12 +151,13 @@ After these resolutions, Phase 5 adapter can:
 - ✅ Design the `expires_at` computation per synthesis producer.
 - ✅ Write the pending-writes queue schema (knows it batches by `root_insight_id`).
 
-Still blocked by Engram Phase 2:
+Unblocked by Engram v3.4 Slice B Phase 2 S2 (2026-04-17, commit `ea223fa`):
 
-- ⏸ Actually calling `mcp__engram__write_compost_insight` / `stream_for_compost` / `invalidate_compost_fact` — tools not yet MCP-exposed (Engram Phase 2 P0).
-- ⏸ Cross-stack integration tests — need a real Engram with the new MCP tools.
+- ✅ `mcp__engram__remember(origin='compost', ...)` writes with auto `compost_insight_sources` mapping via Engram's `_map_insight_sources` — the write path **reuses** the existing tool rather than adding a new one. This simplifies the Compost adapter: one less tool to mock.
+- ✅ `mcp__engram__stream_for_compost` live with `limit=1000` default — Compost must poll in batches.
+- ✅ `mcp__engram__invalidate_compost_fact` live. Note: **pinned `origin=compost` entries are also invalidated** by design per Engram handover gotcha.
 
-The probe script (`scripts/probe-engram-readiness.ts`, Phase 5 track A) gates the unblock.
+The probe script (`scripts/probe-engram-readiness.ts`, Phase 5 track A) is the start-of-adapter gate. An agent session must ToolSearch-verify the two new tools are loaded (`mcp__engram__remember`'s schema already shows `origin` vocabulary includes `compost`).
 
 ---
 
