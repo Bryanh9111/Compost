@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "compost-core": "workspace:*",
+    "compost-engram-adapter": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "pino": "^9.6.0",
     "uuid": "^11.1.0"

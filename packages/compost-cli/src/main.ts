@@ -10,6 +10,7 @@ import { registerDrain } from "./commands/drain";
 import { registerBackup, registerRestore } from "./commands/backup";
 import { registerAudit } from "./commands/audit";
 import { registerTriage } from "./commands/triage";
+import { registerEngramPull } from "./commands/engram-pull";
 
 const program = new Command()
   .name("compost")
@@ -27,5 +28,6 @@ registerBackup(program);
 registerRestore(program);
 registerAudit(program);
 registerTriage(program);
+registerEngramPull(program);
 
 program.parse(process.argv);

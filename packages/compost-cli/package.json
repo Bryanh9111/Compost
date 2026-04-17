@@ -16,6 +16,7 @@
   "dependencies": {
     "compost-core": "workspace:*",
     "compost-daemon": "workspace:*",
+    "compost-engram-adapter": "workspace:*",
     "@commander-js/extra-typings": "^13.0.0"
   },
   "devDependencies": {

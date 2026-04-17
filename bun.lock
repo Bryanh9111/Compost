@@ -22,6 +22,7 @@
         "@commander-js/extra-typings": "^13.0.0",
         "compost-core": "workspace:*",
         "compost-daemon": "workspace:*",
+        "compost-engram-adapter": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",
@@ -51,6 +52,7 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
         "compost-core": "workspace:*",
+        "compost-engram-adapter": "workspace:*",
         "pino": "^9.6.0",
         "uuid": "^11.1.0",
       },
