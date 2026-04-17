@@ -236,6 +236,121 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 |-----------|-------|---------------|
 | Queryable with manual maintenance | 2 | **Done** -- add/query/ask all work |
 | Self-maintaining knowledge | 3 | **Done** -- contradiction arbitration, wiki rebuild, LLM extraction |
-| Self-evolving | 4 | Three ingest paths live (push + sniff + crawl) |
-| Portable | 5 | Clone to new machine, knowledge survives |
-| Ecosystem | 6 | Multiple host adapters + source types |
+| Fork-ready personal brain | 4 | PII + bench + examples + docs — anyone can `git clone` and grow their own |
+| Integrated with Engram | 5 | Bidirectional channel: Engram events flow in, Compost insights flow back |
+| Autonomous exploration | 6 | Curiosity agent + Gap tracker + proactive push (L4 self-evolution) |
+| Analytical partner | 7 | Cross-fact reasoning + pattern detection + daily digest (L5) |
+| Portable | 8 | seed templates + export/import (for machine migration) |
+| Ecosystem | 9 | openclaw / multimodal / metrics (optional extensions) |
+
+---
+
+## Strategic Direction v3 (2026-04-16, post-calibration)
+
+> Following repeated product-identity calibration with the user across this session,
+> Compost's strategic direction is clarified. This section supersedes the earlier
+> "Phase 5 Portability" and "Phase 6 Ecosystem" positioning (kept above for history)
+> and activates items previously listed under "Removed from Phase 4".
+
+### Product identity (anchor)
+
+- Compost is a **personal AI brain / analytical partner** — not a tool, not a library, not a SaaS
+- Goal: **10+ year single-user deep-personalization companion**
+- Distribution: **MIT open source, fork-template model** — anyone can `git clone` and grow their own; no central instance, no PR acceptance, no community maintenance overhead
+- Relationship with Engram: **bidirectional core channel** (not opt-in) — Engram events flow into Compost as a source, Compost insights flow back to Engram as new entries
+
+### Self-evolution levels
+
+Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
+
+| Level | Capability | Status |
+|-------|-----------|--------|
+| L1 | Passive ingestion (observe → structure) | ✅ Phase 0-1 |
+| L2 | Periodic self-organization (reflect, decay, wiki synth) | ✅ Phase 2-3 |
+| L3 | Self-correction (contradiction arbitration, wiki versioning) | ✅ Phase 3 |
+| L4 | **Autonomous exploration** (curiosity, gap tracking, user-approved crawl) | 🔨 Phase 6 |
+| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🔨 Phase 7 |
+| L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7 |
+
+### Phase 4 P1 (current — fork-ready personal brain)
+
+> Order per debate 017 (4/4 consensus): PII > bench > origin_hash > open_problems.
+> open_problems deferred to Phase 6 (merged into Curiosity agent design).
+
+- **Session 1** — PII redactor + `compost doctor --check-integrity` audit (~275 LoC)
+  - `packages/compost-hook-shim/src/pii.ts` with regex blocklist (CC/SSH/API-token/.env)
+  - Integrate scrub before `JSON.stringify(envelope)` in `index.ts:108`
+  - `compost doctor --check-pii` scans existing outbox payloads
+  - `compost doctor --check-integrity` one-shot: orphan observations, dangling fact_links, stale wiki_pages
+- **Session 2** — Layered bench harness (~250 LoC)
+  - Separate benches per layer to avoid noise: `sqlite-reflect`, `sqlite-query`, `lancedb-ann`, `llm-latency`
+  - CI gate: `>50%` regression fails the build
+  - Replace README's "p95 < 30ms" with reproducible numbers per layer
+- **Session 3** — `origin_hash` migration + `examples/` + docs layering (~200 LoC)
+  - Migration 0014: `observations.origin_hash` + `method` (nullable, backfill, don't use NOT NULL + fake default)
+  - `examples/01-local-markdown-ingest/`, `02-web-url-ingest/`, `03-mcp-integration/`
+  - Split docs: `QUICKSTART.md` (5-min onboarding) + `CONCEPTS.md` (mental model) + `ARCHITECTURE.md` (deep)
+
+### Phase 5 — Engram integration + user model foundation
+
+- `packages/compost-engram-adapter` — bidirectional channel implementation
+  - Pull: Compost subscribes to Engram event stream (new `event` kind entries) as a new ingest source
+  - Push: Compost writes back synthesized `insight` entries to Engram (schema negotiated via `docs/engram-integration-contract.md`)
+  - Failure modes: either side down → the other runs normally (hard constraint)
+- `user_profile` schema — first cut
+  - `preferences` (writing style, tech choices, decision heuristics)
+  - `blind_spots` (what the user consistently misses / avoids)
+  - `goals` (long-term direction, current priorities)
+  - Populated partly by user, partly inferred from observation patterns
+- `compost.observe` extension: support Engram-origin observations (metadata includes Engram memory IDs)
+
+### Phase 6 — Autonomous exploration (L4)
+
+> Reactivates items previously listed under "Removed from Phase 4" (ROADMAP:193-199)
+> because L4 is a **core product identity** item, not a P2 defer.
+
+- **Curiosity agent** — detects knowledge gaps from observed question patterns → asks user or queues learning items
+- **Gap tracker** — open questions / unresolved contradictions / user-stated goals with no evidence → persistent `open_problems` surface
+- **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
+- **Proactive push channel** — Compost evaluates new info importance → pushes notifications via Engram (new `insight` entries) or native OS notify
+- **Daily / weekly digest** — "what you read/wrote/said worth noting today"
+
+### Phase 7 — Analytical partner (L5)
+
+- **Cross-fact reasoning engine** — graph traversal over `fact_links` + semantic similarity to find related but unconnected facts
+- **Pattern detection** — cluster facts by theme / time / source to surface emergent patterns
+- **Hypothesis generation** — from known facts, propose plausible unknowns (tagged as hypothesis, not fact)
+- **User model update loop** — observed decisions update `user_profile.preferences` automatically
+- **Reflection prompts** — generate thoughtful questions to help user think deeper about their own knowledge
+
+### Phase 8 — Portability (descoped from former Phase 5)
+
+- `seed templates/` — minimal starting DBs with example structure for fork users
+- `compost export <bundle>` / `compost import <bundle>` — markdown + sqlite dump for machine migration
+- Conflict resolution doc (last-writer-wins default)
+- **Removed from scope**: cross-machine live sync, multi-host coordination, HTTP transport
+
+### Phase 9 — Ecosystem (descoped from former Phase 6)
+
+- `compost-adapter-openclaw` (if concrete need emerges)
+- Multimodal metadata (attachment field, no content parsing)
+- Prometheus / OpenTelemetry metrics export (for self-observability)
+- **Removed from scope**: PDF/video full-text extraction, code repo mirroring
+
+### No-longer-removed items (reactivated from old Phase 4 P2 deletion list)
+
+- ~~~~Curiosity agent~~~~ → **Phase 6 P0**
+- ~~~~Gap tracker~~~~ → **Phase 6 P0** (merged with `open_problems`)
+- ~~~~Autonomous crawl~~~~ → **Phase 6 P0** as user-approved queue (not fully autonomous)
+- Semantic chunking / Savitzky-Golay — still deferred (heading-based adequate for now)
+- Audit log TTL — still deferred (YAGNI for personal scale)
+
+### What we are *not* doing
+
+- ❌ Team collaboration / multi-user features
+- ❌ SaaS / cloud service
+- ❌ Central instance / shared data pool
+- ❌ Accepting pull requests to this repo (fork instead — see CONTRIBUTING.md)
+- ❌ PDF / video full-text extraction
+- ❌ Code repo mirroring (git already stores code)
+- ❌ Community-facing features / marketing / tutorials aimed at mass adoption
