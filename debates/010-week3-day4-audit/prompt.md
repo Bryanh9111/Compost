@@ -110,5 +110,5 @@ ROADMAP/ARCHITECTURE.md 锁定 vs 代码实际不符的.
 单轮 focused R1 + Opus synthesis.
 
 ## 输出
-写入 `/Users/zion/Repos/Zylo/Compost/debates/010-week3-day4-audit/rounds/r001_<你的名字>.md`,
+写入 `<repo>/debates/010-week3-day4-audit/rounds/r001_<你的名字>.md`,
 末尾 print `DONE_R1_010`.

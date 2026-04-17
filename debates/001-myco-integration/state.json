@@ -4,8 +4,6 @@
   "rounds_completed": 2,
   "rounds_notes": "R2 complete for all 4 participants (initial Sonnet+Opus, then complement Codex+Gemini)",
   "participants": ["codex", "gemini", "sonnet", "opus"],
-  "cwd": "/Users/zion/Repos/Zylo/Compost",
-  "myco_path": "/Users/zion/Repos/Personal/Research-and-Integration/memory/Myco",
   "status": "synthesized_v2",
   "authoritative_synthesis": "synthesis_v2.md",
   "legacy_synthesis": "synthesis.md",

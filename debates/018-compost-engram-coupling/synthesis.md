@@ -152,7 +152,7 @@ v3.5 调整后 (debate 018):
    - 两个共享 "debate 018 裁决" 记忆
 
 ### 用户新指令 (分离处理)
-5. **memory research 项目吸收**: 用户 `/Users/zion/Repos/Personal/Research-and-Integration/memory/` 包含 14 个外部项目 (Myco, gbrain, LycheeMem, Understand-Anything, Ombre-Brain, supermemory, claude-subconscious, CatchMe, claude-code-source, llm-wiki.md 等).
+5. **memory research 项目吸收**: 用户本地 external memory research 收藏 (14 个项目: Myco, gbrain, LycheeMem, Understand-Anything, Ombre-Brain, supermemory, claude-subconscious, CatchMe, claude-code-source, llm-wiki.md 等).
    - **不在本 debate 范围**, 但影响未来方向
    - 建议: 开独立 debate 019 "从外部 memory 项目提取优点扩充 Compost"
    - 逐项评估每个项目的独特优势, 映射到 Compost/Engram 可吸收的特性

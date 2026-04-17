@@ -493,7 +493,7 @@ From debate #5 v2.1 fix pass:
 CREATE TABLE observe_outbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,  -- monotonic, global; feeds observations.adapter_sequence per-adapter via window
   adapter TEXT NOT NULL,                  -- e.g. 'compost-adapter-claude-code'
-  source_id TEXT NOT NULL,                -- e.g. 'claude-code:018f:/Users/zion/Repos/Zylo/Compost'
+  source_id TEXT NOT NULL,                -- e.g. 'claude-code:018f:<repo>'
   source_kind TEXT NOT NULL               -- denormalized from source.kind so drain can skip a JOIN
     CHECK(source_kind IN ('local-file','local-dir','web','claude-code','host-adapter','sensory')),
   source_uri TEXT NOT NULL,               -- e.g. 'file:///Users/.../notes.md' — registers source row if missing
@@ -575,7 +575,7 @@ ORDER BY seq
 LIMIT 1;
 
 -- STEP 2: Auto-register source if missing (Gemini debate #5 R2 fix).
--- Hook-generated source_ids like 'claude-code:018f:/Users/zion/...' are dynamic; they
+-- Hook-generated source_ids like 'claude-code:018f:<user-home>/...' are dynamic; they
 -- do not exist in `source` until first use. INSERT OR IGNORE handles both cases.
 INSERT OR IGNORE INTO source (id, uri, kind, trust_tier, refresh_sec)
 VALUES (:source_id, :source_uri, :source_kind, :trust_tier, NULL);
@@ -847,7 +847,7 @@ The hook shim must accept a JSON object on stdin with at least these fields. Fie
 {
   "hook_event_name": "PreToolUse",          // SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
   "session_id": "018f3c-...",               // Claude Code session uuid, stable for session lifetime
-  "cwd": "/Users/zion/Repos/Zylo/Compost",  // working directory at time of event
+  "cwd": "<repo>",  // working directory at time of event
   "timestamp": "2026-04-11T06:33:00Z",      // RFC3339
   "payload": { /* event-specific fields, passed through as metadata.payload */ }
 }

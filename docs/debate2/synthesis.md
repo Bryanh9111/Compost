@@ -137,7 +137,7 @@ Two edits needed:
 ## Decisions Closed
 
 - ✅ **Package name**: `compost`
-- ✅ **Project location**: `/Users/zion/Repos/Zylo/Compost/`
+- ✅ **Project location**: `<repo>/`
 - ✅ **D1 transport**: stdio MCP + adapter-local `observe_outbox`
 - ✅ **D2 first combo**: local markdown week 1 → web URL week 2
 - ✅ **D3 runtime**: Hybrid (Node core + Python extraction subprocess)

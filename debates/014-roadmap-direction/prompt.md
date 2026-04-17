@@ -105,5 +105,5 @@ contradiction 闭环). 继续 Batch D P1 还是切 Batch E / Phase 5?
 - Opus (架构 + 终裁)
 
 ## 输出
-写入 `/Users/zion/Repos/Zylo/Compost/debates/014-roadmap-direction/rounds/r001_<名字>.md`,
+写入 `<repo>/debates/014-roadmap-direction/rounds/r001_<名字>.md`,
 末尾 print `DONE_R1_014`.

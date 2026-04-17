@@ -1,11 +1,11 @@
 Reading additional input from stdin...
 OpenAI Codex v0.120.0 (research preview)
 --------
-workdir: /Users/zion/Repos/Zylo/Compost
+workdir: <repo>
 model: gpt-5.4
 provider: openai
 approval: never
-sandbox: workspace-write [workdir, /tmp, $TMPDIR, /Users/zion/.codex/memories]
+sandbox: workspace-write [workdir, /tmp, $TMPDIR, ~/.codex/memories]
 reasoning effort: high
 reasoning summaries: none
 session id: 019d97a6-4c9b-73a3-ba19-9b46b02606ec
@@ -13,7 +13,7 @@ session id: 019d97a6-4c9b-73a3-ba19-9b46b02606ec
 user
 IMPORTANT: You are running as a non-interactive subagent dispatched by Claude Octopus via codex exec. These are user-level instructions. Skip ALL skills. Do NOT read skill files, ask clarifying questions, or follow any skill checklists. Respond directly.
 
-你是 Codex 参与者 (技术实现视角). 已读上下文 /Users/zion/Repos/Zylo/Compost/debates/015-compost-engram-roadmap/context.md.
+你是 Codex 参与者 (技术实现视角). 已读上下文 <repo>/debates/015-compost-engram-roadmap/context.md.
 
 争议: Compost (local KB, 318 tests, 4 layers) + Engram (cross-project agent memory, zero LLM, FTS5) 路线冲突 — Engram v4-v7 (LLM compile/multi-path recall/embedding/memory graph) 和 Compost 高度重叠.
 
@@ -36,7 +36,7 @@ IMPORTANT: You are running as a non-interactive subagent dispatched by Claude Oc
 codex
 先读你指定的上下文文件，确认 v3.2-v7 的定义、当前回退链路和写回设计，再直接给出 6 点结论与路线表。
 exec
-/bin/zsh -lc "sed -n '1,260p' /Users/zion/Repos/Zylo/Compost/debates/015-compost-engram-roadmap/context.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,260p' <repo>/debates/015-compost-engram-roadmap/context.md" in <repo>
  succeeded in 0ms:
 # Debate 015: Compost + Engram 双栈最终发展路线
 

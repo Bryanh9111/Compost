@@ -27,10 +27,10 @@ The user has explicitly **deferred** evaluation of: time estimates, TDD step sel
 
 ## Reference files (all participants must read these)
 
-- `/Users/zion/Repos/Zylo/Compost/docs/phase0-spec.md` (761 lines) — the executable spec under review
-- `/Users/zion/Repos/Zylo/Compost/docs/phase0-checklist.md` (202 lines) — the build-order plan under review
-- `/Users/zion/Repos/Zylo/Compost/docs/debate/synthesis.md` — debate #1 (architecture stress test, L0-L4, derivations, hybrid runtime)
-- `/Users/zion/Repos/Zylo/Compost/docs/debate2/synthesis.md` — debate #2 (D3 hybrid lock-in, transform_policy convention)
+- `<repo>/docs/phase0-spec.md` (761 lines) — the executable spec under review
+- `<repo>/docs/phase0-checklist.md` (202 lines) — the build-order plan under review
+- `<repo>/docs/debate/synthesis.md` — debate #1 (architecture stress test, L0-L4, derivations, hybrid runtime)
+- `<repo>/docs/debate2/synthesis.md` — debate #2 (D3 hybrid lock-in, transform_policy convention)
 
 ## What each participant must produce
 

@@ -109,5 +109,5 @@ eace98e Day 1  registry 合并 + contract.md + scheduler.ts import 整理
 - Opus (架构 + 终裁 synthesis)
 
 ## 输出
-写入 `/Users/zion/Repos/Zylo/Compost/debates/013-week4-audit/rounds/r001_<名字>.md`,
+写入 `<repo>/debates/013-week4-audit/rounds/r001_<名字>.md`,
 末尾 print `DONE_R1_013`.

@@ -80,7 +80,7 @@ Week 1-3 + Day 4 已 merge (PR #1 + #2, commit 642668d). P0-0..P0-7 全 land.
 
 ## 输出
 
-写入 `/Users/zion/Repos/Zylo/Compost/debates/011-week4-plan/rounds/r001_<名字>.md`,
+写入 `<repo>/debates/011-week4-plan/rounds/r001_<名字>.md`,
 末尾 print `DONE_R1_011`.
 
 ## 参赛者

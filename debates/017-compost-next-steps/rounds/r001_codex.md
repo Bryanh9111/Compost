@@ -1,11 +1,11 @@
 Reading additional input from stdin...
 OpenAI Codex v0.120.0 (research preview)
 --------
-workdir: /Users/zion/Repos/Zylo/Compost
+workdir: <repo>
 model: gpt-5.4
 provider: openai
 approval: never
-sandbox: workspace-write [workdir, /tmp, $TMPDIR, /Users/zion/.codex/memories]
+sandbox: workspace-write [workdir, /tmp, $TMPDIR, ~/.codex/memories]
 reasoning effort: high
 reasoning summaries: none
 session id: 019d980c-48f7-7473-a1e9-a44d25a38bb9
@@ -15,7 +15,7 @@ IMPORTANT: Running as non-interactive subagent. Skip ALL skills. No clarifying q
 
 你是 🔴 Codex 参与者 (SQLite/migration/schema 风险视角) 在 4-way debate 里.
 
-阅读: /Users/zion/Repos/Zylo/Compost/debates/017-compost-next-steps/context.md
+阅读: <repo>/debates/017-compost-next-steps/context.md
 
 Topic: Compost (Bun+Python, 4-layer KB, 318 tests, Phase 4 Batch D Week 4 done) 下一步做什么? 5 候选: A=silent / B=PII redactor / C=Phase 4 P1 全 4 项 / D=debate episodic/memory_procedural / E=预先做 v3.5 cache-provider API.
 
@@ -34,7 +34,7 @@ Topic: Compost (Bun+Python, 4-layer KB, 318 tests, Phase 4 Batch D Week 4 done) 
 codex
 先读 `debates/017-compost-next-steps/context.md`，再扫一遍 SQLite 相关 schema/migration 与 bench harness，按 6 个判决点给出偏风险视角结论。
 exec
-/bin/zsh -lc "sed -n '1,240p' debates/017-compost-next-steps/context.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,240p' debates/017-compost-next-steps/context.md" in <repo>
  succeeded in 0ms:
 # Debate 017: Compost 下一步执行计划
 
@@ -95,7 +95,7 @@ Participants 特色:
 - Known risks: docs/ROADMAP.md:141-154 (7 个, 2 已 resolved)
 
 exec
-/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in <repo>
  succeeded in 0ms:
 ./packages/compost-hook-shim/src/index.ts:66:  // Inject hook_event into top-level metadata so drain writes it to observations.metadata
 ./packages/compost-hook-shim/src/index.ts:102:        trust_tier, transform_policy, payload
@@ -390,7 +390,7 @@ exec
 ./docs/transform-policy.md:67:`observations.transform_policy` is a `TEXT` column, not an `INTEGER REFERENCES policies(id)`. The FK relationship is application-layer: any policy key written into observations must exist in `packages/compost-core/src/policies/registry.ts` at write time. `compost doctor --reconcile` verifies this post-hoc and flags orphaned policy tags.
 ./docs/debate2/rounds/r001_codex.md:3:Stay hybrid. Exact boundary: Node/Bun owns `packages/compost-core/**`, `packages/mcp-server/**`, SQLite/LanceDB access, scheduler, adapters, and calls `compost-ingest` as a subprocess over JSON stdin/stdout; Python owns only `tools/compost-ingest/**` and returns normalized `Document[]`, spans, and extractor metadata, never DB writes. Gemini’s weakest point is treating distribution as the strategy when maintainability is the actual constraint: a single `bun` install that silently downgrades extraction quality is operationally worse than `install.sh && uv sync`. Phase 1 pure-Node failure mode: a mixed PDF with tables plus scanned pages goes through `pdf.js` text extraction plus ad hoc OCR, loses table structure and formulas, and writes bad chunks into `observations` and `chunks`; then `SELECT transform_policy, source_uri FROM observations WHERE source_uri LIKE '%.pdf';` reports “successful” ingests whose downstream facts are garbage. Today there is no Node-equivalent stack to `docling` + `unstructured` + `trafilatura` for that workload next week.
 ./docs/debate2/rounds/r001_codex.md:5:Use date-stamp with revision counter: `tp-2026-04-02`. Semver is fake precision here because “backward compatible policy” is meaningless once chunking, prompts, or dedup thresholds change; replay semantics are always policy-specific. Git SHA is reproducible but hostile in daily ops and code review. The durable pattern is: immutable registry entry in `packages/compost-core/src/policies/registry.ts`, optional per-policy snapshot file `packages/compost-core/src/policies/tp-2026-04-02.json`, and DB rows keyed by the readable id: `observations.transform_policy = 'tp-2026-04-02'`. Three years from now, diffs stay obvious, replay stays deterministic, and SQL/debugging stays humane.
-./docs/debate4/rounds/r001_codex.md:21:- One new failure mode NOT in the stress-test questions: idempotency drift across hook retries. A short-lived `compost hook` subprocess has no durable per-adapter sequence state like the adapter SDK in `/Users/zion/Repos/Zylo/Compost/docs/phase0-spec.md:280-321`. If Claude retries the same hook after a timeout and the event envelope does not deterministically reproduce the same `idempotency_key`, you create duplicate observations with no clean replay lineage.
+./docs/debate4/rounds/r001_codex.md:21:- One new failure mode NOT in the stress-test questions: idempotency drift across hook retries. A short-lived `compost hook` subprocess has no durable per-adapter sequence state like the adapter SDK in `<repo>/docs/phase0-spec.md:280-321`. If Claude retries the same hook after a timeout and the event envelope does not deterministically reproduce the same `idempotency_key`, you create duplicate observations with no clean replay lineage.
 ./docs/debate4/rounds/r003_codex.md:30:I will concede on Q1 only to a compromise that guarantees episodic observations remain retrievable through the semantic query path without reclassification at query time. I do not concede on Q2: durability must stay on the pre-ack side of the boundary.
 ./docs/debate4/context.md:57:- Does this formula handle cold-start (first day after install, 0 observations) gracefully?
 ./docs/debate4/context.md:114:- `derivation_run` table with partial unique index on `(observe_id, layer, transform_policy, model_id, context_scope_id, extraction_profile)` (debate #3)
@@ -453,7 +453,7 @@ exec
 ./docs/debate2/context.md:50:## Open Question #2: transform_policy Version Convention
 ./docs/debate2/context.md:52:Background: every L0 observation row is tagged with a `transform_policy` identifier. A transform_policy encapsulates chunk size/overlap, embedding model ID, fact extraction prompt version, wiki synthesis prompt version, dedup thresholds, and normalization rules. Policies are immutable — a schema change requires a new policy entry, never a mutation of an existing one. The policy registry lives in `packages/compost-core/src/policies/registry.ts`.
 ./docs/debate3/context.md:19:1. **Brain-like self-evolution** — does the L0-L4 + `derivations` + `transform_policy` design support a memory system that learns, re-derives, and improves over time, or is it just a fancy RAG cache that ages?
-./docs/debate3/context.md:33:- `/Users/zion/Repos/Zylo/Compost/docs/debate2/synthesis.md` — debate #2 (D3 hybrid lock-in, transform_policy convention)
+./docs/debate3/context.md:33:- `<repo>/docs/debate2/synthesis.md` — debate #2 (D3 hybrid lock-in, transform_policy convention)
 ./docs/debate3/context.md:41:- **Where you disagree with the prior debates' conclusions** — debate1 and debate2 already locked in stdio MCP + adapter outbox + hybrid runtime + date-stamp transform_policy. If you think any of these conflict with the long-term vision, say so and defend it
 ./docs/debate3/context.md:50:- ✅ `tp-YYYY-MM[-NN]` date-stamp transform_policy with `supersedes` + `migration_notes` (debate #2)
 ./docs/reference-survey-memory-projects.md:38:**Core thesis:** State-of-the-art memory engine (#1 on LongMemEval, LoCoMo, ConvoMem benchmarks) that automatically extracts facts, builds user profiles, and handles knowledge updates + contradictions.
@@ -1342,7 +1342,7 @@ exec
 codex
 在看 migration 细节和现有 triage/health 设计，重点确认哪些“脏数据”已被约束，哪些仍只有检测没有修复闭环。
 exec
-/bin/zsh -lc "sed -n '160,220p' docs/ROADMAP.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '160,220p' docs/ROADMAP.md" in <repo>
  succeeded in 0ms:
 > (a) `fact_links` was hidden P0-3 prerequisite, (b) backup/restore is data-loss
 > insurance not optional, (c) LLM single-point failure needs circuit breaker.
@@ -1407,7 +1407,7 @@ exec
 - `compost-adapter-openclaw` (concrete user need)
 
 exec
-/bin/zsh -lc 'rg --files packages/compost-core/src | rg "migr|schema|db|triage|reflect|ledger|fact-links|correction|health"' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg --files packages/compost-core/src | rg "migr|schema|db|triage|reflect|ledger|fact-links|correction|health"' in <repo>
  succeeded in 0ms:
 packages/compost-core/src/query/feedback.ts
 packages/compost-core/src/schema/0003_stateless_decay.sql
@@ -1434,7 +1434,7 @@ packages/compost-core/src/cognitive/graph-health.ts
 packages/compost-core/src/cognitive/reflect.ts
 
 exec
-/bin/zsh -lc 'rg -n "CREATE TABLE observations|CREATE TABLE fact_links|CREATE TABLE wiki_pages|CREATE TABLE health_signals|CREATE TABLE correction_events|open_problems|ALTER TABLE observations|origin_hash|method|transform_policy" packages/compost-core packages/compost-cli packages/compost-daemon docs/ROADMAP.md docs/ARCHITECTURE.md docs/phase0-spec.md -S' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "CREATE TABLE observations|CREATE TABLE fact_links|CREATE TABLE wiki_pages|CREATE TABLE health_signals|CREATE TABLE correction_events|open_problems|ALTER TABLE observations|origin_hash|method|transform_policy" packages/compost-core packages/compost-cli packages/compost-daemon docs/ROADMAP.md docs/ARCHITECTURE.md docs/phase0-spec.md -S' in <repo>
  succeeded in 0ms:
 docs/ROADMAP.md:177:- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
 docs/ROADMAP.md:178:- Inlet `origin_hash` + `method` columns on `observations` (machine-required, user-optional)
@@ -1531,7 +1531,7 @@ packages/compost-core/src/llm/ollama.ts:52:        method: "POST",
 codex
 已确认 P1 原始排序来自 roadmap。接下来只看会影响判断的 DDL 与 triage 扫描实现，不扩散到无关模块。
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0001_init.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0001_init.sql" in <repo>
  succeeded in 0ms:
 -- Migration 0001_init.sql
 -- Source: compost-v2-spec.md §1.1 (phase0-spec.md + debate #3 preserved)
@@ -1649,13 +1649,13 @@ CREATE TABLE wiki_pages (
 );
 
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0012_correction_signal_kind.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0012_correction_signal_kind.sql" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,200p' packages/compost-core/src/schema/0013_wiki_stale_at.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,200p' packages/compost-core/src/schema/0013_wiki_stale_at.sql" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0011_fact_links_and_health_fix.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/0011_fact_links_and_health_fix.sql" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/schema/0010_phase4_myco_integration.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/schema/0010_phase4_myco_integration.sql" in <repo>
  succeeded in 0ms:
 -- Migration 0013_wiki_stale_at.sql
 -- Source: debates/007-week3-plan-audit/synthesis.md Lock 6 (2026-04-15)
@@ -1942,9 +1942,9 @@ CREATE INDEX IF NOT EXISTS idx_correction_events_session
 -- (handled by migrator.ts — no-op in this file)
 
 exec
-/bin/zsh -lc "sed -n '1,260p' packages/compost-core/src/cognitive/triage.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,260p' packages/compost-core/src/cognitive/triage.ts" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/cognitive/graph-health.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/cognitive/graph-health.ts" in <repo>
  succeeded in 0ms:
 import type { Database } from "bun:sqlite";
 import { connectedComponents, countStaleClusters } from "./fact-links";
@@ -2334,9 +2334,9 @@ export function scanOrphanDelta(
   }>;
 
 exec
-/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/cognitive/correction-detector.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,240p' packages/compost-core/src/cognitive/correction-detector.ts" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/migrator.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/schema/migrator.ts" in <repo>
  succeeded in 0ms:
 import { Database } from "bun:sqlite";
 import { readFileSync, readdirSync } from "fs";
@@ -2722,7 +2722,7 @@ export function scanObservationForCorrection(
   // safe across runtimes.
 
 exec
-/bin/zsh -lc "sed -n '260,520p' packages/compost-core/src/cognitive/triage.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '260,520p' packages/compost-core/src/cognitive/triage.ts" in <repo>
  succeeded in 0ms:
   }>;
 
@@ -2906,9 +2906,9 @@ export function resolveSignal(
 }
 
 exec
-/bin/zsh -lc "sed -n '1,280p' packages/compost-core/src/cognitive/fact-links.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,280p' packages/compost-core/src/cognitive/fact-links.ts" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,260p' packages/compost-core/test/migrator.test.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,260p' packages/compost-core/test/migrator.test.ts" in <repo>
  succeeded in 0ms:
 import type { Database } from "bun:sqlite";
 
@@ -3397,16 +3397,16 @@ describe("migrator", () => {
 });
 
 exec
-/bin/zsh -lc 'rg -n "bench|benchmark|reflect-1k|reflect-10k|reflect-100k|bun bench|vitest bench" package.json packages -S' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "bench|benchmark|reflect-1k|reflect-10k|reflect-100k|bun bench|vitest bench" package.json packages -S' in <repo>
 exec
-/bin/zsh -lc "find packages -maxdepth 4 \\( -type d -name bench -o -type d -name benchmark \\) -print" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "find packages -maxdepth 4 \\( -type d -name bench -o -type d -name benchmark \\) -print" in <repo>
  succeeded in 0ms:
 packages/compost-core/src/query/search.ts:47:const RRF_K = 60; // standard constant; benchmark to tune
 packages/compost-core/src/cognitive/fact-links.ts:290: * facts; if benchmarks show otherwise we revisit at P0-3.
 
  succeeded in 0ms:
 exec
-/bin/zsh -lc "sed -n '280,420p' packages/compost-core/src/cognitive/fact-links.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '280,420p' packages/compost-core/src/cognitive/fact-links.ts" in <repo>
  succeeded in 0ms:
 }
 
@@ -3551,9 +3551,9 @@ export function graphStats(db: Database): {
   const totalLinksRow = db
 
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-cli/src/commands/triage.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-cli/src/commands/triage.ts" in <repo>
 exec
-/bin/zsh -lc "sed -n '1,120p' packages/compost-cli/src/commands/doctor.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,120p' packages/compost-cli/src/commands/doctor.ts" in <repo>
  succeeded in 0ms:
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
@@ -3807,7 +3807,7 @@ export function registerTriage(program: Command): void {
 }
 
 exec
-/bin/zsh -lc 'rg -n "open_problems|Curiosity agent|Gap tracker" debates docs packages -S' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "open_problems|Curiosity agent|Gap tracker" debates docs packages -S' in <repo>
  succeeded in 0ms:
 docs/compost-v2-spec.md:1837:| **Phase 4** (week 9-12) | Active learning | Curiosity agent, gap tracker, SearchPlan generator, w5-w7 ranking factors, autonomous crawl with semantic novelty gate, procedural memory |
 docs/ROADMAP.md:177:- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
@@ -3867,7 +3867,7 @@ debates/017-compost-next-steps/context.md:38:3. Phase 4 P1 4 项内部排序: PI
 debates/017-compost-next-steps/rounds/r001_codex.md:29:- open_problems 表的 DDL 细节 (如何和现有 health_signals/correction_events 不重叠)?
 debates/017-compost-next-steps/rounds/r001_codex.md:62:2. open_problems 表+CLI (替 Curiosity/Gap tracker)
 debates/017-compost-next-steps/rounds/r001_codex.md:76:3. Phase 4 P1 4 项内部排序: PII > bench > open_problems > origin_hash 对吗? bench 是不是应该先 (没 bench 不敢跑大数据)?
-debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in /Users/zion/Repos/Zylo/Compost
+debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in <repo>
 debates/017-compost-next-steps/rounds/r001_codex.md:531:./docs/ROADMAP.md:177:- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
 debates/017-compost-next-steps/rounds/r001_codex.md:535:./docs/ROADMAP.md:194:- ~~Curiosity agent~~ (replaced by `open_problems` + triage signals)
 debates/017-compost-next-steps/rounds/r001_codex.md:536:./docs/ROADMAP.md:195:- ~~Gap tracker~~ (replaced by `open_problems`)
@@ -3919,7 +3919,7 @@ debates/017-compost-next-steps/rounds/r001_codex.md:1364:- `open_problems` table
 debates/017-compost-next-steps/rounds/r001_codex.md:1381:- ~~Curiosity agent~~ (replaced by `open_problems` + triage signals)
 debates/017-compost-next-steps/rounds/r001_codex.md:1382:- ~~Gap tracker~~ (replaced by `open_problems`)
 debates/017-compost-next-steps/rounds/r001_codex.md:1384:- ~~`crawl_queue`~~ (duplicates `open_problems` + manual `compost add <url>`)
-debates/017-compost-next-steps/rounds/r001_codex.md:1437:/bin/zsh -lc 'rg -n "CREATE TABLE observations|CREATE TABLE fact_links|CREATE TABLE wiki_pages|CREATE TABLE health_signals|CREATE TABLE correction_events|open_problems|ALTER TABLE observations|origin_hash|method|transform_policy" packages/compost-core packages/compost-cli packages/compost-daemon docs/ROADMAP.md docs/ARCHITECTURE.md docs/phase0-spec.md -S' in /Users/zion/Repos/Zylo/Compost
+debates/017-compost-next-steps/rounds/r001_codex.md:1437:/bin/zsh -lc 'rg -n "CREATE TABLE observations|CREATE TABLE fact_links|CREATE TABLE wiki_pages|CREATE TABLE health_signals|CREATE TABLE correction_events|open_problems|ALTER TABLE observations|origin_hash|method|transform_policy" packages/compost-core packages/compost-cli packages/compost-daemon docs/ROADMAP.md docs/ARCHITECTURE.md docs/phase0-spec.md -S' in <repo>
 debates/017-compost-next-steps/rounds/r001_codex.md:1439:docs/ROADMAP.md:177:- `open_problems` table + CLI (consolidates old "Curiosity agent" + "Gap tracker")
 debates/017-compost-next-steps/rounds/r001_codex.md:1441:docs/ROADMAP.md:194:- ~~Curiosity agent~~ (replaced by `open_problems` + triage signals)
 debates/017-compost-next-steps/rounds/r001_codex.md:1442:docs/ROADMAP.md:195:- ~~Gap tracker~~ (replaced by `open_problems`)
@@ -3928,9 +3928,9 @@ debates/017-compost-next-steps/rounds/r001_codex.md:1443:docs/ROADMAP.md:197:- ~
 codex
 还差两块：`open_problems` 原始设想和 v3.5 cache-provider 讨论边界。看完就收敛到结论，不再继续挖。
 exec
-/bin/zsh -lc "sed -n '24,40p' debates/001-myco-integration/rounds/r001_opus.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '24,40p' debates/001-myco-integration/rounds/r001_opus.md" in <repo>
 exec
-/bin/zsh -lc "sed -n '90,110p' debates/001-myco-integration/synthesis_v2.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '90,110p' debates/001-myco-integration/synthesis_v2.md" in <repo>
  succeeded in 0ms:
 - **Compost 落地点**: 新增 `packages/compost-core/src/cognitive/triage.ts` + CLI `compost triage`; 新表 `health_signals(id, kind, severity, message, created_at, resolved_at)`.
 - **集成方式**: 只借设计思路 (不抄 hunger 名字, 不抄 execute=true auto-action 的危险模式)
@@ -3974,7 +3974,7 @@ exec
 ## 最终 P2 清单 (3 项)
 
 exec
-/bin/zsh -lc 'rg -n "compost_cache|as-cache-entry|cache-provider|source_hash|Engram|v3.5" debates docs packages -S' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "compost_cache|as-cache-entry|cache-provider|source_hash|Engram|v3.5" debates docs packages -S' in <repo>
  succeeded in 0ms:
 debates/018-length-check-threshold/r001_sonnet.md:37:强迫用户把这三类内容拆成 5-10 条小记忆，实际上只是把认知负担从 Engram 转移给用户。用户不会做这件事——他们会退而写 CLAUDE.md 或外部文件，Engram 失去这批最有价值的入口。
 debates/018-length-check-threshold/r001_sonnet.md:87:当前 Engram 的 remember() 如果因 CHECK 失败返回 error，AI agent（包括 Claude Code）的默认处理路径是：
@@ -4097,7 +4097,7 @@ debates/017-compost-next-steps/rounds/r001_codex.md:49:- Engram↔Compost 协同
 debates/017-compost-next-steps/rounds/r001_codex.md:70:### E: 预先做 compost_cache-provider API
 debates/017-compost-next-steps/rounds/r001_codex.md:71:Engram 侧 compost_cache DDL 已定. Compost 需提供 `compost ask --as-cache-entry` 或 `mcp__compost__synthesize`. 风险: 如果数据不需要, 浪费.
 debates/017-compost-next-steps/rounds/r001_codex.md:78:5. Compost 要不要为 v3.5 提前做 cache-provider API?
-debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in /Users/zion/Repos/Zylo/Compost
+debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in <repo>
 debates/017-compost-next-steps/rounds/r001_codex.md:605:./debates/017-compost-next-steps/rounds/r001_gemini.md:12:5.  **Cache-provider API：** **不提前做**。等 Engram 侧需求明确再动，防止接口定义不合身导致双向重构。
 debates/017-compost-next-steps/rounds/r001_codex.md:611:./debates/017-compost-next-steps/rounds/r001_codex.md:20:Topic: Compost (Bun+Python, 4-layer KB, 318 tests, Phase 4 Batch D Week 4 done) 下一步做什么? 5 候选: A=silent / B=PII redactor / C=Phase 4 P1 全 4 项 / D=debate episodic/memory_procedural / E=预先做 v3.5 cache-provider API.
 debates/017-compost-next-steps/rounds/r001_codex.md:615:./debates/017-compost-next-steps/rounds/r001_codex.md:28:- 预先做 v3.5 cache-provider API (方案 E) 的 schema 风险 (compost_cache DDL 在 Engram 侧, 但 source_hash 计算逻辑归谁? 重复计算 vs 契约稳定性)
@@ -4133,7 +4133,7 @@ debates/017-compost-next-steps/rounds/r001_codex.md:1037:./debates/016-roadmap-r
 debates/017-compost-next-steps/rounds/r001_codex.md:1038:./debates/016-roadmap-revalidation/rounds/r001_codex.md:56:- 不建 `compost_cache_fts`，更不 join 到 `memories_fts`。
 debates/017-compost-next-steps/rounds/r001_codex.md:1039:./debates/016-roadmap-revalidation/rounds/r001_codex.md:57:- 独立 MCP/CLI：`recall_compost_cache` 或输出单独 section。
 debates/017-compost-next-steps/rounds/r001_codex.md:1040:./debates/016-roadmap-revalidation/rounds/r001_codex.md:59:- 失效规则用 `source_hash` 比较；TTL GC 单独跑 `DELETE FROM compost_cache WHERE ttl_expires_at < datetime('now')`。
-debates/017-compost-next-steps/rounds/r001_codex.md:3870:debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in /Users/zion/Repos/Zylo/Compost
+debates/017-compost-next-steps/rounds/r001_codex.md:3870:debates/017-compost-next-steps/rounds/r001_codex.md:98:/bin/zsh -lc 'rg -n "observations|fact_links|wiki_pages|transform_policy|open_problems|health_signals|correction_events|origin_hash|method|compost_cache|cache-provider|reflect-1k|reflect-10k|reflect-100k|bench" -S .' in <repo>
 debates/017-compost-next-steps/rounds/r001_codex.md:3929:还差两块：`open_problems` 原始设想和 v3.5 cache-provider 讨论边界。看完就收敛到结论，不再继续挖。
 debates/016-roadmap-revalidation/context.md:1:# Debate 016: Engram×Compost Roadmap Revalidation
 debates/016-roadmap-revalidation/context.md:11:1. Kill Engram v4-v7 (LLM compile / multi-path / embedding / graph → all go to Compost)
@@ -4262,7 +4262,7 @@ debates/015-compost-engram-roadmap/synthesis.md:106:- Compost→Engram 独立 wo
 debates/015-compost-engram-roadmap/synthesis.md:110:- Engram schema migration 禁 embedding/llm_response 列
 
 exec
-/bin/zsh -lc "sed -n '90,116p' debates/017-execution-checklist/execution-checklist.md" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '90,116p' debates/017-execution-checklist/execution-checklist.md" in <repo>
  succeeded in 0ms:
   last_seen TEXT NOT NULL DEFAULT (datetime('now')),
   hits INTEGER NOT NULL DEFAULT 1,
@@ -4293,7 +4293,7 @@ COMMIT;
 覆盖：
 
 exec
-/bin/zsh -lc "sed -n '1,140p' packages/compost-core/src/schema/0002_debate3_fixes.sql" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,140p' packages/compost-core/src/schema/0002_debate3_fixes.sql" in <repo>
  succeeded in 0ms:
 -- Migration 0002_debate3_fixes.sql
 -- Source: compost-v2-spec.md §1.2 (from debate #3)
@@ -4396,7 +4396,7 @@ CREATE UNIQUE INDEX idx_queue_active_lease
   WHERE completed_at IS NULL AND lease_token IS NOT NULL;
 
 exec
-/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/ledger/outbox.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '1,220p' packages/compost-core/src/ledger/outbox.ts" in <repo>
  succeeded in 0ms:
 import type { Database } from "bun:sqlite";
 import { v7 as uuidv7 } from "uuid";
@@ -4620,7 +4620,7 @@ export function drainOne(db: Database): DrainResult | null {
           pending.source_id,
 
 exec
-/bin/zsh -lc 'rg -n "policies|transform_policy .*registered|upsertPolicies|SELECT .*policies|policy_id" packages/compost-core packages/compost-daemon -S' in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc 'rg -n "policies|transform_policy .*registered|upsertPolicies|SELECT .*policies|policy_id" packages/compost-core packages/compost-daemon -S' in <repo>
  succeeded in 0ms:
 packages/compost-daemon/src/scheduler.ts:10:import { getActivePolicy, validatePolicyExists } from "../../compost-core/src/policies/registry";
 packages/compost-daemon/src/main.ts:5:import { upsertPolicies } from "../../compost-core/src/policies/registry";
@@ -4703,7 +4703,7 @@ packages/compost-core/test/pipeline.test.ts:12:import { upsertPolicies, getActiv
 packages/compost-core/test/pipeline.test.ts:41:    upsertPolicies(db);
 
 exec
-/bin/zsh -lc "sed -n '90,150p' packages/compost-core/src/policies/registry.ts" in /Users/zion/Repos/Zylo/Compost
+/bin/zsh -lc "sed -n '90,150p' packages/compost-core/src/policies/registry.ts" in <repo>
  succeeded in 0ms:
  * Upsert all registry entries into the SQL policies table.
  * Called at daemon startup BEFORE opening MCP server or drain loop.

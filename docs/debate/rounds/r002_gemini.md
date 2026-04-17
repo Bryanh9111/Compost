@@ -37,7 +37,7 @@ The ingest problem is genuinely hard: PDFs via docling, HTML cleaning, code via 
 
 **The L3 wiki rot problem.**
 
-L3 is LLM-maintained markdown. The architecture says "synthesis: ENAMETOOLONG: name too long, stat '/Users/zion/version",
+L3 is LLM-maintained markdown. The architecture says "synthesis: ENAMETOOLONG: name too long, stat '<truncated-path>",
   "sequence":"monotonic-per-source",
   "trust_tier":"user|first_party|web",
   "redactions":[...],
@@ -100,7 +100,7 @@ Hardest to debug: your L0 provenance ledger says 12,400 chunks ingested. LanceDB
 
 4. **SQLite WAL mode + LanceDB in the same `~/.kb/` dir over network filesystems.** If you ever sync `~/.kb/` via Dropbox or iCloud (tempting for portability), SQLite WAL and LanceDB manifest writes will corrupt. Document this as a hard constraint: `~/.kb/` must be on local disk only. Use `kb export` for cross-machine transfer.
 
-5. **Contradiction arbitration is underspecified.** "Newer: ENAMETOOLONG: name too long, stat '/Users/zion/2025-11-03". The user doesn't know the wiki is stale because `freshness` metadata on L3 nodes is only updated when the LLM write succeeds — not when a new contradicting fact lands in L2.
+5. **Contradiction arbitration is underspecified.** "Newer: ENAMETOOLONG: name too long, stat '<truncated-path>". The user doesn't know the wiki is stale because `freshness` metadata on L3 nodes is only updated when the LLM write succeeds — not when a new contradicting fact lands in L2.
 
 **Fix before you ship:** L3 freshness must be derived from `max(L2.updated_at WHERE provenance_id IN wiki_sources) > wiki.last_synthesis_at`. If that delta exceeds threshold, mark L3 node `STALE` and exclude it from synthesis or flag it in response. This is a 20-line SQL query but it has to exist on day one or you will trust wrong answers.
 

@@ -11,8 +11,8 @@
 
 三个记忆系统:
 - **Engram** (全局 MCP, `~/.engram/engram.db`) — 稳定, 保留
-- **Compost** (自研, `/Users/zion/Repos/Zylo/Compost`) — Phase 0-3 done, Phase 4 待规划
-- **Myco** (第三方, `/Users/zion/Repos/Personal/Research-and-Integration/memory/Myco`) — Agent-First 共生认知基质
+- **Compost** (自研) — Phase 0-3 done, Phase 4 待规划
+- **Myco** (第三方 research reference) — Agent-First 共生认知基质
 
 已决定不同跑三个。**不装 Myco MCP**, 只把精华集成进 Compost。
 

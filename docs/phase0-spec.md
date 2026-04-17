@@ -757,7 +757,7 @@ echo "==> done. try: bun run compost-daemon --help"
 Three things are still undecided and will block Phase 0 if left open:
 
 1. **Package name**: ~~decided: `compost`~~
-2. **Project home location**: ~~decided: `/Users/zion/Repos/Zylo/Compost/`~~
+2. **Project home location**: ~~decided: `<repo>/`~~
 3. **Whether Gemini's pure-Node dissent changes D3**: the synthesis went with hybrid because the majority won and current extraction reality favors it. If you are convinced by Gemini's 2031 WASM/Rust strategic argument and want to bet on pure Node/Bun today (accepting worse PDF extraction quality to preserve single-binary distribution), say so and I flip the spec. The rest of the architecture is transport-agnostic to this choice.
 
 Once you answer these three, I can produce:

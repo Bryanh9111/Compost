@@ -1,11 +1,11 @@
 Reading additional input from stdin...
 OpenAI Codex v0.120.0 (research preview)
 --------
-workdir: /Users/zion/Repos/Zylo/Compost
+workdir: <repo>
 model: gpt-5.4
 provider: openai
 approval: never
-sandbox: workspace-write [workdir, /tmp, $TMPDIR, /Users/zion/.codex/memories]
+sandbox: workspace-write [workdir, /tmp, $TMPDIR, ~/.codex/memories]
 reasoning effort: high
 reasoning summaries: none
 session id: 019d9820-87b4-7dc1-8bca-10aa83448670
