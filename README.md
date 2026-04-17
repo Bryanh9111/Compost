@@ -185,16 +185,25 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - **Local-first LLM** -- Ollama default for wiki synthesis + ask + fact extraction, zero API cost
 - **Heuristic contradiction arbitration** -- no LLM in reflect loop, avoids SQLite single-writer lock contention
 
-Full spec: `docs/compost-v2-spec.md`
-Debate records: `docs/debate*/`
+## Documentation
+
+- `docs/QUICKSTART.md` — 5-minute hands-on from clone to first query
+- `docs/CONCEPTS.md` — L1-L6 self-evolution, provenance, decay, Compost ↔ Engram bridge
+- `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
+- `docs/ROADMAP.md` — Phase 4 (shipped) → Phase 5 (Engram integration) → Phase 6-8
+- `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
+- `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`
+- Full v2 spec: `docs/compost-v2-spec.md`
+- Debate records: `debates/001-019/`
 
 ## Stats
 
-- **8.5K lines** of TypeScript + Python
-- **128 TS tests + 18 Python contract tests**, 0 failures
-- **9 SQL migrations**, 20 tables + FTS5 + triggers
-- **9 architecture debates** with 4 AI reviewers
+- **~16K lines** of TypeScript + ~800 lines Python
+- **374 tests**, 0 failures
+- **14 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema pending)
+- **20 architecture debates** with 4 AI reviewers (`debates/001-019`)
 - **3 transform policies** (local file, web content, LLM fact extraction)
+- **Provenance**: 4 hashes per observation (content, raw, origin, idempotency)
 
 ## License
 

@@ -272,37 +272,61 @@ Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
 | L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🔨 Phase 7 |
 | L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7 |
 
-### Phase 4 P1 (current — fork-ready personal brain)
+### Phase 4 P1 (✅ shipped 2026-04-17 — fork-ready personal brain)
 
 > Order per debate 017 (4/4 consensus): PII > bench > origin_hash > open_problems.
 > open_problems deferred to Phase 6 (merged into Curiosity agent design).
 
-- **Session 1** — PII redactor + `compost doctor --check-integrity` audit (~275 LoC)
+- ✅ **Session 1** (commit `01c070c`) — PII redactor + `compost doctor --check-integrity` audit
   - `packages/compost-hook-shim/src/pii.ts` with regex blocklist (CC/SSH/API-token/.env)
-  - Integrate scrub before `JSON.stringify(envelope)` in `index.ts:108`
-  - `compost doctor --check-pii` scans existing outbox payloads
-  - `compost doctor --check-integrity` one-shot: orphan observations, dangling fact_links, stale wiki_pages
-- **Session 2** — Layered bench harness (~250 LoC)
-  - Separate benches per layer to avoid noise: `sqlite-reflect`, `sqlite-query`, `lancedb-ann`, `llm-latency`
-  - CI gate: `>50%` regression fails the build
-  - Replace README's "p95 < 30ms" with reproducible numbers per layer
-- **Session 3** — `origin_hash` migration + `examples/` + docs layering (~200 LoC)
-  - Migration 0014: `observations.origin_hash` + `method` (nullable, backfill, don't use NOT NULL + fake default)
+  - `scrub` before `JSON.stringify(envelope)` in `index.ts:108`
+  - `compost doctor --check-pii` / `--check-integrity` shipped; +38 tests
+- ✅ **Session 2** (commit `a494c6a`) — Layered bench harness
+  - Per-layer benches: `sqlite-reflect`, `sqlite-query`, `lancedb-ann`, `llm-latency`
+  - CI gate + reproducible numbers in `bench/README.md`; +10 tests
+- ✅ **Session 3** (commit `a861db4`) — `origin_hash` migration + `examples/` + docs layering
+  - Migration 0014: `observations.origin_hash` + `method` (nullable, backfill via `pipeline/backfill-origin.ts`)
   - `examples/01-local-markdown-ingest/`, `02-web-url-ingest/`, `03-mcp-integration/`
-  - Split docs: `QUICKSTART.md` (5-min onboarding) + `CONCEPTS.md` (mental model) + `ARCHITECTURE.md` (deep)
+  - Docs split: `QUICKSTART.md` / `CONCEPTS.md` / augmented `ARCHITECTURE.md`; +8 tests
+  - Bench regression verified: reflect-10k -0.3%, query-10k +1% (well under 5% threshold)
 
-### Phase 5 — Engram integration + user model foundation
+### Phase 5 — Engram integration + user model foundation (🔓 unblocked 2026-04-17)
+
+**Blocker cleared**: Engram v3.4 Slice B Phase 2 S2 shipped at `main @ ea223fa`.
+See `docs/phase-5-open-questions.md` + `docs/phase-5-user-model-design.md` for
+pre-work (commit `d88f98d`); contract + probe aligned in commit `e750222`.
 
 - `packages/compost-engram-adapter` — bidirectional channel implementation
-  - Pull: Compost subscribes to Engram event stream (new `event` kind entries) as a new ingest source
-  - Push: Compost writes back synthesized `insight` entries to Engram (schema negotiated via `docs/engram-integration-contract.md`)
-  - Failure modes: either side down → the other runs normally (hard constraint)
-- `user_profile` schema — first cut
-  - `preferences` (writing style, tech choices, decision heuristics)
-  - `blind_spots` (what the user consistently misses / avoids)
-  - `goals` (long-term direction, current priorities)
-  - Populated partly by user, partly inferred from observation patterns
-- `compost.observe` extension: support Engram-origin observations (metadata includes Engram memory IDs)
+  - **Pull**: Compost subscribes to Engram event stream via
+    `mcp__engram__stream_for_compost(since, kinds, project, limit=1000)` —
+    batched polling, dedupe by `memory_id`
+  - **Push**: Compost writes back synthesized `insight` entries via
+    `mcp__engram__remember(origin='compost', kind='insight', source_trace={...}, expires_at=...)`.
+    The write path reuses existing `remember`; no separate tool. Engram's
+    `_map_insight_sources` auto-fills the sources table from `compost_fact_ids`.
+  - **Invalidate**: `mcp__engram__invalidate_compost_fact(fact_ids[])` on
+    fact supersession. Soft delete, 30-day grace, pinned entries also affected
+    by design.
+  - Failure modes: either side down → the other runs normally (HC-1). Pending
+    writes queue in `~/.compost/pending-engram-writes.db`.
+  - Start-of-work check: `bun scripts/probe-engram-readiness.ts`.
+- `user_patterns` schema (Compost side derivation layer, not raw user state)
+  - See `docs/phase-5-user-model-design.md` for the Compost/Engram boundary:
+    raw `preference` / `goal` / `habit` kinds live in Engram; Compost derives
+    `writing_style` / `decision_heuristic` / `blind_spot` / `recurring_question` /
+    `skill_growth` patterns with provenance back to observations.
+  - Proposed migration 0015: `user_patterns` + `user_pattern_observations` +
+    `user_pattern_events`. Schema ships in Phase 5; populating logic in Phase 7.
+- `compost.observe` extension: support Engram-origin observations
+  (`adapter=engram`, metadata includes `memory_id`)
+
+**Two open questions resolved** (`docs/phase-5-open-questions.md`):
+
+- Insight chunking uses `source_trace` JSON (`root_insight_id` + `chunk_index` +
+  `total_chunks`) — zero Engram schema change.
+- `expires_at` default = `synthesized_at + 90 days`, overridable per synthesis
+  producer. 2000-char per-entry self-split retained; revisit after real
+  insight length distribution is observable.
 
 ### Phase 6 — Autonomous exploration (L4)
 
