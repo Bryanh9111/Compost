@@ -21,6 +21,7 @@ interface HookEnvelope {
   cwd: string;
   timestamp: string;
   payload: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 function computeIdempotencyKey(
@@ -61,6 +62,9 @@ async function main(): Promise<void> {
     process.stderr.write("compost hook: invalid JSON on stdin\n");
     process.exit(2);
   }
+
+  // Inject hook_event into top-level metadata so drain writes it to observations.metadata
+  envelope.metadata = { ...envelope.metadata, hook_event: eventName };
 
   const dataDir = process.env.COMPOST_DATA_DIR || join(homedir(), ".compost");
   const dbPath = join(dataDir, "ledger.db");
@@ -105,7 +109,7 @@ async function main(): Promise<void> {
         idempotencyKey,
         "first_party",
         transformPolicy,
-        input, // store the full envelope as payload
+        JSON.stringify(envelope), // store envelope with injected metadata
       ]
     );
   } finally {
