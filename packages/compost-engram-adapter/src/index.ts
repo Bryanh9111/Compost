@@ -5,3 +5,4 @@ export * from "./writer";
 export * from "./stream-puller";
 export * from "./ingest-adapter";
 export * from "./cli-stream-client";
+export * from "./mcp-stdio-client";

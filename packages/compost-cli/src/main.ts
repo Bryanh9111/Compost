@@ -11,6 +11,7 @@ import { registerBackup, registerRestore } from "./commands/backup";
 import { registerAudit } from "./commands/audit";
 import { registerTriage } from "./commands/triage";
 import { registerEngramPull } from "./commands/engram-pull";
+import { registerEngramPush } from "./commands/engram-push";
 
 const program = new Command()
   .name("compost")
@@ -29,5 +30,6 @@ registerRestore(program);
 registerAudit(program);
 registerTriage(program);
 registerEngramPull(program);
+registerEngramPush(program);
 
 program.parse(process.argv);
