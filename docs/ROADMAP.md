@@ -381,10 +381,40 @@ Opus; Codex timed out).
     stats (by kind / oldest enqueue time), real run spawns the MCP
     transport and flushes with JSON stats on stdout.
   - Tests: 462 → 479 (+17). 12 mcp-stdio-client + 5 engram-flusher.
-- 📋 **Future** — `compost doctor --reconcile-engram` cross-checks
-  `~/.compost/pending-engram-writes.db` vs Engram state; surfaces
-  orphaned invalidate-without-remember (R5 blind-write mitigation).
-  Deferred until one live dogfood cycle validates the new loop.
+- ✅ **Tech-debt sweep** (2026-04-17, post-Phase 6 P0 slice 3)
+  - **T2 Daemon Engram wiring**: `startDaemon()` now accepts
+    `DaemonEngramOpts` and auto-wires `startEngramFlusher` +
+    `startEngramPoller` when opted in. Default OFF for HC-1 safety
+    (tests/library callers never spawn subprocesses); CLI binary entry
+    (`compost daemon start` + `compost-daemon` main) passes
+    `{disabled: false}` so production wire-up is automatic. Per-scheduler
+    opt-in: injecting just `flusherMcpClient` or `pollerStreamClient`
+    enables only that side without triggering the other subprocess.
+    Env-driven config: `COMPOST_ENGRAM_SERVER_CMD`,
+    `COMPOST_ENGRAM_SERVER_ARGS`, `COMPOST_ENGRAM_BIN`,
+    `COMPOST_ENGRAM_FLUSH_INTERVAL_MS`, `COMPOST_ENGRAM_POLL_INTERVAL_MS`.
+    Closes a real gap: Phase 5's "runtime-live" bidirectional loop
+    previously required manual `compost engram-push` / `engram-pull`
+    invocations to actually sync.
+    Tests: +6 in `daemon-engram-wiring.test.ts` covering default-off,
+    injected-client opt-in, per-scheduler isolation, HC-1 degrade on
+    missing binaries, caller-owned client not closed on shutdown.
+  - **T1 `compost doctor --reconcile-engram`**: deferral condition
+    ("one live dogfood cycle validates the new loop") satisfied by
+    slice 2 Round B + slice 3. New `packages/compost-engram-adapter/src/reconcile.ts`
+    `reconcileEngramQueue(queue, opts)` — pure local scan surfacing:
+    pair_fragments (R5 blind-write: invalidate committed but remember
+    still pending), stuck_rows (pending beyond threshold), and
+    expired_but_not_pruned. `PendingWritesQueue.listAll()` added.
+    CLI: `compost doctor --reconcile-engram [--queue-path] [--stuck-threshold-days N]`,
+    exits 1 on any signal. Live dogfood: clean report on current
+    ~/.compost/pending-engram-writes.db. Tests: +9 covering all
+    categories + the asymmetric-coverage edge case.
+  - **T3 `--engram-server-args` pass-through**: `compost engram-push`
+    and `compost digest --push` accept
+    `--engram-server-cmd uv --engram-server-args "--directory /path/to/Engram run engram-server"`.
+    Live-proven: multi-token `uv` invocation pushed 2 chunks to Engram
+    without the previously-needed `/tmp/engram-wrap.sh` bash wrapper.
 
 **Anchor v2 双向核心 satisfied**: Compost can now both pull Engram
 events (read runtime in S6-slice-1) AND push insights + invalidations
