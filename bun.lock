@@ -55,6 +55,7 @@
         "compost-engram-adapter": "workspace:*",
         "pino": "^9.6.0",
         "uuid": "^11.1.0",
+        "zod": "^3.25.0",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",
