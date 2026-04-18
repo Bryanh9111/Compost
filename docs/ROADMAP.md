@@ -423,13 +423,34 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
   - `renderDigestMarkdown()` emits per-group sections (omits empty groups; `(no items)`
     fallback) and `digestInsightInput()` reshapes into `{compostFactIds, content,
     synthesizedAt}` — Round B will feed this straight into `EngramWriter.writeInsight()`.
-  - `compost digest` CLI: `--since-days` (default 7), `--confidence-floor` (default
-    CONFIDENCE_FLOORS.instance = 0.85), `--max-items` per group, `--json`, and
-    `--insight-input` to preview Round B payload. **No `--push` flag yet** — first
-    dogfood of S6-2 transport stays isolated in Round B per debate nature.
+  - `compost digest` CLI: `--since-days` (default 7), `--confidence-floor`, `--max-items`
+    per group, `--json`, and `--insight-input` to preview Round B payload.
   - Tests: 496 → 518 (+22); digest.ts at 100/100 func/line coverage.
-- 📋 **P0 slice 2 Round B** — wire `compost digest --push` → `EngramWriter.writeInsight`
-  (scope=meta, tags=[digest,weekly]); first live dogfood of S6-2 MCP write transport.
+- ✅ **P0 slice 2 Round B** (2026-04-17) — **Digest push wiring + floor re-tune**
+  - Debate `022-wiki-only-digest-shaping` locked decision: change default floor
+    from `CONFIDENCE_FLOORS.instance` (0.85) to `.exploration` (0.75). Rationale:
+    digest uses confidence as "noteworthiness filter", not arbitration trust
+    threshold; schema default for `facts.confidence` is 0.8, so at 0.85 typical
+    personal-KB ingest was invisible. Dogfood on author's live ledger confirmed:
+    pre-patch = 0 new_facts over 30d; post-patch = 11 facts surfaced. Debated
+    synthetic fact_id (option b) rejected 4/4 — breaks UUIDv5 idempotency seed
+    in `computeRootInsightId` and silently no-ops Engram invalidate routes.
+  - `packages/compost-daemon/src/digest-push.ts` — `runDigestPushOnce(opts)` mirrors
+    `runEngramFlushOnce` shape: takes a `DigestReport` + `EngramMcpClient` +
+    `PendingWritesQueue`, calls `EngramWriter.writeInsight` with scope=meta,
+    tags=["digest"]. Wiki-only reports return `{status: "skipped-empty"}`
+    (slice 3 will add wiki provenance via `decision_audit.evidence_refs_json`).
+  - `compost digest --push` CLI: spawns `StdioEngramMcpClient` same as
+    `compost engram-push`; `--engram-server-cmd` + `--queue-path` overrides.
+    Exit code 1 on `result.ok = false`.
+  - Tests: 518 → 525 (+6 digest-push + 1 default-floor regression guard).
+- 📋 **P0 slice 3** — Wiki provenance via `decision_audit` JOIN
+  - Extend `selectWikiRebuilds` to JOIN `wiki_pages ⋈ decision_audit WHERE
+    kind='wiki_rebuild'` and parse `evidence_refs_json.input_fact_ids`
+    (already persisted by `packages/compost-core/src/cognitive/wiki.ts:190`).
+    Merge into `digestInsightInput` fact_id Set so wiki-only digests can push.
+    Zero schema change.
+  - Defer until Round B dogfood validates live transport at least once.
 - 📋 **Curiosity agent** — pattern detection over observations → drives gap creation from repeated questions, proactive fact suggestions
 - 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
 
