@@ -187,3 +187,143 @@ export function detectCuriosityClusters(
 
   return { clusters, unclustered, window_days: windowDays };
 }
+
+// ---------------------------------------------------------------------------
+// matchFactsToGaps — active L4: "new fact may answer this open gap"
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase 6 P0 stretch (shipped post-MCP surface): turn Curiosity from
+ * passive ("here's what you ask a lot") into active ("by the way, this
+ * new fact might answer cluster 3"). Reuses the curiosity tokenizer +
+ * Jaccard so cognitive-layer text normalization stays single-pathed.
+ *
+ * For each open gap:
+ *   - tokenize the gap's question
+ *   - scan recent facts (within `sinceDays`, confidence ≥ floor, not
+ *     archived, not superseded)
+ *   - tokenize `subject + predicate + object` per candidate
+ *   - keep candidates with token overlap ≥ `minOverlap`
+ *   - sort by overlap desc, cap at `maxCandidatesPerGap`
+ *
+ * Gaps with zero candidates are still returned (so a "still open"
+ * reviewer sees the full picture). Cap gap count at `maxGaps`,
+ * sorted by ask_count desc — high-reinforcement gaps first.
+ */
+
+export interface FactGapCandidate {
+  fact_id: string;
+  subject: string;
+  predicate: string;
+  object: string;
+  confidence: number;
+  overlap: number;
+}
+
+export interface FactGapMatch {
+  problem_id: string;
+  question: string;
+  ask_count: number;
+  candidate_facts: FactGapCandidate[];
+}
+
+export interface FactGapMatchOptions {
+  /** Facts created within this window (days). Default 7. */
+  sinceDays?: number;
+  /** Min shared-token overlap to count. Default 2. */
+  minOverlap?: number;
+  /** Facts confidence ≥ this. Default 0.75 (exploration tier). */
+  confidenceFloor?: number;
+  /** Per-gap cap on candidates returned. Default 3. */
+  maxCandidatesPerGap?: number;
+  /** Cap on gaps returned (sorted by ask_count desc). Default 20. */
+  maxGaps?: number;
+  /** Injection for deterministic test windows. */
+  now?: Date;
+}
+
+const DEFAULT_MATCH_SINCE_DAYS = 7;
+const DEFAULT_MATCH_MIN_OVERLAP = 2;
+const DEFAULT_MATCH_CONFIDENCE_FLOOR = 0.75;
+const DEFAULT_MAX_CANDIDATES_PER_GAP = 3;
+const DEFAULT_MAX_GAPS = 20;
+
+export function matchFactsToGaps(
+  db: Database,
+  opts: FactGapMatchOptions = {}
+): FactGapMatch[] {
+  const sinceDays = opts.sinceDays ?? DEFAULT_MATCH_SINCE_DAYS;
+  const minOverlap = opts.minOverlap ?? DEFAULT_MATCH_MIN_OVERLAP;
+  const confidenceFloor =
+    opts.confidenceFloor ?? DEFAULT_MATCH_CONFIDENCE_FLOOR;
+  const maxCandidatesPerGap =
+    opts.maxCandidatesPerGap ?? DEFAULT_MAX_CANDIDATES_PER_GAP;
+  const maxGaps = opts.maxGaps ?? DEFAULT_MAX_GAPS;
+  const now = opts.now ?? new Date();
+
+  const gaps = listGaps(db, { status: "open", limit: maxGaps });
+  if (gaps.length === 0) return [];
+
+  const since = new Date(now);
+  since.setUTCDate(since.getUTCDate() - sinceDays);
+  // SQLite datetime('now') stores "YYYY-MM-DD HH:MM:SS" — strip ISO 'T' + ms.
+  const sinceSqlite = since.toISOString().replace("T", " ").slice(0, 19);
+
+  const facts = db
+    .query(
+      `SELECT fact_id, subject, predicate, object, confidence
+         FROM facts
+        WHERE archived_at IS NULL
+          AND superseded_by IS NULL
+          AND confidence >= ?
+          AND created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT 500`
+    )
+    .all(confidenceFloor, sinceSqlite) as Array<{
+    fact_id: string;
+    subject: string;
+    predicate: string;
+    object: string;
+    confidence: number;
+  }>;
+
+  // Precompute fact tokens once — reused across every gap.
+  const factTokens: Array<{
+    row: (typeof facts)[number];
+    tokens: Set<string>;
+  }> = facts.map((row) => ({
+    row,
+    tokens: new Set(
+      tokenizeQuestion(`${row.subject} ${row.predicate} ${row.object}`)
+    ),
+  }));
+
+  return gaps.map((g: OpenProblem) => {
+    const gapTokens = new Set(tokenizeQuestion(g.question));
+    const candidates: FactGapCandidate[] = [];
+    if (gapTokens.size > 0 && factTokens.length > 0) {
+      for (const { row, tokens } of factTokens) {
+        let overlap = 0;
+        for (const t of tokens) if (gapTokens.has(t)) overlap++;
+        if (overlap >= minOverlap) {
+          candidates.push({
+            fact_id: row.fact_id,
+            subject: row.subject,
+            predicate: row.predicate,
+            object: row.object,
+            confidence: row.confidence,
+            overlap,
+          });
+        }
+      }
+      candidates.sort((a, b) => b.overlap - a.overlap);
+    }
+    return {
+      problem_id: g.problem_id,
+      question: g.question,
+      ask_count: g.ask_count,
+      candidate_facts: candidates.slice(0, maxCandidatesPerGap),
+    };
+  });
+}

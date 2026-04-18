@@ -1,7 +1,9 @@
 /**
  * LanceDB wrapper for L1 vector storage.
  * Manages a single "chunks" table with 768-dim vectors.
- * Phase 1: no cross-process locking (proper-lockfile deferred to Phase 3).
+ * Single-user personal-KB scope: no cross-process locking — YAGNI (same
+ * rationale as audit log TTL, ROADMAP:591). Daemon is single-writer; CLI
+ * one-shots read from the same on-disk table without conflicting.
  */
 import * as lancedb from "@lancedb/lancedb";
 import type { EmbeddingService } from "../embedding/types";

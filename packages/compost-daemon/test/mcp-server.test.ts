@@ -68,6 +68,7 @@ describe("startMcpServer — dependency-resolution regression guard", () => {
     expect(toolNames).toContain("compost.gaps.dismiss");
     expect(toolNames).toContain("compost.gaps.stats");
     expect(toolNames).toContain("compost.curiosity");
+    expect(toolNames).toContain("compost.curiosity.match_facts");
     expect(toolNames).toContain("compost.digest");
     expect(toolNames).toContain("compost.crawl.propose");
     expect(toolNames).toContain("compost.crawl.list");

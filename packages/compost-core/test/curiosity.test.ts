@@ -8,6 +8,7 @@ import {
   detectCuriosityClusters,
   tokenizeQuestion,
   jaccardOverlap,
+  matchFactsToGaps,
 } from "../src/cognitive/curiosity";
 import { logGap, dismissGap, resolveGap } from "../src/cognitive/gap-tracker";
 
@@ -185,5 +186,183 @@ describe("detectCuriosityClusters", () => {
     expect(r.clusters[0]!.shared_tokens).toContain("ollama");
     expect(r.clusters[0]!.total_asks).toBeGreaterThanOrEqual(5);
     expect(r.clusters[1]!.shared_tokens).toContain("fts5");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// matchFactsToGaps — "new fact may answer this open gap" active L4 suggestion
+// ---------------------------------------------------------------------------
+
+describe("matchFactsToGaps", () => {
+  let tmpDir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "compost-match-"));
+    db = new Database(join(tmpDir, "ledger.db"));
+    applyMigrations(db);
+    // Seed source + observation that facts will reference.
+    db.run(
+      "INSERT INTO source VALUES ('s1','file:///s1','local-file',NULL,0.0,'user',datetime('now'),NULL)"
+    );
+    db.run(
+      `INSERT INTO observations VALUES ('obs-1','s1','file:///s1',
+       datetime('now','-1 days'),datetime('now','-1 days'),
+       'h','r',NULL,NULL,'text/plain','test',1,'user','idem-1','tp-2026-04',NULL,NULL,NULL)`
+    );
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function seedFact(
+    factId: string,
+    subject: string,
+    predicate: string,
+    object: string,
+    opts: {
+      confidence?: number;
+      daysAgo?: number;
+      archived?: boolean;
+      supersededBy?: string;
+    } = {}
+  ): void {
+    db.run(
+      `INSERT INTO facts
+         (fact_id, subject, predicate, object, confidence, importance,
+          observe_id, created_at, archived_at, superseded_by)
+       VALUES (?, ?, ?, ?, ?, 0.5, 'obs-1',
+               datetime('now', ? || ' days'), ?, ?)`,
+      [
+        factId,
+        subject,
+        predicate,
+        object,
+        opts.confidence ?? 0.9,
+        -(opts.daysAgo ?? 1),
+        opts.archived ? "archived" : null,
+        opts.supersededBy ?? null,
+      ]
+    );
+  }
+
+  test("empty db yields empty matches", () => {
+    expect(matchFactsToGaps(db)).toEqual([]);
+  });
+
+  test("no recent facts → every open gap returns with empty candidate list", () => {
+    logGap(db, "What is FTS5?");
+    const r = matchFactsToGaps(db);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.candidate_facts).toEqual([]);
+  });
+
+  test("single fact whose tokens overlap gap tokens surfaces as candidate", () => {
+    logGap(db, "What is FTS5 ranking?");
+    seedFact("f1", "FTS5 ranking", "computed via", "BM25 + weights", {
+      confidence: 0.9,
+      daysAgo: 1,
+    });
+    const r = matchFactsToGaps(db, { minOverlap: 2 });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.candidate_facts).toHaveLength(1);
+    expect(r[0]!.candidate_facts[0]!.fact_id).toBe("f1");
+  });
+
+  test("fact below overlap threshold is excluded", () => {
+    logGap(db, "What is FTS5 ranking?");
+    seedFact("f-weak", "Postgres", "uses", "replication", { daysAgo: 1 });
+    const r = matchFactsToGaps(db, { minOverlap: 2 });
+    expect(r[0]!.candidate_facts).toEqual([]);
+  });
+
+  test("multiple candidates sorted by overlap desc, capped at maxCandidatesPerGap", () => {
+    logGap(db, "What is FTS5 ranking in hybrid search?");
+    seedFact("f-strong", "FTS5 ranking hybrid", "is", "BM25 score");
+    seedFact("f-mid", "FTS5 ranking", "is", "score");
+    seedFact("f-noise", "FTS5", "works", "with sqlite");
+    const r = matchFactsToGaps(db, {
+      minOverlap: 2,
+      maxCandidatesPerGap: 2,
+    });
+    const ids = r[0]!.candidate_facts.map((c) => c.fact_id);
+    expect(ids).toEqual(["f-strong", "f-mid"]);
+  });
+
+  test("dismissed / resolved gaps are excluded", () => {
+    const g1 = logGap(db, "What is FTS5?");
+    const g2 = logGap(db, "How does FTS5 work?");
+    dismissGap(db, g1.problem_id);
+    resolveGap(db, g2.problem_id);
+    seedFact("f1", "FTS5", "uses", "BM25");
+    const r = matchFactsToGaps(db);
+    expect(r).toEqual([]);
+  });
+
+  test("archived / superseded facts excluded from candidate pool", () => {
+    logGap(db, "What is FTS5 ranking?");
+    seedFact("f-live", "FTS5 ranking", "is", "BM25 score");
+    seedFact("f-arch", "FTS5 ranking", "is", "BM25 score", {
+      archived: true,
+    });
+    seedFact("f-super", "FTS5 ranking", "is", "BM25 score", {
+      supersededBy: "f-live",
+    });
+    const r = matchFactsToGaps(db, { minOverlap: 2 });
+    const ids = r[0]!.candidate_facts.map((c) => c.fact_id);
+    expect(ids).toEqual(["f-live"]);
+  });
+
+  test("facts below confidence floor excluded", () => {
+    logGap(db, "What is FTS5 ranking?");
+    seedFact("f-low", "FTS5 ranking", "is", "BM25 score", {
+      confidence: 0.6,
+    });
+    seedFact("f-ok", "FTS5 ranking", "is", "BM25 score", {
+      confidence: 0.9,
+    });
+    const r = matchFactsToGaps(db, {
+      minOverlap: 2,
+      confidenceFloor: 0.75,
+    });
+    const ids = r[0]!.candidate_facts.map((c) => c.fact_id);
+    expect(ids).toEqual(["f-ok"]);
+  });
+
+  test("window filter excludes old facts", () => {
+    logGap(db, "What is FTS5 ranking?");
+    seedFact("f-fresh", "FTS5 ranking", "is", "BM25 score", { daysAgo: 1 });
+    seedFact("f-stale", "FTS5 ranking", "is", "BM25 score", { daysAgo: 30 });
+    const r = matchFactsToGaps(db, { sinceDays: 7, minOverlap: 2 });
+    const ids = r[0]!.candidate_facts.map((c) => c.fact_id);
+    expect(ids).toEqual(["f-fresh"]);
+  });
+
+  test("gaps with no candidates still returned (user sees 'still open')", () => {
+    logGap(db, "Unrelated question about quasiperiodicity?");
+    logGap(db, "How does FTS5 ranking work?");
+    seedFact("f1", "FTS5 ranking", "uses", "BM25");
+    const r = matchFactsToGaps(db, { minOverlap: 2 });
+    expect(r).toHaveLength(2);
+    const byQuestion = Object.fromEntries(
+      r.map((m) => [m.question, m.candidate_facts.length])
+    );
+    expect(byQuestion["How does FTS5 ranking work?"]).toBeGreaterThanOrEqual(1);
+    expect(
+      byQuestion["Unrelated question about quasiperiodicity?"]
+    ).toBe(0);
+  });
+
+  test("maxGaps caps returned gaps (highest ask_count first)", () => {
+    logGap(db, "Q A?"); // 1 ask
+    logGap(db, "Q B?"); // will bump
+    logGap(db, "q b?"); // bumps B to 2
+    logGap(db, "Q C?"); // 1 ask
+    const r = matchFactsToGaps(db, { maxGaps: 2 });
+    expect(r).toHaveLength(2);
+    // Highest ask_count first
+    expect(r[0]!.question).toBe("Q B?");
   });
 });

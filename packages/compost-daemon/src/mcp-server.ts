@@ -15,7 +15,9 @@ import {
 import { reflect } from "../../compost-core/src/cognitive/reflect";
 import {
   detectCuriosityClusters,
+  matchFactsToGaps,
   type CuriosityOptions,
+  type FactGapMatchOptions,
 } from "../../compost-core/src/cognitive/curiosity";
 import {
   buildDigest,
@@ -63,6 +65,7 @@ export interface McpHandle {
  *   Phase 6 P0 (agent-reachable):
  *     compost.gaps.list / .resolve / .dismiss / .stats
  *     compost.curiosity
+ *     compost.curiosity.match_facts (active L4 fact→gap suggestion)
  *     compost.digest (dry-run only; push stays CLI-gated)
  *     compost.crawl.propose / .list / .approve / .reject / .stats
  *   Intentionally NOT exposed via MCP:
@@ -443,6 +446,53 @@ export async function startMcpServer(
         return {
           content: [
             { type: "text" as const, text: err instanceof Error ? err.message : String(err) },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.curiosity.match_facts ------------------------------------
+  server.registerTool(
+    "compost.curiosity.match_facts",
+    {
+      description:
+        "Active L4: scan recent confident facts for candidates that might answer open gaps. Returns per-gap candidate_facts[] ordered by token overlap. Use when a new fact lands and you want to suggest 'this may resolve gap X', or proactively when reviewing open gaps.",
+      inputSchema: z.object({
+        since_days: z.number().int().positive().max(90).optional(),
+        min_overlap: z.number().int().positive().max(20).optional(),
+        confidence_floor: z.number().min(0).max(1).optional(),
+        max_candidates_per_gap: z.number().int().positive().max(20).optional(),
+        max_gaps: z.number().int().positive().max(100).optional(),
+        only_with_candidates: z.boolean().optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        const opts: FactGapMatchOptions = {};
+        if (input.since_days !== undefined) opts.sinceDays = input.since_days;
+        if (input.min_overlap !== undefined) opts.minOverlap = input.min_overlap;
+        if (input.confidence_floor !== undefined)
+          opts.confidenceFloor = input.confidence_floor;
+        if (input.max_candidates_per_gap !== undefined)
+          opts.maxCandidatesPerGap = input.max_candidates_per_gap;
+        if (input.max_gaps !== undefined) opts.maxGaps = input.max_gaps;
+        let matches = matchFactsToGaps(db, opts);
+        if (input.only_with_candidates) {
+          matches = matches.filter((m) => m.candidate_facts.length > 0);
+        }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(matches) }],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.curiosity.match_facts error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
           ],
           isError: true,
         };
