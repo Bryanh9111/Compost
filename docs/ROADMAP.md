@@ -508,6 +508,18 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     status filter, maxClusters cap, total_asks-desc sort).
   - Stretch items deferred: fact→gap matching ("new facts may answer this
     cluster"), MCP tool surface, auto-trigger on `compost.ask` misses.
+  - ✅ **Stretch: fact→gap matching + MCP surface** (2026-04-18) — active
+    L4 suggestion layer. `matchFactsToGaps(db, opts)` reuses the curiosity
+    tokenizer + Jaccard pattern: for each open gap, scan recent confident
+    facts (within `sinceDays`, confidence ≥ `confidenceFloor`, not
+    archived/superseded), score token overlap on `subject + predicate +
+    object`, return top `maxCandidatesPerGap` per gap. `compost curiosity`
+    restructured as a group with default subcommand `clusters` (existing
+    behavior, non-breaking) + new subcommand `matches`. MCP exposes
+    `compost.curiosity.match_facts`. Regression test updated to 16-tool
+    surface. Tests 595 → 606 (+11).
+  - Still deferred: auto-trigger on `compost.ask` misses (needs ask()
+    response-shape design; defer to Phase 7 analytical partner session).
 - ✅ **User-approved crawl queue (queue-management slice)** (2026-04-17)
   - Migration 0017: `crawl_queue` table (crawl_id, url, url_hash UNIQUE,
     status ∈ {proposed, approved, rejected}, proposed_by, rationale,
