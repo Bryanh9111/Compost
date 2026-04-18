@@ -534,6 +534,31 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     only from proposed, reject only from proposed, forget idempotent),
     stats counting, getByUrl hash lookup. Migrator test updated
     17-count.
+- ✅ **MCP tool surface for Phase 6 P0** (2026-04-18) — **agent-reachable L4**
+  - Wrapped gaps / curiosity / digest / crawl modules as MCP tools in
+    `packages/compost-daemon/src/mcp-server.ts`. Pre-existing 4 tools
+    (observe/query/reflect/ask) grow to 15: `compost.gaps.list/resolve/
+    dismiss/stats`, `compost.curiosity`, `compost.digest`,
+    `compost.crawl.propose/list/approve/reject/stats`. Thin wrappers
+    over already-tested pure modules; no new product logic.
+  - **Deliberately NOT exposed via MCP** (human-gate rationale):
+    - `gap.forget` / `crawl.forget` — hard-delete, CLI-only for safety
+    - `digest --push` — sibling-system (Engram) mutation, CLI-only so
+      push requires explicit human action not agent-initiated during
+      a conversation
+    - `crawl fetch` — doesn't exist anywhere yet; crawl queue remains
+      management-only (first-party principle enforced by code absence)
+  - **Latent bug fixed**: `zod` was missing from
+    `packages/compost-daemon/package.json` dependencies. MCP stdio
+    server has silently failed to start at daemon boot since it was
+    added ("MCP server failed to start (SDK may not be installed)"
+    log at main.ts:108). Covered by a withMcp=false default in
+    daemon.test.ts that never exercised the MCP path. Added
+    `zod: ^3.25.0` to daemon deps; isolated startMcpServer smoke
+    now shows all 15 tools register.
+  - Suite unchanged at 594 (MCP tools are thin wrappers; underlying
+    modules already covered by 86 dedicated tests across gap-tracker,
+    digest, curiosity, crawl-queue, reconcile).
 
 ### Phase 7 — Analytical partner (L5)
 
