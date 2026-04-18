@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 15 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 16 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(15);
+    expect(result.applied).toHaveLength(16);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -41,6 +41,7 @@ describe("migrator", () => {
       "0013_wiki_stale_at",
       "0014_origin_hash_and_method",
       "0015_user_model_schema",
+      "0016_open_problems",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -81,6 +82,7 @@ describe("migrator", () => {
       "ingest_queue",
       "observations",
       "observe_outbox",
+      "open_problems",            // 0016 Phase 6 P0 gap tracker
       "policies",
       "ranking_audit_log",
       "ranking_profile",
@@ -172,12 +174,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(15);
+    expect(before.pending).toHaveLength(16);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(15);
+    expect(after.applied).toHaveLength(16);
     expect(after.pending).toHaveLength(0);
   });
 

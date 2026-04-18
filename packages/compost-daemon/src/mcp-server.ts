@@ -4,7 +4,16 @@ import type { OutboxEvent } from "../../compost-core/src/ledger/outbox";
 import { query } from "../../compost-core/src/query/search";
 import type { QueryOptions } from "../../compost-core/src/query/search";
 import { ask } from "../../compost-core/src/query/ask";
+import { logGap } from "../../compost-core/src/cognitive/gap-tracker";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
+
+/**
+ * Threshold below which compost.ask results are treated as "unanswered"
+ * and logged to the gap tracker. Top-hit confidence < this value means
+ * either no facts matched or only weak ones did; either way the user's
+ * question represents a gap worth remembering.
+ */
+const GAP_CONFIDENCE_THRESHOLD = 0.4;
 import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import pino from "pino";
 
@@ -211,6 +220,23 @@ export async function startMcpServer(
           contexts: input.contexts,
           as_of_unix_sec: input.as_of_unix_sec,
         });
+
+        // Phase 6 P0 — gap tracking. An empty hit set or a weak top hit
+        // means the brain didn't really answer; log it so Curiosity /
+        // the user can revisit. Logging failure is non-fatal: we don't
+        // want gap-tracker bugs breaking the answer path.
+        try {
+          const topConfidence = result.hits[0]?.confidence ?? 0;
+          if (
+            result.hits.length === 0 ||
+            topConfidence < GAP_CONFIDENCE_THRESHOLD
+          ) {
+            logGap(db, input.question, { confidence: topConfidence });
+          }
+        } catch (gapErr) {
+          log.warn({ err: gapErr }, "gap-tracker logGap failed (non-fatal)");
+        }
+
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };
