@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 16 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 17 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(16);
+    expect(result.applied).toHaveLength(17);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -42,6 +42,7 @@ describe("migrator", () => {
       "0014_origin_hash_and_method",
       "0015_user_model_schema",
       "0016_open_problems",
+      "0017_crawl_queue",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -70,6 +71,7 @@ describe("migrator", () => {
       "chunks",
       "context",
       "correction_events",        // 0010 P0-5
+      "crawl_queue",              // 0017 Phase 6 P0 user-approved crawl queue
       "decision_audit",           // 0010 P0-2
       "derivation_run",
       "expected_item",
@@ -174,12 +176,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(16);
+    expect(before.pending).toHaveLength(17);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(16);
+    expect(after.applied).toHaveLength(17);
     expect(after.pending).toHaveLength(0);
   });
 
