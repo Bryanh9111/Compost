@@ -508,7 +508,32 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     status filter, maxClusters cap, total_asks-desc sort).
   - Stretch items deferred: fact→gap matching ("new facts may answer this
     cluster"), MCP tool surface, auto-trigger on `compost.ask` misses.
-- 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
+- ✅ **User-approved crawl queue (queue-management slice)** (2026-04-17)
+  - Migration 0017: `crawl_queue` table (crawl_id, url, url_hash UNIQUE,
+    status ∈ {proposed, approved, rejected}, proposed_by, rationale,
+    tags JSON, proposed_at, decided_at).
+  - `packages/compost-core/src/cognitive/crawl-queue.ts` —
+    `normalizeUrl` (lowercase scheme/host, strip fragment, strip
+    trailing slash on path-less URLs) + `urlHash` (sha256 of
+    normalized) + state machine: proposed → approved | rejected,
+    both terminal. Re-propose of rejected URL does NOT resurrect —
+    user must `forget` first to break any auto-proposer loops.
+    `forgetCrawl` hard-deletes regardless of status.
+  - `compost crawl propose|list|approve|reject|forget|stats` CLI.
+  - **Deliberately no fetch path this slice.** The "never
+    auto-sends requests" first-party principle is enforced by code
+    absence, not runtime discipline. A future slice adds
+    `compost crawl fetch` as an explicit user-initiated verb after
+    product-level design on where fetched content lands (raw
+    observation? ingest queue? review store?), robots.txt policy,
+    size caps, content-type handling.
+  - Tests: 565 → 588 (+23): normalizeUrl + urlHash (case equivalence,
+    trailing slash, fragment), propose (defaults, rationale/tags,
+    re-propose no-resurrect), list (default view, status filter,
+    proposedBy filter, limit), state machine transitions (approve
+    only from proposed, reject only from proposed, forget idempotent),
+    stats counting, getByUrl hash lookup. Migrator test updated
+    17-count.
 
 ### Phase 7 — Analytical partner (L5)
 
