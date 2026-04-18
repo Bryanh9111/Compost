@@ -9,6 +9,11 @@ import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama"
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
 import { OllamaLLMService } from "../../compost-core/src/llm/ollama";
 import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
+import { startEngramFlusher } from "./engram-flusher";
+import { startEngramPoller } from "./engram-poller";
+import type { EngramMcpClient } from "../../compost-engram-adapter/src/writer";
+import type { EngramStreamClient } from "../../compost-engram-adapter/src/stream-puller";
+import { PendingWritesQueue } from "../../compost-engram-adapter/src/pending-writes";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -23,6 +28,41 @@ export interface DaemonHandle {
   stop(): Promise<void>;
 }
 
+/**
+ * Engram bi-directional loop wiring. Production sets nothing and the
+ * daemon auto-wires from env vars + stdio/CLI spawns; tests inject fake
+ * clients to avoid spawning subprocesses. `disabled: true` short-circuits
+ * both schedulers (HC-1 — daemon must boot without Engram).
+ */
+export interface DaemonEngramOpts {
+  /**
+   * Skip both engram-flusher and engram-poller. **Default true** — tests
+   * and library callers never spawn subprocesses unless they opt in.
+   * Set to `false` in the daemon binary entrypoint to auto-wire the
+   * bidirectional loop; or pass `flusherMcpClient` / `pollerStreamClient`
+   * to enable with injected clients (also flips default to enabled).
+   */
+  disabled?: boolean;
+  /** Pre-constructed flusher MCP client (test injection). */
+  flusherMcpClient?: EngramMcpClient;
+  /** Pre-constructed poller stream client (test injection). */
+  pollerStreamClient?: EngramStreamClient;
+  /** Flusher cadence (ms). Default 5 minutes. */
+  flushIntervalMs?: number;
+  /** Poller cadence (ms). Default 5 minutes. */
+  pollIntervalMs?: number;
+  /** Pending writes SQLite path. Default ~/.compost/pending-engram-writes.db. */
+  pendingWritesPath?: string;
+  /** Cursor file path. Default <dataDir>/engram-cursor.json. */
+  cursorPath?: string;
+  /** engram-server stdio command for flusher auto-wire. Default env / "engram-server". */
+  engramServerCmd?: string;
+  /** engram-server stdio args for flusher auto-wire. Default []. */
+  engramServerArgs?: string[];
+  /** Engram CLI binary for poller auto-wire. Default env / "engram". */
+  engramBin?: string;
+}
+
 let _handle: DaemonHandle | null = null;
 
 /**
@@ -32,10 +72,12 @@ let _handle: DaemonHandle | null = null;
  *                  Defaults to ~/.compost. Pass a temp dir for tests.
  * @param withMcp  - whether to start the MCP stdio server. Default true.
  *                  Pass false in tests that don't need MCP.
+ * @param engramOpts - optional Engram integration config. See DaemonEngramOpts.
  */
 export async function startDaemon(
   dataDir: string = DEFAULT_DATA_DIR,
-  withMcp = true
+  withMcp = true,
+  engramOpts: DaemonEngramOpts = {}
 ): Promise<DaemonHandle> {
   // 1. Ensure data directory (chmod 700)
   if (!existsSync(dataDir)) {
@@ -93,6 +135,10 @@ export async function startDaemon(
   });
   const freshnessSched: Scheduler = startFreshnessLoop(db, dataDir);
 
+  // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
+  // if Engram is unreachable — construction failures downgrade to warn.
+  const engramState = await maybeStartEngramSchedulers(db, dataDir, engramOpts);
+
   // 7. Unix socket control server (stop/status/reload)
   const sockPath = join(dataDir, "daemon.sock");
   const socketServer = await startControlSocket(sockPath, db);
@@ -116,6 +162,11 @@ export async function startDaemon(
     reflectSched.stop();
     ingestSched.stop();
     freshnessSched.stop();
+    engramState.flusher?.stop();
+    engramState.poller?.stop();
+    await engramState.shutdown().catch((err) => {
+      log.warn({ err }, "engram shutdown error (continuing)");
+    });
     socketServer.stop();
     if (mcpHandle) await mcpHandle.stop();
     await vectorStore.close().catch(() => {});
@@ -219,11 +270,167 @@ function tryUnlink(path: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Engram scheduler wiring (T2 tech-debt fix: Phase 5 runtime-live for real)
+// ---------------------------------------------------------------------------
+
+interface EngramSchedulerState {
+  flusher: Scheduler | null;
+  poller: Scheduler | null;
+  shutdown: () => Promise<void>;
+}
+
+const NOOP_SHUTDOWN: EngramSchedulerState = {
+  flusher: null,
+  poller: null,
+  shutdown: async () => {},
+};
+
+async function maybeStartEngramSchedulers(
+  db: Database,
+  dataDir: string,
+  engramOpts: DaemonEngramOpts
+): Promise<EngramSchedulerState> {
+  // Per-scheduler opt-in. HC-1: tests/library callers never spawn
+  // subprocesses by accident. CLI binary flips `disabled: false` to
+  // auto-wire both from env defaults; tests inject whichever client they
+  // exercise without accidentally triggering the other subprocess.
+  const autoWireBoth = engramOpts.disabled === false;
+  const runFlusher =
+    autoWireBoth || engramOpts.flusherMcpClient !== undefined;
+  const runPoller =
+    autoWireBoth || engramOpts.pollerStreamClient !== undefined;
+  if (!runFlusher && !runPoller) return NOOP_SHUTDOWN;
+
+  // ------- Flusher (Compost -> Engram; MCP stdio) -------
+  let flusherSched: Scheduler | null = null;
+  let flusherQueue: PendingWritesQueue | null = null;
+  let flusherMcpClient = engramOpts.flusherMcpClient ?? null;
+  let flusherOwnsClient = false;
+  const flusherQueuePath =
+    engramOpts.pendingWritesPath ??
+    join(dataDir, "pending-engram-writes.db");
+
+  if (runFlusher && flusherMcpClient === null) {
+    // Auto-wire from env / defaults. Connect failure -> warn + skip.
+    const cmd =
+      engramOpts.engramServerCmd ??
+      process.env["COMPOST_ENGRAM_SERVER_CMD"] ??
+      "engram-server";
+    const args =
+      engramOpts.engramServerArgs ??
+      splitEnvArgs(process.env["COMPOST_ENGRAM_SERVER_ARGS"]);
+    try {
+      const { createStdioMcpClient, StdioEngramMcpClient } = await import(
+        "../../compost-engram-adapter/src/mcp-stdio-client"
+      );
+      const transport = await createStdioMcpClient({ command: cmd, args });
+      flusherMcpClient = new StdioEngramMcpClient({ client: transport });
+      flusherOwnsClient = true;
+    } catch (err) {
+      log.warn(
+        { err, cmd, args },
+        "engram-flusher connect failed (HC-1 degrade — daemon continues without flusher)"
+      );
+    }
+  }
+
+  if (runFlusher && flusherMcpClient !== null) {
+    try {
+      flusherQueue = new PendingWritesQueue(flusherQueuePath);
+      const intervalMs =
+        engramOpts.flushIntervalMs ??
+        (Number.parseInt(
+          process.env["COMPOST_ENGRAM_FLUSH_INTERVAL_MS"] ?? "",
+          10
+        ) ||
+          300_000);
+      flusherSched = startEngramFlusher({
+        mcpClient: flusherMcpClient,
+        queue: flusherQueue,
+        intervalMs,
+      });
+      log.info({ intervalMs, flusherQueuePath }, "engram-flusher started");
+    } catch (err) {
+      log.warn({ err }, "engram-flusher startup failed — skipping");
+      flusherQueue?.close();
+      flusherQueue = null;
+    }
+  }
+
+  // ------- Poller (Engram -> Compost; CLI spawn) -------
+  let pollerSched: Scheduler | null = null;
+  const pollerClient = engramOpts.pollerStreamClient ?? null;
+  const pollerBin =
+    engramOpts.engramBin ?? process.env["COMPOST_ENGRAM_BIN"] ?? "engram";
+  const cursorPath =
+    engramOpts.cursorPath ?? join(dataDir, "engram-cursor.json");
+
+  let effectivePollerClient = pollerClient;
+  if (runPoller && effectivePollerClient === null) {
+    try {
+      const { CliEngramStreamClient } = await import(
+        "../../compost-engram-adapter/src/cli-stream-client"
+      );
+      effectivePollerClient = new CliEngramStreamClient({
+        engramBin: pollerBin,
+      });
+    } catch (err) {
+      log.warn({ err }, "engram-poller client construction failed — skipping");
+    }
+  }
+
+  if (runPoller && effectivePollerClient !== null) {
+    try {
+      const intervalMs =
+        engramOpts.pollIntervalMs ??
+        (Number.parseInt(
+          process.env["COMPOST_ENGRAM_POLL_INTERVAL_MS"] ?? "",
+          10
+        ) ||
+          300_000);
+      pollerSched = startEngramPoller(db, {
+        client: effectivePollerClient,
+        intervalMs,
+        cursorPath,
+      });
+      log.info({ intervalMs, cursorPath }, "engram-poller started");
+    } catch (err) {
+      log.warn({ err }, "engram-poller startup failed — skipping");
+    }
+  }
+
+  return {
+    flusher: flusherSched,
+    poller: pollerSched,
+    shutdown: async () => {
+      if (flusherOwnsClient && flusherMcpClient) {
+        // StdioEngramMcpClient exposes close() — only the auto-wired client
+        // owns the transport, injected test clients remain caller-owned.
+        const maybeCloseable = flusherMcpClient as unknown as {
+          close?: () => Promise<void>;
+        };
+        if (typeof maybeCloseable.close === "function") {
+          await maybeCloseable.close();
+        }
+      }
+      flusherQueue?.close();
+    },
+  };
+}
+
+/** Split a shell-arg-ish env var by whitespace. No quoting; keep it simple. */
+function splitEnvArgs(raw: string | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const parts = raw.split(/\s+/).filter((p) => p.length > 0);
+  return parts.length > 0 ? parts : undefined;
+}
+
+// ---------------------------------------------------------------------------
 // CLI entry point
 // ---------------------------------------------------------------------------
 if (import.meta.main) {
   const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
   log.info({ dataDir }, "compost-daemon starting");
-  await startDaemon(dataDir);
+  await startDaemon(dataDir, true, { disabled: false });
   log.info("compost-daemon ready");
 }

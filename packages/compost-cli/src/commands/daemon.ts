@@ -55,7 +55,7 @@ export function registerDaemon(program: Command): void {
       );
       const dir = dataDir();
       process.stdout.write(`starting daemon in ${dir}\n`);
-      await startDaemon(dir);
+      await startDaemon(dir, true, { disabled: false });
       // startDaemon keeps process alive via signal handlers
     });
 
