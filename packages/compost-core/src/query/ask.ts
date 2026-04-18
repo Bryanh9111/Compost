@@ -9,6 +9,20 @@ import type { VectorStore } from "../storage/lancedb";
 import type { LLMService } from "../llm/types";
 import { BreakerRegistry } from "../llm/breaker-registry";
 import { query, type QueryOptions, type QueryHit, type QueryResult } from "./search";
+import { logGap } from "../cognitive/gap-tracker";
+
+/**
+ * Default top-hit confidence floor below which an LLM-synthesized answer
+ * is treated as a gap (brain couldn't answer confidently). Callers may
+ * override via `AskOptions.gapThreshold`; pass `null` to disable entirely
+ * (e.g. Phase 7 L5 internal hypothesis probes, which would contaminate
+ * Curiosity with self-generated noise).
+ *
+ * Source: debate 023 synthesis. Previously a transport-layer constant in
+ * `packages/compost-daemon/src/mcp-server.ts:41` — moved to core to give
+ * CLI + future callers the same L4 signal path.
+ */
+export const DEFAULT_GAP_THRESHOLD = 0.4;
 
 export interface AskResult {
   answer: string;
@@ -21,6 +35,14 @@ export interface AskResult {
 export interface AskOptions extends QueryOptions {
   maxAnswerTokens?: number;
   expandQueries?: boolean; // default true — LLM generates 2-3 query variants
+  /**
+   * Top-hit confidence threshold below which the answer is logged as a gap.
+   * `undefined` → use DEFAULT_GAP_THRESHOLD. `null` → disable gap logging
+   * entirely (for tests, L5 internal asks, etc.). Only LLM-synthesized
+   * answers trigger gap logging; BM25 fallback is provenance-gated out
+   * (debate 023 Q2).
+   */
+  gapThreshold?: number | null;
 }
 
 const EXPANSION_PROMPT = `Given the user's question, generate 2-3 alternative phrasings that could find relevant information. Return ONLY a JSON array of strings, no explanation.
@@ -192,8 +214,13 @@ ${factContext || "(no relevant facts found)"}${wikiContext}
 
 Answer:`;
 
-  // Step 5: Generate answer
+  // Step 5: Generate answer.
+  // `synthesizedViaLlm` tracks the provenance of `answer` for gap-logging
+  // (debate 023 Q2). We only log a gap when the LLM actually synthesized
+  // something — BM25 fallback returns low-confidence facts as a courtesy,
+  // not a "brain answered and fell short" event.
   let answer: string;
+  let synthesizedViaLlm = false;
   if (queryResult.hits.length === 0 && wikiContexts.length === 0) {
     answer = "I don't have enough information in my knowledge base to answer this question.";
   } else {
@@ -206,6 +233,7 @@ Answer:`;
         temperature: 0.2,
         systemPrompt: "You are a precise knowledge assistant. Only answer based on the provided facts and wiki context. Be concise.",
       });
+      synthesizedViaLlm = true;
     } catch (err) {
       // Debate 010 Fix 4: surface LLM failure reason in operator log before
       // returning the BM25 fallback. Without this, a CircuitOpenError looks
@@ -223,6 +251,24 @@ Answer:`;
       answer =
         `[LLM unavailable — returning top-${Math.min(10, queryResult.hits.length)} facts by relevance]\n\n` +
         (bm25Fallback || "(no relevant facts found)");
+    }
+  }
+
+  // Step 6: gap logging (debate 023). Provenance-gated: only LLM-synthesized
+  // answers below threshold, or no-evidence cases, count as gaps. Non-fatal
+  // — a bug in gap-tracker must not break the answer path.
+  if (opts.gapThreshold !== null) {
+    const thresh = opts.gapThreshold ?? DEFAULT_GAP_THRESHOLD;
+    const topConf = queryResult.hits[0]?.confidence ?? 0;
+    const noEvidenceCase =
+      queryResult.hits.length === 0 && wikiContexts.length === 0;
+    if (noEvidenceCase || (synthesizedViaLlm && topConf < thresh)) {
+      try {
+        logGap(db, question, { confidence: topConf });
+      } catch (gapErr) {
+        const msg = gapErr instanceof Error ? gapErr.message : String(gapErr);
+        console.warn(`ask.logGap failed (non-fatal): ${msg}`);
+      }
     }
   }
 

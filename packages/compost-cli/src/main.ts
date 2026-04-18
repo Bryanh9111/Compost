@@ -3,6 +3,7 @@ import { Command } from "@commander-js/extra-typings";
 import { registerDaemon } from "./commands/daemon";
 import { registerAdd } from "./commands/add";
 import { registerQuery } from "./commands/query";
+import { registerAsk } from "./commands/ask";
 import { registerDoctor } from "./commands/doctor";
 import { registerHook } from "./commands/hook";
 import { registerReflect } from "./commands/reflect";
@@ -25,6 +26,7 @@ const program = new Command()
 registerDaemon(program);
 registerAdd(program);
 registerQuery(program);
+registerAsk(program);
 registerDoctor(program);
 registerHook(program);
 registerReflect(program);

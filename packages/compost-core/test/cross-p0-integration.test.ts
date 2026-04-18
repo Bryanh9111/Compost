@@ -10,6 +10,7 @@ import { takeSnapshot } from "../src/cognitive/graph-health";
 import { listDecisions } from "../src/cognitive/audit";
 import { getLinks } from "../src/cognitive/fact-links";
 import { ask } from "../src/query/ask";
+import { gapStats } from "../src/cognitive/gap-tracker";
 import { MockLLMService } from "../src/llm/mock";
 import { BreakerRegistry } from "../src/llm/breaker-registry";
 import { CircuitBreakerLLM } from "../src/llm/circuit-breaker";
@@ -212,6 +213,13 @@ describe("cross-P0 integration (Phase 4 Batch D Day 4)", () => {
     expect(askResult.hits.length).toBeGreaterThan(0);
     // Wiki page is referenced (stale or not, ask still reads the row).
     expect(askResult.wiki_pages_used).toContain("paris.md");
+
+    // Debate 023 — provenance-gated gap logging. The BM25 fallback path
+    // means the LLM never synthesized an answer; this is NOT a "brain
+    // admitted it can't answer" event, it's a degraded-service event.
+    // logging a gap here would silence the triage/breaker-health signal
+    // and pollute Curiosity with fake hotspots during downtime.
+    expect(gapStats(db).total_asks).toBe(0);
 
     // 4. Recovery: a happy registry rebuild clears stale_at.
     const recoverRegistry = new BreakerRegistry(
