@@ -141,13 +141,103 @@ describe("correction-detector (P0-5, Phase 4 Batch D)", () => {
     expect(JSON.parse(event.related_fact_ids_json)).toEqual([]);
   });
 
-  test("findRelatedFacts is a stub that returns [] (Option B per debate 006)", () => {
-    const result = findRelatedFacts(db, "anything here", {
-      sessionId: "sess-1",
-      limit: 10,
-      minTokenOverlap: 2,
+  describe("findRelatedFacts (Option A — tokenize + session-filter + overlap)", () => {
+    function seedClaudeCodeFact(
+      factId: string,
+      subject: string,
+      obj: string,
+      sessionId: string = "sess-1"
+    ): void {
+      const sourceId = `claude-code:${sessionId}:/tmp/x`;
+      // Idempotent source seed — tests may call this multiple times per session.
+      db.run(
+        "INSERT OR IGNORE INTO source VALUES (?,?,?,NULL,0.0,'first_party',datetime('now'),NULL)",
+        [sourceId, `claude-code://${sessionId}`, "claude-code"]
+      );
+      db.run(
+        "INSERT INTO observations VALUES (?,?,?,datetime('now'),datetime('now'),'h','r',NULL,NULL,'application/json','claude-code',1,'first_party',?,'tp-2026-04',NULL,NULL,NULL)",
+        [`obs-${factId}`, sourceId, `claude-code://${sessionId}`, `idem-${factId}`]
+      );
+      db.run(
+        "INSERT INTO facts(fact_id, subject, predicate, object, observe_id) VALUES (?, ?, 'pred', ?, ?)",
+        [factId, subject, obj, `obs-${factId}`]
+      );
+    }
+
+    test("empty retractedText yields empty result", () => {
+      expect(findRelatedFacts(db, "", { sessionId: "sess-1" })).toEqual([]);
     });
-    expect(result).toEqual([]);
+
+    test("retractedText with only stopwords yields empty (no signal)", () => {
+      expect(findRelatedFacts(db, "is a the", { sessionId: "sess-1" })).toEqual([]);
+    });
+
+    test("session filter: matches within-session facts via LIKE 'claude-code:<sid>:%'", () => {
+      seedClaudeCodeFact("f1", "Redis", "persistence store");
+      seedClaudeCodeFact("f-other", "Redis", "persistence store", "sess-2");
+      const result = findRelatedFacts(
+        db,
+        "I was wrong about Redis persistence store",
+        { sessionId: "sess-1", minTokenOverlap: 2 }
+      );
+      expect(result).toEqual(["f1"]);
+    });
+
+    test("minTokenOverlap cutoff excludes weakly-overlapping facts", () => {
+      seedClaudeCodeFact("f-strong", "Redis persistence", "durable store");
+      seedClaudeCodeFact("f-weak", "Postgres", "replication");
+      const result = findRelatedFacts(
+        db,
+        "Redis persistence store is durable",
+        { sessionId: "sess-1", minTokenOverlap: 2 }
+      );
+      // f-strong shares {redis, persistence, durable, store} ≥ 2 overlap
+      // f-weak shares nothing
+      expect(result).toEqual(["f-strong"]);
+    });
+
+    test("results sorted by overlap desc and capped at limit", () => {
+      seedClaudeCodeFact("f-big", "Redis persistence durable", "store mechanism");
+      seedClaudeCodeFact("f-mid", "Redis persistence", "memory");
+      seedClaudeCodeFact("f-small", "Redis usage", "xyz");
+      const result = findRelatedFacts(
+        db,
+        "Redis persistence durable store mechanism",
+        { sessionId: "sess-1", minTokenOverlap: 2, limit: 2 }
+      );
+      expect(result).toEqual(["f-big", "f-mid"]);
+    });
+
+    test("archived / superseded facts excluded", () => {
+      seedClaudeCodeFact("f-live", "Redis persistence", "store");
+      seedClaudeCodeFact("f-archived", "Redis persistence", "store");
+      db.run("UPDATE facts SET archived_at = datetime('now') WHERE fact_id = 'f-archived'");
+      seedClaudeCodeFact("f-superseded", "Redis persistence", "store");
+      db.run("UPDATE facts SET superseded_by = 'f-live' WHERE fact_id = 'f-superseded'");
+      const result = findRelatedFacts(
+        db,
+        "Redis persistence store was wrong",
+        { sessionId: "sess-1", minTokenOverlap: 2 }
+      );
+      expect(result).toEqual(["f-live"]);
+    });
+
+    test("without sessionId: falls back to recent global pool (7d window)", () => {
+      // Non-claude-code source to prove the global fallback reaches it
+      db.run(
+        "INSERT INTO source VALUES ('file-src','file:///a.md','local-file',NULL,0.0,'user',datetime('now'),NULL)"
+      );
+      db.run(
+        "INSERT INTO observations VALUES ('obs-g','file-src','file:///a.md',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/plain','test',1,'user','idem-g','tp-2026-04',NULL,NULL,NULL)"
+      );
+      db.run(
+        "INSERT INTO facts(fact_id, subject, predicate, object, observe_id) VALUES ('f-global','Redis','uses','persistence store','obs-g')"
+      );
+      const result = findRelatedFacts(db, "Redis persistence store wrong", {
+        minTokenOverlap: 2,
+      });
+      expect(result).toContain("f-global");
+    });
   });
 
   test("scanObservationForCorrection detects a claude-code hook correction", () => {

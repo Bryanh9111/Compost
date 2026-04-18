@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { tokenizeQuestion } from "./curiosity";
 
 /**
  * Patterns for explicit self-correction. Conservative on purpose:
@@ -146,30 +147,27 @@ export function recordCorrection(
 
 /**
  * Heuristic-only search for facts that may have been corrected. Returns up
- * to `opts.limit` fact_ids, deduped.
+ * to `opts.limit` fact_ids, deduped, sorted by overlap desc.
  *
  * Signature lock (debate 006 Pre-Week-2 Fix 4):
- *   - `sessionId`: restrict the search to facts created in the same session
- *     (subquery joining `source.kind = 'claude-code'` + matching session_id
- *     in observation metadata). Self-corrections almost always reference
- *     recent same-session facts, so this kills the biggest false-positive
- *     surface.
+ *   - `sessionId`: restrict the search to facts created in the same
+ *     claude-code session (source_id LIKE 'claude-code:<sid>:%').
+ *     Self-corrections almost always reference recent same-session facts,
+ *     so this kills the biggest false-positive surface.
  *   - `limit`: default 5. Keeps the health_signal message readable.
  *   - `minTokenOverlap`: default 2. After tokenizing `retractedText` and
  *     stop-wording it, a candidate fact must share at least this many
- *     non-stop tokens in its subject OR object to count as related.
+ *     non-stop tokens across its subject + object text to count.
  *
  * IMPORTANT (debate 002 §Gemini 1.5 ruling): correction events are SIGNALS,
  * not direct mutations. The returned fact_ids feed into `health_signals`
  * (kind='correction_candidate') for user/agent review. NEVER auto-decrement
  * `facts.confidence` from a regex hit.
  *
- * Week 2 implementation choice (locked in debate 006 Fix 4):
- *   Option A: implement tokenize + stopword + session-filter + overlap scoring
- *   Option B: return `[]` with a TODO and defer the real impl to Week 4 P0-1
- * The implementer MUST pick one at Week 2 start time and document the choice.
- * "Looks-like-it-works" half-implementations (match[0] LIKE %...%) are
- * explicitly disallowed.
+ * Implementation (Option A — retired the debate 006 stub once P0-1 triage
+ * landed and did NOT absorb the related-fact inference it was meant to).
+ * Reuses `tokenizeQuestion` from curiosity.ts for the same lowercase +
+ * stopword + ≤2-char drop + dedup semantics.
  */
 export function findRelatedFacts(
   db: Database,
@@ -180,18 +178,66 @@ export function findRelatedFacts(
     minTokenOverlap?: number;
   }
 ): string[] {
-  // Option B (debate 006 Fix 4): return [] with explicit signalling. The
-  // recordCorrection path is still useful -- health_signals carries the
-  // retractedText preview, and Week 4 P0-1 triage will do the real related-
-  // fact inference as part of its signal generation.
-  //
-  // The implementer deliberately chose B over the tokenize/session impl to
-  // keep Week 2 within 3-4 days and to avoid committing to a heuristic
-  // shape that triage (P0-1) might need to redo.
-  void db;
-  void retractedText;
-  void opts;
-  return [];
+  const limit = opts?.limit ?? 5;
+  const minOverlap = opts?.minTokenOverlap ?? 2;
+
+  const retractedTokens = new Set(tokenizeQuestion(retractedText));
+  if (retractedTokens.size === 0) return [];
+
+  // Candidate pool: same-session claude-code facts if sessionId provided
+  // (source_id format "claude-code:<session_id>:<cwd>", see
+  // scanObservationForCorrection); otherwise fall back to recent facts
+  // across all sources. Pool cap 200 keeps scoring bounded — live
+  // sessions typically stay well under.
+  const rows = opts?.sessionId
+    ? (db
+        .query(
+          `SELECT f.fact_id, f.subject, f.object
+             FROM facts f
+             JOIN observations o ON o.observe_id = f.observe_id
+             JOIN source s ON s.id = o.source_id
+            WHERE s.kind = 'claude-code'
+              AND s.id LIKE ?
+              AND f.archived_at IS NULL
+              AND f.superseded_by IS NULL
+            ORDER BY f.created_at DESC
+            LIMIT 200`
+        )
+        .all(`claude-code:${opts.sessionId}:%`) as Array<{
+        fact_id: string;
+        subject: string;
+        object: string;
+      }>)
+    : (db
+        .query(
+          `SELECT fact_id, subject, object
+             FROM facts
+            WHERE archived_at IS NULL
+              AND superseded_by IS NULL
+              AND created_at >= datetime('now', '-7 days')
+            ORDER BY created_at DESC
+            LIMIT 200`
+        )
+        .all() as Array<{
+        fact_id: string;
+        subject: string;
+        object: string;
+      }>);
+
+  const scored: Array<{ fact_id: string; overlap: number }> = [];
+  for (const row of rows) {
+    const candidateTokens = new Set(
+      tokenizeQuestion(`${row.subject} ${row.object}`)
+    );
+    let overlap = 0;
+    for (const t of candidateTokens) if (retractedTokens.has(t)) overlap++;
+    if (overlap >= minOverlap) {
+      scored.push({ fact_id: row.fact_id, overlap });
+    }
+  }
+
+  scored.sort((a, b) => b.overlap - a.overlap);
+  return scored.slice(0, limit).map((s) => s.fact_id);
 }
 
 /**
