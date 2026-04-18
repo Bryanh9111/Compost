@@ -491,7 +491,23 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     undefined refs; latest-wins across multiple audit rows; cross-page
     isolation; wiki-only digest → non-null insight input; wiki-only
     without audit stays null; cross-category fact_id merge + sort.
-- 📋 **Curiosity agent** — pattern detection over observations → drives gap creation from repeated questions, proactive fact suggestions
+- ✅ **Curiosity agent MVP** (2026-04-17) — **Gap clustering via token-Jaccard**
+  - `packages/compost-core/src/cognitive/curiosity.ts` — deterministic, zero-LLM:
+    tokenize (lowercase, drop stopwords + ≤2 char tokens, dedup), Jaccard overlap,
+    greedy clustering where each gap joins the first cluster whose anchor
+    overlaps ≥ minJaccard (default 0.3).
+  - `detectCuriosityClusters(db, opts)` returns `{clusters, unclustered, window_days}`.
+    Clusters carry `representative` (highest ask_count member, tiebreak on
+    last_asked_at), `total_asks` sum, and `shared_tokens` intersection across
+    members. Singletons drop to `unclustered` so hotspot list stays clean.
+  - `compost curiosity` CLI: `--window-days`, `--min-jaccard`, `--max-clusters`,
+    `--status` (open|resolved|dismissed), `--json`. Human-readable default.
+  - Tests: 547 → 565 (+18): tokenizer (stopwords, short-token filter, dedup),
+    Jaccard (identical/disjoint/partial/empty), cluster algorithm (empty db,
+    singleton → unclustered, overlap threshold, representative selection,
+    status filter, maxClusters cap, total_asks-desc sort).
+  - Stretch items deferred: fact→gap matching ("new facts may answer this
+    cluster"), MCP tool surface, auto-trigger on `compost.ask` misses.
 - 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
 
 ### Phase 7 — Analytical partner (L5)
