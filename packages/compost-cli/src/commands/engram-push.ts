@@ -7,6 +7,11 @@ import {
 } from "../../../compost-engram-adapter/src/mcp-stdio-client";
 import { runEngramFlushOnce } from "../../../compost-daemon/src/engram-flusher";
 
+/** Split a space-separated CLI arg into individual args. No shell quoting. */
+function splitArgs(raw: string): string[] {
+  return raw.split(/\s+/).filter((p) => p.length > 0);
+}
+
 export function registerEngramPush(program: Command): void {
   program
     .command("engram-push")
@@ -22,6 +27,10 @@ export function registerEngramPush(program: Command): void {
       "--engram-server-cmd <cmd>",
       "Command spawning engram-server (MCP stdio transport)",
       "engram-server"
+    )
+    .option(
+      "--engram-server-args <args>",
+      'Space-separated args passed after --engram-server-cmd. Quote the whole string. Example: --engram-server-cmd uv --engram-server-args "--directory /path/to/engram run engram-server"'
     )
     .option("--dry-run", "Show pending queue contents without flushing", false)
     .action(async (opts) => {
@@ -49,6 +58,9 @@ export function registerEngramPush(program: Command): void {
 
         const transport = await createStdioMcpClient({
           command: opts.engramServerCmd,
+          ...(opts.engramServerArgs
+            ? { args: splitArgs(opts.engramServerArgs) }
+            : {}),
         });
         const mcpClient = new StdioEngramMcpClient({ client: transport });
         try {

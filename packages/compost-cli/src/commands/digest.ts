@@ -16,6 +16,11 @@ import {
 } from "../../../compost-engram-adapter/src/mcp-stdio-client";
 import { runDigestPushOnce } from "../../../compost-daemon/src/digest-push";
 
+/** Split a space-separated CLI arg into individual args. No shell quoting. */
+function splitArgs(raw: string): string[] {
+  return raw.split(/\s+/).filter((p) => p.length > 0);
+}
+
 const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
 
 function openDb(): Database {
@@ -69,6 +74,10 @@ export function registerDigest(program: Command): void {
       "engram-server"
     )
     .option(
+      "--engram-server-args <args>",
+      'Space-separated args passed after --engram-server-cmd. Quote the whole string. Example: --engram-server-cmd uv --engram-server-args "--directory /path/to/engram run engram-server"'
+    )
+    .option(
       "--queue-path <path>",
       "Pending writes SQLite path (shared with engram-push) — used only with --push",
       DEFAULT_PENDING_DB_PATH
@@ -96,6 +105,9 @@ export function registerDigest(program: Command): void {
           try {
             const transport = await createStdioMcpClient({
               command: opts.engramServerCmd,
+              ...(opts.engramServerArgs
+                ? { args: splitArgs(opts.engramServerArgs) }
+                : {}),
             });
             const mcpClient = new StdioEngramMcpClient({ client: transport });
             try {
