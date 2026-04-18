@@ -11,6 +11,7 @@ import {
   type DigestReport,
 } from "../src/cognitive/digest";
 import { logGap, resolveGap } from "../src/cognitive/gap-tracker";
+import { recordDecision } from "../src/cognitive/audit";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -92,6 +93,26 @@ function insertWikiPage(
      VALUES (?, ?, datetime('now', ? || ' days'), 'test-model')`,
     [path, title, -daysAgo]
   );
+}
+
+function recordWikiRebuild(
+  db: Database,
+  pagePath: string,
+  inputFactIds: string[]
+): void {
+  recordDecision(db, {
+    kind: "wiki_rebuild",
+    targetId: pagePath,
+    confidenceTier: "instance",
+    confidenceActual: 0.85,
+    evidenceRefs: {
+      kind: "wiki_rebuild",
+      page_path: pagePath,
+      input_fact_ids: inputFactIds,
+      input_fact_count: inputFactIds.length,
+    },
+    decidedBy: "wiki",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +374,54 @@ describe("buildDigest — wiki_rebuilds selector", () => {
     expect(buildDigest(db).wiki_rebuilds).toHaveLength(0);
   });
 
+  test("wiki_rebuild with decision_audit row surfaces contributing_fact_ids (slice 3)", () => {
+    insertWikiPage(db, "/topics/foo", "Foo", 1);
+    recordWikiRebuild(db, "/topics/foo", ["f-wiki-1", "f-wiki-2"]);
+
+    const r = buildDigest(db);
+    expect(r.wiki_rebuilds).toHaveLength(1);
+    expect(r.wiki_rebuilds[0]!.refs.contributing_fact_ids).toEqual([
+      "f-wiki-1",
+      "f-wiki-2",
+    ]);
+  });
+
+  test("wiki_rebuild without decision_audit row yields no contributing_fact_ids", () => {
+    insertWikiPage(db, "/topics/lonely", "Lonely", 1);
+    const r = buildDigest(db);
+    expect(r.wiki_rebuilds[0]!.refs.contributing_fact_ids).toBeUndefined();
+  });
+
+  test("multiple audit rows for same page: latest wins", () => {
+    insertWikiPage(db, "/topics/evolving", "Evolving", 1);
+    recordWikiRebuild(db, "/topics/evolving", ["f-old-1"]);
+    // small delay so decided_at differs; SQLite datetime('now') has second
+    // resolution so use two successive recordDecision calls — the second
+    // inserts with a LATER id which is our tiebreak.
+    recordWikiRebuild(db, "/topics/evolving", ["f-new-1", "f-new-2"]);
+
+    const r = buildDigest(db);
+    const ids = r.wiki_rebuilds[0]!.refs.contributing_fact_ids;
+    expect(ids).toEqual(["f-new-1", "f-new-2"]);
+  });
+
+  test("audit rows for a different wiki_rebuild target do not leak", () => {
+    insertWikiPage(db, "/topics/a", "A", 1);
+    insertWikiPage(db, "/topics/b", "B", 1);
+    recordWikiRebuild(db, "/topics/a", ["f-a"]);
+    recordWikiRebuild(db, "/topics/b", ["f-b"]);
+
+    const r = buildDigest(db);
+    const byPath = Object.fromEntries(
+      r.wiki_rebuilds.map((w) => [
+        w.refs.wiki_path,
+        w.refs.contributing_fact_ids,
+      ])
+    );
+    expect(byPath["/topics/a"]).toEqual(["f-a"]);
+    expect(byPath["/topics/b"]).toEqual(["f-b"]);
+  });
+
   test("items grouped by kind AND in combined items array", () => {
     insertSource(db, "s1");
     insertObservation(db, "obs-1", "s1", 1);
@@ -453,6 +522,43 @@ describe("digestInsightInput", () => {
 
   test("empty report yields null", () => {
     expect(digestInsightInput(buildDigest(db))).toBeNull();
+  });
+
+  test("wiki-only digest now produces non-null via contributing_fact_ids (slice 3)", () => {
+    insertWikiPage(db, "/topics/foo", "Foo", 1);
+    recordWikiRebuild(db, "/topics/foo", ["f-wiki-1", "f-wiki-2"]);
+    const out = digestInsightInput(buildDigest(db));
+    expect(out).not.toBeNull();
+    expect(new Set(out!.compostFactIds)).toEqual(
+      new Set(["f-wiki-1", "f-wiki-2"])
+    );
+  });
+
+  test("wiki-only digest without audit provenance stays null", () => {
+    insertWikiPage(db, "/topics/orphan", "Orphan", 1);
+    expect(digestInsightInput(buildDigest(db))).toBeNull();
+  });
+
+  test("merges fact_ids across new_facts + resolved_gaps + wiki contributing", () => {
+    insertSource(db, "s1");
+    insertObservation(db, "obs-1", "s1", 1);
+    insertFact(db, {
+      factId: "f-direct",
+      obsId: "obs-1",
+      confidence: 0.95,
+      daysAgo: 1,
+    });
+    const g = logGap(db, "Q?");
+    resolveGap(db, g.problem_id, { factId: "f-gap" });
+    insertWikiPage(db, "/topics/w", "W", 1);
+    recordWikiRebuild(db, "/topics/w", ["f-wiki", "f-direct"]); // f-direct is shared
+
+    const out = digestInsightInput(buildDigest(db));
+    expect(new Set(out!.compostFactIds)).toEqual(
+      new Set(["f-direct", "f-gap", "f-wiki"])
+    );
+    // assert sorted output for deterministic UUIDv5 seed
+    expect(out!.compostFactIds).toEqual([...out!.compostFactIds].sort());
   });
 
   test("collects unique fact_ids from new_facts + resolved_gaps", () => {

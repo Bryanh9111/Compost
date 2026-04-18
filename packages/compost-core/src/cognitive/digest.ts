@@ -26,6 +26,14 @@ export interface DigestItem {
     fact_id?: string;
     problem_id?: string;
     wiki_path?: string;
+    /**
+     * Slice 3: for wiki_rebuild items, the list of facts that contributed
+     * to the latest synthesis, sourced from the matching decision_audit
+     * row's `evidence_refs_json.input_fact_ids`. Lets wiki-only digests
+     * produce a non-null `digestInsightInput()` without relaxing the
+     * confidence floor or fabricating synthetic ids.
+     */
+    contributing_fact_ids?: string[];
   };
 }
 
@@ -167,27 +175,68 @@ function selectWikiRebuilds(
   sinceSqlite: string,
   limit: number
 ): DigestItem[] {
+  // Slice 3: LEFT JOIN the latest decision_audit row per page with kind=
+  // 'wiki_rebuild' to recover the input_fact_ids already persisted by
+  // wiki.synthesizePage. Zero schema change — decision_audit and
+  // evidence_refs_json.input_fact_ids are authoritative since Phase 4
+  // debate 008 §Q5.
   const rows = db
     .query(
-      `SELECT path, title, last_synthesis_at
-         FROM wiki_pages
-        WHERE last_synthesis_at >= ?
-        ORDER BY last_synthesis_at DESC
+      `SELECT wp.path AS path,
+              wp.title AS title,
+              wp.last_synthesis_at AS last_synthesis_at,
+              (SELECT da.evidence_refs_json
+                 FROM decision_audit da
+                WHERE da.target_id = wp.path
+                  AND da.kind = 'wiki_rebuild'
+                ORDER BY da.decided_at DESC, da.id DESC
+                LIMIT 1) AS latest_audit_json
+         FROM wiki_pages wp
+        WHERE wp.last_synthesis_at >= ?
+        ORDER BY wp.last_synthesis_at DESC
         LIMIT ?`
     )
     .all(sinceSqlite, limit) as Array<{
     path: string;
     title: string;
     last_synthesis_at: string;
+    latest_audit_json: string | null;
   }>;
 
-  return rows.map((r) => ({
-    kind: "wiki_rebuild" as const,
-    id: r.path,
-    headline: `${r.title} (${r.path}) rebuilt`,
-    at: r.last_synthesis_at,
-    refs: { wiki_path: r.path },
-  }));
+  return rows.map((r) => {
+    const contributing = extractContributingFactIds(r.latest_audit_json);
+    const refs: DigestItem["refs"] = { wiki_path: r.path };
+    if (contributing.length > 0) refs.contributing_fact_ids = contributing;
+    return {
+      kind: "wiki_rebuild" as const,
+      id: r.path,
+      headline: `${r.title} (${r.path}) rebuilt`,
+      at: r.last_synthesis_at,
+      refs,
+    };
+  });
+}
+
+function extractContributingFactIds(auditJson: string | null): string[] {
+  if (!auditJson) return [];
+  try {
+    const parsed = JSON.parse(auditJson) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "input_fact_ids" in parsed &&
+      Array.isArray((parsed as { input_fact_ids: unknown }).input_fact_ids)
+    ) {
+      return (parsed as { input_fact_ids: unknown[] }).input_fact_ids.filter(
+        (x): x is string => typeof x === "string"
+      );
+    }
+  } catch {
+    // Malformed audit JSON surfaces as "no contributing facts" rather
+    // than throwing — the wiki rebuild still happened, we just lost
+    // provenance; the digest can still list the page.
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +291,13 @@ export function digestInsightInput(
   const factIds = new Set<string>();
   for (const item of [...report.new_facts, ...report.resolved_gaps]) {
     if (item.refs.fact_id) factIds.add(item.refs.fact_id);
+  }
+  // Slice 3: wiki_rebuild items contribute their input_fact_ids (from
+  // the latest matching decision_audit row). This lets wiki-only digests
+  // produce a non-null insight payload without relaxing the confidence
+  // floor or fabricating synthetic ids (debate 022 option d, deferred).
+  for (const item of report.wiki_rebuilds) {
+    for (const id of item.refs.contributing_fact_ids ?? []) factIds.add(id);
   }
   if (factIds.size === 0) return null;
 
