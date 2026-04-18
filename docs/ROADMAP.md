@@ -416,10 +416,22 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
   - `compost gaps list|forget|dismiss|resolve|stats` CLI.
   - `compost.ask` MCP tool auto-logs gaps when `hits.length === 0` or top confidence < 0.4. Logging failure is non-fatal (try/caught).
   - Tests: 479 → 496 (+17).
+- ✅ **P0 slice 2 Round A** (2026-04-17) — **Digest selector + renderer (dry-run only)**
+  - `packages/compost-core/src/cognitive/digest.ts` — deterministic selector over
+    the last N days: new confident facts (archived_at IS NULL, superseded_by IS NULL,
+    confidence ≥ floor), resolved gaps, wiki page rebuilds. No LLM; headings fixed.
+  - `renderDigestMarkdown()` emits per-group sections (omits empty groups; `(no items)`
+    fallback) and `digestInsightInput()` reshapes into `{compostFactIds, content,
+    synthesizedAt}` — Round B will feed this straight into `EngramWriter.writeInsight()`.
+  - `compost digest` CLI: `--since-days` (default 7), `--confidence-floor` (default
+    CONFIDENCE_FLOORS.instance = 0.85), `--max-items` per group, `--json`, and
+    `--insight-input` to preview Round B payload. **No `--push` flag yet** — first
+    dogfood of S6-2 transport stays isolated in Round B per debate nature.
+  - Tests: 496 → 518 (+22); digest.ts at 100/100 func/line coverage.
+- 📋 **P0 slice 2 Round B** — wire `compost digest --push` → `EngramWriter.writeInsight`
+  (scope=meta, tags=[digest,weekly]); first live dogfood of S6-2 MCP write transport.
 - 📋 **Curiosity agent** — pattern detection over observations → drives gap creation from repeated questions, proactive fact suggestions
 - 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
-- 📋 **Proactive push channel** — Compost evaluates new info importance → pushes `kind=insight` to Engram via Phase 5 write path. Uses the S6-2 MCP transport directly; dogfood target.
-- 📋 **Daily / weekly digest** — "what you read/wrote/said worth noting today"
 
 ### Phase 7 — Analytical partner (L5)
 
