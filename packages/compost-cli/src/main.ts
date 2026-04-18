@@ -14,6 +14,7 @@ import { registerEngramPull } from "./commands/engram-pull";
 import { registerEngramPush } from "./commands/engram-push";
 import { registerGaps } from "./commands/gaps";
 import { registerDigest } from "./commands/digest";
+import { registerCuriosity } from "./commands/curiosity";
 
 const program = new Command()
   .name("compost")
@@ -35,5 +36,6 @@ registerEngramPull(program);
 registerEngramPush(program);
 registerGaps(program);
 registerDigest(program);
+registerCuriosity(program);
 
 program.parse(process.argv);
