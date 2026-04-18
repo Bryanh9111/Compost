@@ -133,6 +133,22 @@ export class PendingWritesQueue {
   }
 
   /**
+   * Include committed rows — used by `compost doctor --reconcile-engram`
+   * to detect pair fragments (one half committed, the other stuck). Not
+   * meant for flush hot paths (committed rows are historical).
+   */
+  listAll(): PendingWriteRow[] {
+    return this.db
+      .query(
+        `SELECT id, pair_id, kind, payload, enqueued_at, committed_at,
+                attempts, last_error, expires_at
+         FROM pending_writes
+         ORDER BY id`
+      )
+      .all() as PendingWriteRow[];
+  }
+
+  /**
    * TTL drift guard — drop rows whose expires_at would leave less than
    * `graceMs` of validity if flushed now. Debate 020 R2 mitigation: an
    * entry sitting in the queue through a long outage should not land in

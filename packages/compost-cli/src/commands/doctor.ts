@@ -3,6 +3,9 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
+import { DEFAULT_PENDING_DB_PATH } from "../../../compost-engram-adapter/src/constants";
+import { PendingWritesQueue } from "../../../compost-engram-adapter/src/pending-writes";
+import { reconcileEngramQueue } from "../../../compost-engram-adapter/src/reconcile";
 
 const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
 
@@ -49,7 +52,36 @@ export function registerDoctor(program: Command): void {
       "--check-integrity",
       "Audit schema integrity: orphan observations, dangling fact_links, stale wiki_pages, unknown transform_policy"
     )
+    .option(
+      "--reconcile-engram",
+      "Local scan over ~/.compost/pending-engram-writes.db — surfaces pair fragments (R5 blind-write mitigation), stuck rows, and expired-but-not-pruned entries. Exit code 1 if anything flagged"
+    )
+    .option(
+      "--queue-path <path>",
+      "Pending writes SQLite path (for --reconcile-engram)",
+      DEFAULT_PENDING_DB_PATH
+    )
+    .option(
+      "--stuck-threshold-days <n>",
+      "Age (days) above which pending rows are flagged stuck (for --reconcile-engram)",
+      (v) => Number.parseInt(v, 10),
+      7
+    )
     .action(async (opts) => {
+      if (opts.reconcileEngram) {
+        const queue = new PendingWritesQueue(opts.queuePath);
+        try {
+          const report = reconcileEngramQueue(queue, {
+            stuckThresholdDays: opts.stuckThresholdDays,
+          });
+          process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+          if (!report.ok) process.exitCode = 1;
+        } finally {
+          queue.close();
+        }
+        return;
+      }
+
       if (opts.reconcile) {
         const db = openDb();
         try {
