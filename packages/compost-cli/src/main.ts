@@ -13,6 +13,7 @@ import { registerTriage } from "./commands/triage";
 import { registerEngramPull } from "./commands/engram-pull";
 import { registerEngramPush } from "./commands/engram-push";
 import { registerGaps } from "./commands/gaps";
+import { registerDigest } from "./commands/digest";
 
 const program = new Command()
   .name("compost")
@@ -33,5 +34,6 @@ registerTriage(program);
 registerEngramPull(program);
 registerEngramPush(program);
 registerGaps(program);
+registerDigest(program);
 
 program.parse(process.argv);
