@@ -444,13 +444,23 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     `compost engram-push`; `--engram-server-cmd` + `--queue-path` overrides.
     Exit code 1 on `result.ok = false`.
   - Tests: 518 → 525 (+6 digest-push + 1 default-floor regression guard).
-- 📋 **P0 slice 3** — Wiki provenance via `decision_audit` JOIN
-  - Extend `selectWikiRebuilds` to JOIN `wiki_pages ⋈ decision_audit WHERE
-    kind='wiki_rebuild'` and parse `evidence_refs_json.input_fact_ids`
-    (already persisted by `packages/compost-core/src/cognitive/wiki.ts:190`).
-    Merge into `digestInsightInput` fact_id Set so wiki-only digests can push.
-    Zero schema change.
-  - Defer until Round B dogfood validates live transport at least once.
+- ✅ **P0 slice 3** (2026-04-17) — **Wiki provenance via `decision_audit` JOIN**
+  - `selectWikiRebuilds` now LEFT-JOINs the latest `decision_audit` row per
+    page (`kind='wiki_rebuild'`, `ORDER BY decided_at DESC, id DESC LIMIT 1`
+    correlated subquery) and parses `evidence_refs_json.input_fact_ids` into
+    `DigestItem.refs.contributing_fact_ids`. Malformed JSON degrades
+    gracefully — the wiki rebuild still lists, we just lose provenance.
+  - `digestInsightInput()` merges wiki contributing_fact_ids into the fact_id
+    Set alongside `new_facts` and `resolved_gaps` refs. Wiki-only digests
+    now push successfully without relaxing the confidence floor. Live
+    dogfood at `--confidence-floor 0.85` (previously null) returns 11
+    contributing fact_ids pulled from audit provenance.
+  - Zero schema change — `wiki.ts:190` has persisted `input_fact_ids` since
+    debate 008 §Q5; slice 3 is pure query.
+  - Tests: 525 → 532 (+7): wiki+audit happy path; no-audit edge yields
+    undefined refs; latest-wins across multiple audit rows; cross-page
+    isolation; wiki-only digest → non-null insight input; wiki-only
+    without audit stays null; cross-category fact_id merge + sort.
 - 📋 **Curiosity agent** — pattern detection over observations → drives gap creation from repeated questions, proactive fact suggestions
 - 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
 
