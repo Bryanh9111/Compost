@@ -405,16 +405,21 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
 
 **Compost/Engram user model boundary**: raw `preference` / `goal` / `habit` kinds live in Engram (its anchor v2). Compost derives `writing_style` / `decision_heuristic` / `blind_spot` / `recurring_question` / `skill_growth` patterns over observations + facts. See `docs/phase-5-user-model-design.md`.
 
-### Phase 6 — Autonomous exploration (L4)
+### Phase 6 — Autonomous exploration (L4) (🚧 in progress)
 
 > Reactivates items previously listed under "Removed from Phase 4" (ROADMAP:193-199)
 > because L4 is a **core product identity** item, not a P2 defer.
 
-- **Curiosity agent** — detects knowledge gaps from observed question patterns → asks user or queues learning items
-- **Gap tracker** — open questions / unresolved contradictions / user-stated goals with no evidence → persistent `open_problems` surface
-- **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
-- **Proactive push channel** — Compost evaluates new info importance → pushes notifications via Engram (new `insight` entries) or native OS notify
-- **Daily / weekly digest** — "what you read/wrote/said worth noting today"
+- ✅ **P0 slice 1** (commit `18d3bfd`, 2026-04-17) — **Gap tracker foundation**
+  - Migration 0016: `open_problems` table (problem_id, question, question_hash UNIQUE, status, ask_count, timestamps, resolved_by trail).
+  - `packages/compost-core/src/cognitive/gap-tracker.ts` — normalizeQuestion / questionHash / logGap (upsert with ask_count reinforcement) / listGaps / dismissGap / resolveGap / forgetGap / gapStats.
+  - `compost gaps list|forget|dismiss|resolve|stats` CLI.
+  - `compost.ask` MCP tool auto-logs gaps when `hits.length === 0` or top confidence < 0.4. Logging failure is non-fatal (try/caught).
+  - Tests: 479 → 496 (+17).
+- 📋 **Curiosity agent** — pattern detection over observations → drives gap creation from repeated questions, proactive fact suggestions
+- 📋 **User-approved crawl queue** — Compost proposes external sources (URLs, docs) to ingest; user approves via CLI / one-click; **never auto-sends requests** (respects first-party principle)
+- 📋 **Proactive push channel** — Compost evaluates new info importance → pushes `kind=insight` to Engram via Phase 5 write path. Uses the S6-2 MCP transport directly; dogfood target.
+- 📋 **Daily / weekly digest** — "what you read/wrote/said worth noting today"
 
 ### Phase 7 — Analytical partner (L5)
 
