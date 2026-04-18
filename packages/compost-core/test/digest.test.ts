@@ -180,11 +180,26 @@ describe("buildDigest — new_facts selector", () => {
     insertFact(db, {
       factId: "f-mid",
       obsId: "obs-1",
+      confidence: 0.7,
+      daysAgo: 1,
+    });
+    // default floor = CONFIDENCE_FLOORS.exploration = 0.75 -> 0.7 excluded
+    expect(buildDigest(db).new_facts).toHaveLength(0);
+    // override below -> included
+    expect(buildDigest(db, { confidenceFloor: 0.65 }).new_facts).toHaveLength(1);
+  });
+
+  test("default floor is CONFIDENCE_FLOORS.exploration (0.75) — digest semantics, not arbitration", () => {
+    // Schema default for facts.confidence is 0.8 (migration 0001); a fact at
+    // 0.8 MUST be included by the digest default. Raising the default back to
+    // instance/0.85 would silently drop typical personal-KB ingest.
+    insertFact(db, {
+      factId: "f-typical",
+      obsId: "obs-1",
       confidence: 0.8,
       daysAgo: 1,
     });
-    expect(buildDigest(db).new_facts).toHaveLength(0);
-    expect(buildDigest(db, { confidenceFloor: 0.75 }).new_facts).toHaveLength(1);
+    expect(buildDigest(db).new_facts).toHaveLength(1);
   });
 
   test("archived fact is excluded", () => {

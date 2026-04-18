@@ -65,7 +65,7 @@ export function buildDigest(
 ): DigestReport {
   const now = opts.now ?? new Date();
   const sinceDays = opts.sinceDays ?? DEFAULT_SINCE_DAYS;
-  const confidenceFloor = opts.confidenceFloor ?? CONFIDENCE_FLOORS.instance;
+  const confidenceFloor = opts.confidenceFloor ?? CONFIDENCE_FLOORS.exploration;
   const maxItems = opts.maxItems ?? DEFAULT_MAX_ITEMS;
 
   const since = new Date(now);
