@@ -46,7 +46,7 @@ it is append-only, and why the backup/audit commands start there.
 | L1 | Passive ingest | shipped | outbox → drain → extract → store |
 | L2 | Periodic tidy | shipped | `reflect` (decay, sensory GC, wiki rebuild) |
 | L3 | Self correction | shipped | contradiction arbitration, correction events |
-| L4 | Autonomous exploration | planned (Phase 6) | Curiosity agent + Gap tracker crawl gaps it notices |
+| L4 | Autonomous exploration | shipped (Phase 6 P0) | gap tracker, digest push, curiosity clustering, user-approved crawl queue |
 | L5 | Reasoning partner | planned (Phase 7) | cross-fact inference, pattern detection, hypothesis generation |
 | L6 | User model + push | planned (Phase 7+) | knows your preferences / blind spots / goals, notifies you |
 

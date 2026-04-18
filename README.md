@@ -162,15 +162,22 @@ packages/
 
 ## Phase roadmap
 
-| Phase | Capability | Status |
-|-------|-----------|--------|
-| **0** | Encoding + Storage | **Done** -- ledger, drain, queue, reflect, hook, CLI |
-| **1** | Semantic retrieval | **Done** -- LanceDB embeddings, real query results, ranking |
-| **2** | Hybrid search + web + LLM | **Done** -- BM25+ANN, temporal decay, web ingest, wiki synthesis, compost.ask |
-| **3** | Consolidation | **Done** -- contradiction arbitration, wiki rebuild+versioning, LLM fact extraction, multi-query expansion |
-| 4 | Active learning | Curiosity agent, gap tracker, autonomous crawl |
-| 5 | Multi-host | Cross-machine sync, HTTP transport |
-| 6 | Ecosystem | More adapters, PDF/code/video ingest |
+Post-2026-04 calibration reorganized the phases around the **self-evolution
+ladder** (L1 → L6) rather than "portability / ecosystem" thinking. See
+`docs/ROADMAP.md` for the product-identity anchor.
+
+| Phase | Level | Capability | Status |
+|-------|-------|-----------|--------|
+| **0** | L1 | Encoding + Storage | **Done** -- ledger, drain, queue, reflect, hook, CLI |
+| **1** | L1 | Semantic retrieval | **Done** -- LanceDB embeddings, real query results, ranking |
+| **2** | L2 | Hybrid search + web + LLM | **Done** -- BM25+ANN, temporal decay, web ingest, wiki synthesis, compost.ask |
+| **3** | L3 | Consolidation | **Done** -- contradiction arbitration, wiki rebuild+versioning, LLM fact extraction, multi-query expansion |
+| **4** | L3 | Fork-ready personal brain | **Done** -- PII redactor, bench, origin-hash, user model schema |
+| **5** | L3↔L4 | Bidirectional Engram loop | **Done** -- read+write MCP transports, pending queue, engram-push / engram-pull / daemon auto-wire |
+| **6 P0** | L4 | Autonomous exploration | **Done** -- gap tracker, digest push, wiki provenance JOIN, curiosity-agent MVP, user-approved crawl queue |
+| 7 | L5 | Analytical partner | Cross-fact reasoning, pattern detection, hypothesis generation |
+| 8 | — | Portability (descoped) | Export / import bundles — defer-on-demand |
+| 9 | — | Ecosystem (descoped) | More adapters, multimodal metadata — defer-on-demand |
 
 ## Design decisions
 
@@ -191,19 +198,19 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - `docs/QUICKSTART.md` — 5-minute hands-on from clone to first query
 - `docs/CONCEPTS.md` — L1-L6 self-evolution, provenance, decay, Compost ↔ Engram bridge
 - `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
-- `docs/ROADMAP.md` — Phase 4 (shipped) → **Phase 5 closed** (bidirectional Engram loop live) → **Phase 6 P0 slice 1 shipped** (Gap tracker foundation) → L4-L6 remaining
+- `docs/ROADMAP.md` — Phase 4 (shipped) → Phase 5 closed (bidirectional Engram loop runtime-live) → **Phase 6 P0 complete** (gap tracker + digest push + wiki provenance JOIN + curiosity agent + crawl queue) → Phase 7 analytical partner next
 - `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
 - `docs/phase-5-open-questions.md`, `docs/phase-5-user-model-design.md` — Phase 5 pre-work
 - `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`
 - Full v2 spec: `docs/compost-v2-spec.md`
-- Debate records: `debates/001-021/` (021 = Phase 5 S5 slicing verdict, read path)
+- Debate records: `debates/001-022/` (022 = wiki-only digest shaping verdict; Phase 6 P0 slice 2)
 
 ## Stats
 
-- **~19K lines** of TypeScript + ~800 lines Python
-- **496 tests**, 0 failures
-- **16 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016)
-- **22 architecture debates** with 4 AI reviewers (`debates/001-021`)
+- **~20K lines** of TypeScript + ~800 lines Python
+- **594 tests**, 0 failures
+- **17 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017)
+- **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
 - **3 transform policies** (local file, web content, LLM fact extraction)
 - **Provenance**: 4 hashes per observation (content, raw, origin, idempotency)
 
