@@ -18,12 +18,29 @@ class FakeMcpClient implements EngramMcpClient {
   failInvalidate = false;
   throwOnRemember = false;
   nextRememberId = 1;
+  /** Models Engram migration 003 idempotency: same (root_insight_id,
+   *  chunk_index) returns the existing id instead of creating a new row.
+   *  Compost writer must treat this as success (PUT semantics). */
+  enableStructuralDedup = false;
+  private structuralIndex = new Map<string, string>();
 
   async remember(args: RememberArgs) {
     this.rememberCalls.push(args);
     if (this.throwOnRemember) throw new Error("network thrown");
     if (this.failRemember) {
       return { ok: false as const, error: "engram refused" };
+    }
+    if (this.enableStructuralDedup) {
+      const rid = args.source_trace.root_insight_id;
+      const cidx = args.source_trace.chunk_index;
+      const key = `${rid}|${cidx}`;
+      const existing = this.structuralIndex.get(key);
+      if (existing) {
+        return { ok: true as const, data: { id: existing } };
+      }
+      const id = `mem-${this.nextRememberId++}`;
+      this.structuralIndex.set(key, id);
+      return { ok: true as const, data: { id } };
     }
     return {
       ok: true as const,
@@ -226,5 +243,54 @@ describe("EngramWriter", () => {
       180
     );
     expect(r).toBe("2026-06-30T00:00:00.000Z");
+  });
+
+  // Debate 024: Engram-side structural dedup contract.
+  // Compost writer must treat "Engram returned existing id" as success
+  // — same memory_ids returned across two pushes of the same fact set,
+  // no new pending writes, no errors.
+  describe("idempotency contract with Engram (debate 024)", () => {
+    test("two pushes of same fact set return identical memory_ids", async () => {
+      client.enableStructuralDedup = true;
+      const opts = {
+        project: "compost",
+        compostFactIds: ["fa", "fb", "fc"],
+        content: "same insight content for both pushes",
+        synthesizedAt: "2026-04-17T00:00:00Z",
+      };
+      const r1 = await writer.writeInsight(opts);
+      const r2 = await writer.writeInsight(opts);
+
+      expect(r1.root_insight_id).toBe(r2.root_insight_id);
+      expect(r1.outcomes.map((o) => o.memory_id)).toEqual(
+        r2.outcomes.map((o) => o.memory_id)
+      );
+      expect(r2.outcomes.every((o) => o.status === "written")).toBe(true);
+      expect(queue.listPending()).toHaveLength(0);
+    });
+
+    test("multi-chunk push twice — chunks deduplicated independently", async () => {
+      client.enableStructuralDedup = true;
+      const content = "P".repeat(900) + "\n\n" + "P".repeat(900) + "\n\n" + "P".repeat(900);
+      const opts = {
+        project: "compost",
+        compostFactIds: ["multi"],
+        content,
+        synthesizedAt: "2026-04-17T00:00:00Z",
+      };
+      const r1 = await writer.writeInsight(opts);
+      const r2 = await writer.writeInsight(opts);
+
+      expect(r1.outcomes.length).toBeGreaterThan(1);
+      expect(r2.outcomes.map((o) => o.memory_id)).toEqual(
+        r1.outcomes.map((o) => o.memory_id)
+      );
+      // Without dedup, nextRememberId would be > r1.outcomes.length * 2.
+      // With dedup, only r1.outcomes.length distinct ids ever issued.
+      const allIds = new Set(client.rememberCalls.map((_, i) =>
+        r1.outcomes[i % r1.outcomes.length].memory_id
+      ));
+      expect(allIds.size).toBe(r1.outcomes.length);
+    });
   });
 });

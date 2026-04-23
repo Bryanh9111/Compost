@@ -82,12 +82,26 @@ Proposed payload (Engram may adjust schema):
 - `synthesized_at` monotonic per insight (allows Engram to detect staleness)
 - Idempotency: same `(project, source_trace.compost_fact_ids)` produces the same deterministic insight ID — Compost won't spam Engram with duplicates on repeated synthesis
 
+### Idempotency contract (debate 024)
+
+Compost's `computeRootInsightId(project, factIds)` (`packages/compost-engram-adapter/src/splitter.ts:40-46`) emits a UUIDv5 over `(project ?? "") + "|" + sorted(factIds)`. Same input → same `root_insight_id`, deterministic across processes. Combined with `chunk_index`, this is the **structural identity** of any compost insight chunk.
+
+Engram enforces this identity as a hard storage invariant (migration `003_compost_insight_idempotency.sql`):
+
+- `CREATE UNIQUE INDEX idx_compost_insight_idempotency ON memories(json_extract($.root_insight_id), json_extract($.chunk_index)) WHERE origin='compost' AND json_type checks pass`
+- `MemoryStore.remember()` checks `_find_compost_duplicate(rid, cidx)` before INSERT (`Engram/src/engram/store.py`).
+- **Behavior on duplicate**: returns the existing `memory_id` to the client (PUT semantics). No `_strengthen` — duplicate compost writes are infrastructure noise (scheduler retry, manual re-push), not user re-confirmation.
+- **Compost-side contract**: writer treats "Engram returned existing id" as `status: "written"` (not pending). `PendingWritesQueue` does not retry. See `packages/compost-engram-adapter/test/writer.test.ts` `describe("idempotency contract with Engram (debate 024)")` for the regression suite.
+
+Implication: it is safe to re-run `compost digest --push` against the same fact set; row count in Engram does not grow.
+
 ### What Compost expects from Engram (per Engram v3.4 Slice B Phase 2 S2, commit `ea223fa`)
 
 - Write API: **reuses existing `mcp__engram__remember`** tool with `origin='compost'` + `kind='insight'` + `source_trace` + `expires_at`. Engram's `_map_insight_sources` auto-populates the internal `compost_insight_sources` table from `source_trace.compost_fact_ids` on insert — no separate `write_compost_insight` tool exists.
 - Engram marks `origin=compost` entries distinguishably in recall output (user can filter)
 - Engram implements `expires_at` semantics: hide expired entries from default recall + **30-day physical delete grace window** after expiration (debate 019 Q6)
 - Engram **excludes `origin=compost` entries from the return stream by default** (prevents Compost-generated insights looping back into Compost as new source — debate 019 Q7 + prior contract HC)
+- Engram enforces structural idempotency on `(root_insight_id, chunk_index)` for `origin=compost` rows (debate 024 / migration 003) — duplicate writes return existing `memory_id`, no error
 - Write failure returns a clear error so Compost can log it — Compost will not retry aggressively
 - **Append-only invariant**: once written, insight `content` is immutable and `updated_at = created_at`. To "update" an insight, Compost must `invalidate_compost_fact` the underlying fact IDs (soft-deletes the old entry) and then `remember` the new version — there is no edit API on Engram side.
 
