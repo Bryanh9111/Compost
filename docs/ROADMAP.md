@@ -571,6 +571,41 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
   - Suite unchanged at 594 (MCP tools are thin wrappers; underlying
     modules already covered by 86 dedicated tests across gap-tracker,
     digest, curiosity, crawl-queue, reconcile).
+- ✅ **Phase 7 pre-work — L4 signal sourcing** (commit `cc6e54b`, 2026-04-18,
+  debate 023) — `logGap` sunk from MCP transport into `ask()` core so every
+  caller (CLI, MCP, future HTTP) produces L4 signal. Provenance-gated:
+  only LLM-synthesized answers below threshold or no-evidence cases count
+  as gaps; BM25 fallback is a degraded-service event, not a brain admission.
+  New `compost ask` CLI subcommand. Tests 594 → 612 (+18).
+- ✅ **`compost mcp` standalone subcommand** (commit `4c5c751`, 2026-04-18) —
+  closes the configuration-layer half of the L4 signal sourcing problem:
+  the daemon's embedded MCP server has no stdin client and is unreachable;
+  Claude Code needs a subprocess it can spawn and pipe to. Mirrors Engram
+  pattern in `~/.claude/CLAUDE.md`. Same ledger.db (SQLite WAL allows
+  concurrent reader). Does NOT start reflect/drain/ingest schedulers
+  (those stay on the long-running daemon).
+- ✅ **CJK tokenizer fix** (commit `068c414`, 2026-04-23, dogfood-found) —
+  `tokenizeQuestion` (`packages/compost-core/src/cognitive/curiosity.ts`)
+  used `split(/\s+/)` only; CJK has no inter-word whitespace, so a whole
+  Chinese phrase between punctuation collapsed to one giant token and
+  Jaccard was always 0 for monolingual CJK input. Fix: char bigrams over
+  CJK runs, ASCII whitespace path preserved. Tests 612 → 619 (+7 incl.
+  one regression guard). Found while running debate 023 §Next Steps
+  dogfood: 5 CJK + 2 EN gap pushes — EN cluster surfaced on "saturn",
+  CJK pair on "土星" stayed unclustered.
+- ✅ **debate 024 — Compost insight 写入去重 (Engram-side hard idempotency)**
+  (Compost commit `80c603c` + Engram commit `cc5ccb4`, 2026-04-23) —
+  dogfood found 4 origin=compost rows where 2 should be (same digest
+  pushed twice). 4/4 advisor consensus on (a) Engram-side `partial UNIQUE
+  INDEX on (origin, root_insight_id, chunk_index) WHERE origin='compost'`
+  + return-existing-id PUT semantics. Engram migration 003 ships:
+  DELETE historical dupes → CREATE UNIQUE INDEX → `_find_compost_duplicate`
+  in `store.py.remember()` before INSERT. Compost adds 2 idempotency
+  contract regression tests (`writer.test.ts`) + new "Idempotency
+  contract" §in `docs/engram-integration-contract.md`. Tests Compost 619
+  → 621 (+2), Engram 234 → 242 (+8). Live ledger cleaned up: 4 → 2 rows
+  for `root_insight_id=2ffbf27d-…`. End-to-end MCP dogfood verified
+  return-existing-id works after restart.
 
 ### Phase 7 — Analytical partner (L5)
 
