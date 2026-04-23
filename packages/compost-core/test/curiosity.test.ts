@@ -39,6 +39,33 @@ describe("tokenizeQuestion", () => {
   test("empty string yields no tokens", () => {
     expect(tokenizeQuestion("")).toEqual([]);
   });
+
+  test("CJK runs emit character bigrams (no whitespace word boundary)", () => {
+    expect(tokenizeQuestion("土星环")).toEqual(["土星", "星环"]);
+  });
+
+  test("CJK with punctuation splits on punctuation, bigrams within each run", () => {
+    const tokens = tokenizeQuestion("土星的卫星？最大叫什么？");
+    expect(tokens).toEqual(
+      expect.arrayContaining(["土星", "星的", "的卫", "卫星", "最大", "大叫", "叫什", "什么"])
+    );
+  });
+
+  test("two CJK questions sharing a substring share at least one bigram", () => {
+    const a = new Set(tokenizeQuestion("土星环的化学成分"));
+    const b = new Set(tokenizeQuestion("土星的卫星总数"));
+    expect([...a].some((t) => b.has(t))).toBe(true); // shares "土星"
+  });
+
+  test("mixed CJK + ASCII segment handled in both halves", () => {
+    const tokens = tokenizeQuestion("Phase6完成");
+    expect(tokens).toContain("phase6");
+    expect(tokens).toContain("完成");
+  });
+
+  test("single CJK char runs are dropped (too noisy as 1-gram)", () => {
+    expect(tokenizeQuestion("我 a")).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

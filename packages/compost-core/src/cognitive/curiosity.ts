@@ -23,6 +23,10 @@ import {
  * Algorithm:
  *   - Normalize each question to lowercase tokens, drop stopwords and
  *     tokens ≤ 2 chars (filters out "is" / "a" / punctuation residue).
+ *     CJK runs (Chinese / Japanese / Korean) have no whitespace word
+ *     boundaries, so we emit character bigrams over each run instead —
+ *     "土星环" → ["土星", "星环"]. Without this, a whole CJK phrase
+ *     between punctuation collapses to one token and Jaccard is always 0.
  *   - Greedy pass: each gap joins the first existing cluster whose
  *     representative Jaccard-overlaps ≥ minJaccard; else starts a new
  *     cluster.
@@ -43,13 +47,30 @@ const STOPWORDS = new Set([
   "all", "no", "not", "yes", "if", "else", "really",
 ]);
 
+const CJK_CHAR_RE = /[぀-ヿ㐀-䶿一-鿿가-힯]/u;
+const CJK_RUN_RE = /[぀-ヿ㐀-䶿一-鿿가-힯]+/gu;
+const NON_CJK_RUN_RE = /[^぀-ヿ㐀-䶿一-鿿가-힯]+/gu;
+
 export function tokenizeQuestion(raw: string): string[] {
-  const tokens = raw
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}_\s-]+/gu, " ")
-    .split(/\s+/)
-    .filter((t) => t.length > 2 && !STOPWORDS.has(t));
-  return [...new Set(tokens)];
+  const normalized = raw.toLowerCase().replace(/[^\p{L}\p{N}_\s-]+/gu, " ");
+  const out: string[] = [];
+  for (const seg of normalized.split(/\s+/)) {
+    if (!seg) continue;
+    if (!CJK_CHAR_RE.test(seg)) {
+      if (seg.length > 2 && !STOPWORDS.has(seg)) out.push(seg);
+      continue;
+    }
+    for (const m of seg.matchAll(CJK_RUN_RE)) {
+      const run = m[0];
+      if (run.length < 2) continue;
+      for (let i = 0; i < run.length - 1; i++) out.push(run.slice(i, i + 2));
+    }
+    for (const m of seg.matchAll(NON_CJK_RUN_RE)) {
+      const run = m[0];
+      if (run.length > 2 && !STOPWORDS.has(run)) out.push(run);
+    }
+  }
+  return [...new Set(out)];
 }
 
 export function jaccardOverlap(a: string[], b: string[]): number {
