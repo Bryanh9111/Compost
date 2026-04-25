@@ -647,6 +647,19 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     kinds (`superseded` doesn't exist — it's a `facts.superseded_by`
     column not a graph edge); schema path is `src/schema/`, not
     `src/schema/migrations/`.
+- ✅ **e2e Engram integration test** (commit `9e49e5d`, 2026-04-25) —
+  closes the mock-vs-mock gap noted at debate 024 ship: `writer.test.ts`
+  uses `FakeMcpClient` (mocks Engram) and Engram's
+  `tests/test_compost_insight_dedup.py` calls `MemoryStore.remember`
+  directly (mocks the wire). New
+  `packages/compost-engram-adapter/test/engram-e2e-integration.test.ts`
+  spawns a real `engram-server` subprocess against an isolated temp
+  SQLite DB (env `ENGRAM_DB`), routes writes through real
+  `StdioEngramMcpClient` + `EngramWriter`, asserts debate 024
+  idempotency contract round-trips through MCP stdio JSON-RPC +
+  `_find_compost_duplicate` + the `idx_compost_insight_idempotency`
+  partial UNIQUE INDEX. Auto-skips when `engram-server` binary missing
+  (CI / fork friendly). Tests: 642 → 645 (+3); ~360ms total runtime.
 - Deferred to follow-up slices (Phase 7 sub-tasks, not blocking):
   - **Pattern detection (β)** — populator over `user_patterns` schema
     (migration 0015 ready since debate 020).
