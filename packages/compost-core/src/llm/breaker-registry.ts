@@ -20,7 +20,8 @@ import { CircuitBreakerLLM, type CircuitBreakerOpts } from "./circuit-breaker";
 export type LLMCallSite =
   | "ask.expand"
   | "ask.answer"
-  | "wiki.synthesis";
+  | "wiki.synthesis"
+  | "l5.reason";
 // Debate 010 Fix 5: removed "mcp.ask.factory" -- it was declared in debate
 // 007 Lock 4 but no caller ever materialized. mcp-server.ts passes the
 // registry directly into `ask()`, which dispatches to ask.expand / ask.answer

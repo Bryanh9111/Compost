@@ -42,47 +42,13 @@ export interface QueryResult {
 
 // ---------------------------------------------------------------------------
 // RRF (Reciprocal Rank Fusion) — Debate 8 consensus
+// Extracted as reusable helper in `./rrf.ts` (debate 025) so Phase 7 L5
+// reasoning shares one implementation with the Phase 2 query path.
 // ---------------------------------------------------------------------------
 
-const RRF_K = 60; // standard constant; benchmark to tune
+import { rrfMergeAnnBm25 } from "./rrf";
 
-interface RRFCandidate {
-  fact_id: string;
-  rrf_score: number;
-  semantic_score: number; // best ANN cosine, 0 if BM25-only
-}
-
-function rrfMerge(
-  annRanked: Array<{ fact_id: string; score: number }>,
-  bm25Ranked: Array<{ fact_id: string }>,
-): RRFCandidate[] {
-  const scores = new Map<string, { rrf: number; semantic: number }>();
-
-  // ANN contributions
-  for (let i = 0; i < annRanked.length; i++) {
-    const { fact_id, score } = annRanked[i];
-    const entry = scores.get(fact_id) ?? { rrf: 0, semantic: 0 };
-    entry.rrf += 1 / (RRF_K + i + 1);
-    if (score > entry.semantic) entry.semantic = score;
-    scores.set(fact_id, entry);
-  }
-
-  // BM25 contributions
-  for (let i = 0; i < bm25Ranked.length; i++) {
-    const { fact_id } = bm25Ranked[i];
-    const entry = scores.get(fact_id) ?? { rrf: 0, semantic: 0 };
-    entry.rrf += 1 / (RRF_K + i + 1);
-    scores.set(fact_id, entry);
-  }
-
-  return Array.from(scores.entries())
-    .map(([fact_id, s]) => ({
-      fact_id,
-      rrf_score: s.rrf,
-      semantic_score: s.semantic,
-    }))
-    .sort((a, b) => b.rrf_score - a.rrf_score);
-}
+const rrfMerge = rrfMergeAnnBm25;
 
 // ---------------------------------------------------------------------------
 // BM25 via FTS5

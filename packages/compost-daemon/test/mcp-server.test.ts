@@ -76,6 +76,10 @@ describe("startMcpServer — dependency-resolution regression guard", () => {
     expect(toolNames).toContain("compost.crawl.reject");
     expect(toolNames).toContain("compost.crawl.stats");
 
+    // Phase 7 L5 surface (2026-04-24, debate 025).
+    expect(toolNames).toContain("compost.reason");
+    expect(toolNames).toContain("compost.reason.list");
+
     db.close();
   });
 });

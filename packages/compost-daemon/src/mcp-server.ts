@@ -30,6 +30,11 @@ import {
   crawlStats,
   type CrawlStatus,
 } from "../../compost-core/src/cognitive/crawl-queue";
+import {
+  runReasoning,
+  listRecentChains,
+  type SeedKind,
+} from "../../compost-core/src/cognitive/reasoning";
 
 import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import pino from "pino";
@@ -668,6 +673,90 @@ export async function startMcpServer(
         return {
           content: [
             { type: "text" as const, text: err instanceof Error ? err.message : String(err) },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.reason ---------------------------------------------------
+  // Phase 7 L5 entry slice (debate 025). Exposed by default (unlike
+  // digest --push) because it produces persisted reasoning_chains rows
+  // the agent can reference back. Idempotent: same (seed, policy,
+  // candidates) returns the existing chain row.
+  server.registerTool(
+    "compost.reason",
+    {
+      description:
+        "Phase 7 L5 cross-fact reasoning. Hybrid retrieval (FTS + ANN + graph traversal) RRF-merged into a candidate set, then LLM-synthesized into a chain. Persists to reasoning_chains; on success also writes derived_from edges back so the graph densifies with use (debate 025 closed-loop). Use when a seed fact / question / gap / curiosity_cluster needs cross-source synthesis.",
+      inputSchema: z.object({
+        seed: z.string(),
+        seed_kind: z
+          .enum(["fact", "question", "gap", "curiosity_cluster"])
+          .default("fact"),
+        top_k: z.number().int().positive().max(50).optional(),
+        graph_hops: z.number().int().min(0).max(5).optional(),
+        no_link_writeback: z.boolean().optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        const chain = await runReasoning(
+          db,
+          { kind: input.seed_kind as SeedKind, id: input.seed },
+          llmRegistry,
+          {
+            topK: input.top_k,
+            graphHops: input.graph_hops,
+            noLinkWriteback: input.no_link_writeback === true,
+          }
+        );
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(chain) }],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.reason error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.reason.list ----------------------------------------------
+  // Read-only paginated view of recent chains. Useful for an agent that
+  // wants to see what L5 has already produced before triggering a new
+  // reason() call (avoids duplicate LLM spend).
+  server.registerTool(
+    "compost.reason.list",
+    {
+      description:
+        "List recent active reasoning chains (newest first). Read-only. Use to discover existing chains before running a new compost.reason call.",
+      inputSchema: z.object({
+        limit: z.number().int().positive().max(100).optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        const chains = listRecentChains(db, input.limit ?? 20);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(chains) }],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.reason.list error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
           ],
           isError: true,
         };

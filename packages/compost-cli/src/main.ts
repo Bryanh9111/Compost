@@ -18,6 +18,7 @@ import { registerDigest } from "./commands/digest";
 import { registerCuriosity } from "./commands/curiosity";
 import { registerCrawl } from "./commands/crawl";
 import { registerMcp } from "./commands/mcp";
+import { registerReason } from "./commands/reason";
 
 const program = new Command()
   .name("compost")
@@ -43,5 +44,6 @@ registerDigest(program);
 registerCuriosity(program);
 registerCrawl(program);
 registerMcp(program);
+registerReason(program);
 
 program.parse(process.argv);

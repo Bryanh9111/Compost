@@ -609,11 +609,57 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
 
 ### Phase 7 — Analytical partner (L5)
 
-- **Cross-fact reasoning engine** — graph traversal over `fact_links` + semantic similarity to find related but unconnected facts
-- **Pattern detection** — cluster facts by theme / time / source to surface emergent patterns
-- **Hypothesis generation** — from known facts, propose plausible unknowns (tagged as hypothesis, not fact)
-- **User model update loop** — observed decisions update `user_profile.preferences` automatically
-- **Reflection prompts** — generate thoughtful questions to help user think deeper about their own knowledge
+- ✅ **Entry slice — `compost reason`** (2026-04-24, debate 025 synthesis (c)+α+B+q+X)
+  - Migration 0018: `reasoning_chains` table (chain_id UUIDv5 over
+    seed_kind+seed_id+policy_version+sorted candidates; deterministic
+    so re-running with identical inputs returns the cached row, debate
+    024 idempotency lesson at L5 layer).
+  - `packages/compost-core/src/cognitive/reasoning.ts` —
+    `runReasoning(db, seed, llm, opts, vectorStore)` orchestrates:
+    (1) seed resolution to query text + optional graph anchor fact_id
+    (2) parallel hybrid retrieval — `query()` lane (FTS5 + ANN + Phase 2
+    rerank) and `traverse()` lane over `fact_links` excluding
+    `contradicts` kind (3) RRF merge via the new shared
+    `packages/compost-core/src/query/rrf.ts` (extracted from
+    `search.ts` so reasoning + Phase 2 query share one impl)
+    (4) drop the seed itself from the candidate set
+    (5) `gapThreshold: null` LLM synthesis via dedicated
+    `BreakerRegistry("l5.reason")` site (debate 023 Q4 contract)
+    (6) persist row to `reasoning_chains`
+    (7) **mandatory `derived_from` write-back** — every successful
+    chain calls `addLink(seedFact, candidate, "derived_from")` so
+    sparse-graph (b)-like behavior bootstraps into dense-graph
+    (a)-like behavior over time (the Opus addition that won the Q1
+    tiebreak: graceful degradation + closed-loop densification).
+  - `compost reason run|list|show` CLI (`packages/compost-cli/src/commands/reason.ts`).
+  - MCP tool surface +2: `compost.reason` (default exposed — produces
+    persistent rows agents can reference) and `compost.reason.list`
+    (read-only; lets agent check existing chains before triggering new
+    LLM spend).
+  - Tests: 621 → 642 (+21 in `reasoning.test.ts`: `computeChainId`
+    determinism + collision behavior, idempotency reuse path,
+    write-back side-effect correctness, no-link-writeback opt-out,
+    LLM failure path with `failure_reason` populated, garbage-output
+    parse failure, sparse-graph graceful degradation, dense-graph
+    contribution proof, `persistDerivedLinks` self-loop guard, read
+    helpers). Migrator test +1 (count 17→18).
+  - Concedes (debate 025 §Opus 撤回): context.md misnamed `fact_links`
+    kinds (`superseded` doesn't exist — it's a `facts.superseded_by`
+    column not a graph edge); schema path is `src/schema/`, not
+    `src/schema/migrations/`.
+- Deferred to follow-up slices (Phase 7 sub-tasks, not blocking):
+  - **Pattern detection (β)** — populator over `user_patterns` schema
+    (migration 0015 ready since debate 020).
+  - **Hypothesis generation (γ)** — needs new `kind` column on facts or
+    a new table; out-of-slice schema work.
+  - **Reflection prompts (δ)** — LLM-cost model + UX design first.
+  - **User model update loop (ε)** — L6 layer; depends on β.
+  - **`(r)` hybrid scheduler** — earned only after dogfood data shows
+    chain quality distribution; entry condition: ≥10 chains, ≥50%
+    user-confirmed, ≥3 with confidence > 0.7.
+  - **`--push-engram` flag** — schema column `engram_insight_id`
+    reserved; wiring deferred until L5 outputs prove cross-project
+    value.
 
 ### Phase 8 — Portability (descoped from former Phase 5)
 
