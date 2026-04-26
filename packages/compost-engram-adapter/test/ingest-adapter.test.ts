@@ -90,12 +90,45 @@ describe("defaultSpoMapper", () => {
     expect(triples[0]?.predicate).toBe("exotic_kind");
   });
 
-  test("subject is always 'user', object is entry content", () => {
+  test("subject is project when entry.project is set (R3 fix 2026-04-25)", () => {
     const t = defaultSpoMapper(
-      entry({ kind: "preference", content: "prefers Go" })
+      entry({ kind: "preference", content: "prefers Go", project: "compost" })
+    )[0];
+    expect(t?.subject).toBe("compost");
+    expect(t?.object).toBe("prefers Go");
+  });
+
+  test("scope='global' with null project → subject='global'", () => {
+    const t = defaultSpoMapper(
+      entry({ kind: "fact", project: null, scope: "global", content: "x" })
+    )[0];
+    expect(t?.subject).toBe("global");
+  });
+
+  test("scope='meta' with null project → subject='meta' (cross-cutting user model)", () => {
+    const t = defaultSpoMapper(
+      entry({ kind: "preference", project: null, scope: "meta", content: "x" })
+    )[0];
+    expect(t?.subject).toBe("meta");
+  });
+
+  test("subject falls back to 'user' only when neither project nor recognized scope", () => {
+    // scope='project' but project=null is technically illegal per Engram
+    // CHECK constraint, but defaultSpoMapper guards anyway.
+    const t = defaultSpoMapper(
+      entry({ kind: "fact", project: null, scope: "project", content: "x" })
     )[0];
     expect(t?.subject).toBe("user");
-    expect(t?.object).toBe("prefers Go");
+  });
+
+  test("different projects → different subjects (cross-project differentiation)", () => {
+    const a = defaultSpoMapper(entry({ project: "athena" }))[0];
+    const b = defaultSpoMapper(entry({ project: "relay" }))[0];
+    const c = defaultSpoMapper(entry({ project: "compost" }))[0];
+    expect(a?.subject).toBe("athena");
+    expect(b?.subject).toBe("relay");
+    expect(c?.subject).toBe("compost");
+    expect(new Set([a?.subject, b?.subject, c?.subject]).size).toBe(3);
   });
 });
 
@@ -113,8 +146,8 @@ describe("ingestEngramEntry", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("new entry → observation + fact + chunk rows inserted", () => {
-    const r = ingestEngramEntry(db, entry());
+  test("new entry → observation + fact + chunk rows inserted", async () => {
+    const r = await ingestEngramEntry(db, entry());
     expect(r.inserted).toBe("new");
     expect(r.fact_count).toBe(1);
     expect(r.chunk_count).toBe(1);
@@ -145,7 +178,9 @@ describe("ingestEngramEntry", () => {
       predicate: string;
       object: string;
     };
-    expect(fact.subject).toBe("user");
+    // R3 fix 2026-04-25: subject derives from project (was hard-coded "user").
+    // Fixture in entry() at line 28 sets project: "compost".
+    expect(fact.subject).toBe("compost");
     expect(fact.predicate).toBe("prefers");
     expect(fact.object).toBe("I prefer Go over Python for CLI tools.");
 
@@ -162,17 +197,17 @@ describe("ingestEngramEntry", () => {
     expect(chunk.text_content).toBe("I prefer Go over Python for CLI tools.");
   });
 
-  test("agent origin → trust_tier=first_party", () => {
-    const r = ingestEngramEntry(db, entry({ origin: "agent" }));
+  test("agent origin → trust_tier=first_party", async () => {
+    const r = await ingestEngramEntry(db, entry({ origin: "agent" }));
     const row = db
       .query("SELECT trust_tier FROM observations WHERE observe_id = ?")
       .get(r.observe_id) as { trust_tier: string };
     expect(row.trust_tier).toBe("first_party");
   });
 
-  test("duplicate memory_id → returns existing observe_id, no new rows", () => {
-    const first = ingestEngramEntry(db, entry());
-    const second = ingestEngramEntry(db, entry());
+  test("duplicate memory_id → returns existing observe_id, no new rows", async () => {
+    const first = await ingestEngramEntry(db, entry());
+    const second = await ingestEngramEntry(db, entry());
     expect(second.inserted).toBe("duplicate");
     expect(second.observe_id).toBe(first.observe_id);
 
@@ -186,8 +221,8 @@ describe("ingestEngramEntry", () => {
     expect(factCount.n).toBe(1);
   });
 
-  test("metadata JSON round trip carries engram fields", () => {
-    const r = ingestEngramEntry(
+  test("metadata JSON round trip carries engram fields", async () => {
+    const r = await ingestEngramEntry(
       db,
       entry({
         tags: ["a", "b"],
@@ -201,14 +236,15 @@ describe("ingestEngramEntry", () => {
       .get(r.observe_id) as { metadata: string };
     const meta = JSON.parse(row.metadata);
     expect(meta.engram_kind).toBe("preference");
+    expect(meta.engram_project).toBe("compost"); // R3 fix 2026-04-25
     expect(meta.engram_scope).toBe("project");
     expect(meta.engram_tags).toEqual(["a", "b"]);
     expect(meta.engram_origin).toBe("human");
     expect(meta.engram_updated_at).toBe("2026-04-17T12:00:00Z");
   });
 
-  test("custom spoMapper override emits user-defined triples", () => {
-    const r = ingestEngramEntry(db, entry({ kind: "event" }), {
+  test("custom spoMapper override emits user-defined triples", async () => {
+    const r = await ingestEngramEntry(db, entry({ kind: "event" }), {
       spoMapper: (e) => [
         { subject: "sprint-2026-W16", predicate: "contains-event", object: e.content },
       ],
@@ -220,8 +256,8 @@ describe("ingestEngramEntry", () => {
     expect(fact.predicate).toBe("contains-event");
   });
 
-  test("origin_hash is SHA-256 of adapter|source_uri|idempotency_key (Migration 0014 contract)", () => {
-    const r = ingestEngramEntry(db, entry({ memory_id: "mem-xyz" }));
+  test("origin_hash is SHA-256 of adapter|source_uri|idempotency_key (Migration 0014 contract)", async () => {
+    const r = await ingestEngramEntry(db, entry({ memory_id: "mem-xyz" }));
     const row = db
       .query("SELECT origin_hash FROM observations WHERE observe_id = ?")
       .get(r.observe_id) as { origin_hash: string };
@@ -233,8 +269,8 @@ describe("ingestEngramEntry", () => {
     expect(row.origin_hash).toBe(expected);
   });
 
-  test("cascade delete: removing observation GCs facts + chunks", () => {
-    const r = ingestEngramEntry(db, entry());
+  test("cascade delete: removing observation GCs facts + chunks", async () => {
+    const r = await ingestEngramEntry(db, entry());
     db.run("DELETE FROM observations WHERE observe_id = ?", [r.observe_id]);
     const facts = db.query("SELECT COUNT(*) AS n FROM facts").get() as {
       n: number;

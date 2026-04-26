@@ -137,7 +137,10 @@ export async function startDaemon(
 
   // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
   // if Engram is unreachable — construction failures downgrade to warn.
-  const engramState = await maybeStartEngramSchedulers(db, dataDir, engramOpts);
+  const engramState = await maybeStartEngramSchedulers(db, dataDir, engramOpts, {
+    embeddingService: embSvc,
+    vectorStore,
+  });
 
   // 7. Unix socket control server (stop/status/reload)
   const sockPath = join(dataDir, "daemon.sock");
@@ -288,7 +291,11 @@ const NOOP_SHUTDOWN: EngramSchedulerState = {
 async function maybeStartEngramSchedulers(
   db: Database,
   dataDir: string,
-  engramOpts: DaemonEngramOpts
+  engramOpts: DaemonEngramOpts,
+  embedDeps: {
+    embeddingService: OllamaEmbeddingService;
+    vectorStore: VectorStore;
+  }
 ): Promise<EngramSchedulerState> {
   // Per-scheduler opt-in. HC-1: tests/library callers never spawn
   // subprocesses by accident. CLI binary flips `disabled: false` to
@@ -392,6 +399,8 @@ async function maybeStartEngramSchedulers(
         client: effectivePollerClient,
         intervalMs,
         cursorPath,
+        embeddingService: embedDeps.embeddingService,
+        vectorStore: embedDeps.vectorStore,
       });
       log.info({ intervalMs, cursorPath }, "engram-poller started");
     } catch (err) {

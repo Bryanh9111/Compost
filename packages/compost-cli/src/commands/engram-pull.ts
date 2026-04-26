@@ -55,11 +55,36 @@ export function registerEngramPull(program: Command): void {
           return;
         }
 
+        // Wire embedding services so new chunks land in LanceDB. Without
+        // this the entries are SQLite/FTS5-visible only and ANN can't
+        // surface them — flattens cross-project reasoning quality (R3
+        // dogfound 2026-04-25). Graceful degradation if Ollama embed
+        // service is unreachable: ingest-adapter swallows the embed
+        // error and the chunk stays embedded_at IS NULL until backfill.
+        const { VectorStore } = await import(
+          "../../../compost-core/src/storage/lancedb"
+        );
+        const { OllamaEmbeddingService } = await import(
+          "../../../compost-core/src/embedding/ollama"
+        );
+        const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+        const lanceDir = join(dataDir, "lancedb");
+        const embSvc = new OllamaEmbeddingService();
+        let vectorStore: import("../../../compost-core/src/storage/lancedb").VectorStore | undefined;
+        try {
+          vectorStore = new VectorStore(lanceDir, embSvc);
+          await vectorStore.connect();
+        } catch {
+          vectorStore = undefined;
+        }
+
         const pullOpts: {
           client: typeof client;
           cursorPath: string;
           kinds?: string[];
           project?: string | null;
+          embeddingService?: typeof embSvc;
+          vectorStore?: typeof vectorStore;
         } = {
           client,
           cursorPath: opts.cursorPath,
@@ -70,10 +95,15 @@ export function registerEngramPull(program: Command): void {
             (k) => k.length > 0
           );
         }
+        if (vectorStore) {
+          pullOpts.embeddingService = embSvc;
+          pullOpts.vectorStore = vectorStore;
+        }
 
         const stats = await runEngramPullOnce(db, pullOpts);
         process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
 
+        if (vectorStore) await vectorStore.close();
         if (stats.errors.length > 0) process.exitCode = 1;
       } finally {
         db.close();

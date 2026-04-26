@@ -7,7 +7,10 @@ import {
 import {
   ensureEngramSource,
   ingestEngramEntry,
+  type IngestOptions,
 } from "../../compost-engram-adapter/src/ingest-adapter";
+import type { EmbeddingService } from "../../compost-core/src/embedding/types";
+import type { VectorStore } from "../../compost-core/src/storage/lancedb";
 
 const log = pino({ name: "compost-engram-poller" });
 
@@ -29,6 +32,14 @@ export interface EngramPollerOpts {
   project?: string | null;
   /** Run one immediate poll before entering the timer loop (default true). */
   runImmediately?: boolean;
+  /**
+   * When provided, ingestEngramEntry embeds each new chunk and writes to
+   * LanceDB. Without this, ANN retrieval can't surface Engram entries
+   * (FTS5 still works). Required for L5 cross-project reasoning to
+   * function meaningfully (debate 025 follow-up dogfood 2026-04-25).
+   */
+  embeddingService?: EmbeddingService;
+  vectorStore?: VectorStore;
 }
 
 interface PollStats {
@@ -67,6 +78,10 @@ export function startEngramPoller(
 
   const puller = new StreamPuller(opts.client, pullerOpts);
 
+  const ingestOpts: IngestOptions = {};
+  if (opts.embeddingService) ingestOpts.embeddingService = opts.embeddingService;
+  if (opts.vectorStore) ingestOpts.vectorStore = opts.vectorStore;
+
   async function pollOnce(): Promise<PollStats> {
     const stats: PollStats = {
       batches: 0,
@@ -80,7 +95,7 @@ export function startEngramPoller(
       stats.entries_seen += batch.length;
       for (const entry of batch) {
         try {
-          const r = ingestEngramEntry(db, entry);
+          const r = await ingestEngramEntry(db, entry, ingestOpts);
           if (r.inserted === "new") stats.entries_new++;
           else stats.entries_duplicate++;
         } catch (e) {
@@ -137,6 +152,8 @@ export async function runEngramPullOnce(
     cursorPath?: string;
     kinds?: string[];
     project?: string | null;
+    embeddingService?: EmbeddingService;
+    vectorStore?: VectorStore;
   }
 ): Promise<PollStats> {
   ensureEngramSource(db);
@@ -152,6 +169,10 @@ export async function runEngramPullOnce(
 
   const puller = new StreamPuller(opts.client, pullerOpts);
 
+  const ingestOpts: IngestOptions = {};
+  if (opts.embeddingService) ingestOpts.embeddingService = opts.embeddingService;
+  if (opts.vectorStore) ingestOpts.vectorStore = opts.vectorStore;
+
   const stats: PollStats = {
     batches: 0,
     entries_seen: 0,
@@ -164,7 +185,7 @@ export async function runEngramPullOnce(
     stats.entries_seen += batch.length;
     for (const entry of batch) {
       try {
-        const r = ingestEngramEntry(db, entry);
+        const r = await ingestEngramEntry(db, entry, ingestOpts);
         if (r.inserted === "new") stats.entries_new++;
         else stats.entries_duplicate++;
       } catch (e) {

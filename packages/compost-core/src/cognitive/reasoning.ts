@@ -326,12 +326,22 @@ Output JSON only: {"chain": "...", "confidence": 0.0-1.0}
 
 Seed: `;
 
+// Truncate per-fact text in the LLM prompt. Engram-origin facts can have
+// ~1-3KB content (whole memory bodies); 10 of them = 10-30KB prompt that
+// makes 18-30GB local models choke (gemma4:31b on Mac mini measured >120s
+// timeouts post engram-pull dogfood 2026-04-26). 400 chars keeps each
+// candidate informative while bounding total prompt to ~5KB.
+const PROMPT_FACT_OBJECT_CAP = 400;
+
 function formatHitsForPrompt(hits: QueryHit[]): string {
   return hits
-    .map(
-      (h, i) =>
-        `[${i + 1}] (conf=${h.confidence.toFixed(2)}) ${h.fact.subject} ${h.fact.predicate} ${h.fact.object}`
-    )
+    .map((h, i) => {
+      const obj =
+        h.fact.object.length > PROMPT_FACT_OBJECT_CAP
+          ? h.fact.object.slice(0, PROMPT_FACT_OBJECT_CAP) + "…"
+          : h.fact.object;
+      return `[${i + 1}] (conf=${h.confidence.toFixed(2)}) ${h.fact.subject} ${h.fact.predicate} ${obj}`;
+    })
     .join("\n");
 }
 
@@ -349,15 +359,15 @@ async function synthesizeChain(
     CHAIN_PROMPT + seedQueryText + "\n\nFacts:\n" + formatHitsForPrompt(hits);
 
   try {
-    // Local 18-30GB models on consumer hardware (gemma4:31b on Mac mini
-    // measured ~47s for 400-token output). 30s was the original guess
-    // before dogfood; bumped to 120s based on real numbers. Chains are
-    // short (2-4 sentences ≈ 80-160 tokens) so cap maxTokens=250 to
-    // bound generation time even on slow hardware.
+    // Local 18-30GB models on consumer hardware. gemma4:31b on Mac mini
+    // measured: ~47s for 400-token output on small prompt; >120s on
+    // post-embed prompts with 10 long Engram facts (dogfood 2026-04-26).
+    // 240s gives realistic headroom; combined with the per-fact 400-char
+    // cap in formatHitsForPrompt, most chains complete in 30-90s.
     const raw = await llm.generate(prompt, {
       maxTokens: 250,
       temperature: 0.3,
-      timeoutMs: 120_000,
+      timeoutMs: 240_000,
     });
     const text = raw.trim().replace(/```\w*\n?/g, "").trim();
     const start = text.indexOf("{");
