@@ -38,6 +38,15 @@ export class OllamaLLMService implements LLMService {
         model: this.model,
         prompt,
         stream: false,
+        // Suppress thinking-mode for "thinking" capability models (e.g.
+        // gemma4:31b, qwen3.5:35b). Without this, Ollama routes all
+        // generated tokens into a separate `thinking` field while
+        // `response` stays empty until the thinking phase finishes —
+        // which with bounded num_predict typically never does. Effect:
+        // every Compost LLM call (ask / wiki synth / L5 reason) was
+        // silently returning empty strings on these models.
+        // Dogfood-found 2026-04-25.
+        think: false,
         options: {
           num_predict: opts.maxTokens ?? this.defaultMaxTokens,
           temperature: opts.temperature ?? this.defaultTemperature,

@@ -349,10 +349,15 @@ async function synthesizeChain(
     CHAIN_PROMPT + seedQueryText + "\n\nFacts:\n" + formatHitsForPrompt(hits);
 
   try {
+    // Local 18-30GB models on consumer hardware (gemma4:31b on Mac mini
+    // measured ~47s for 400-token output). 30s was the original guess
+    // before dogfood; bumped to 120s based on real numbers. Chains are
+    // short (2-4 sentences ≈ 80-160 tokens) so cap maxTokens=250 to
+    // bound generation time even on slow hardware.
     const raw = await llm.generate(prompt, {
-      maxTokens: 400,
+      maxTokens: 250,
       temperature: 0.3,
-      timeoutMs: 30_000,
+      timeoutMs: 120_000,
     });
     const text = raw.trim().replace(/```\w*\n?/g, "").trim();
     const start = text.indexOf("{");
