@@ -47,7 +47,7 @@ it is append-only, and why the backup/audit commands start there.
 | L2 | Periodic tidy | shipped | `reflect` (decay, sensory GC, wiki rebuild) |
 | L3 | Self correction | shipped | contradiction arbitration, correction events |
 | L4 | Autonomous exploration | shipped (Phase 6 P0) | gap tracker, digest push, curiosity clustering, user-approved crawl queue, fact→gap matching (active suggestion), 18-tool MCP agent surface |
-| L5 | Reasoning partner | entry slice shipped (Phase 7 / debate 025) | `runReasoning()` cross-fact chain over RRF-merged hybrid retrieval (FTS + ANN + graph traversal); persists to `reasoning_chains`; mandatory `derived_from` write-back densifies the graph with use; pattern detection / hypothesis generation deferred to follow-up slices |
+| L5 | Reasoning partner | entry slice + verdict channel shipped (Phase 7 / debate 025 + S662) | `runReasoning()` cross-fact chain over RRF-merged hybrid retrieval (FTS + ANN + graph traversal); persists to `reasoning_chains`; mandatory `derived_from` write-back densifies the graph with use; `compost reason verdict` user-feedback channel (orthogonal to chain status) provides labeled data for retrieval β/γ tuning + debate 026 entry; pattern detection / hypothesis generation deferred to follow-up slices |
 | L6 | User model + push | planned (Phase 7+) | knows your preferences / blind spots / goals, notifies you |
 
 The shipped layers (L1-L3) are enough to be useful today. L4-L6 are

@@ -647,6 +647,23 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     kinds (`superseded` doesn't exist — it's a `facts.superseded_by`
     column not a graph edge); schema path is `src/schema/`, not
     `src/schema/migrations/`.
+- ✅ **Verdict CLI/MCP + prompt calibration** (2026-04-26, S662 decision) —
+  ground-truth feedback channel orthogonal to chain `status`. Migration 0019
+  adds `user_verdict` (`confirmed` | `refined` | `rejected` | NULL) +
+  `verdict_at` + `verdict_note` + partial index on judged rows.
+  `setVerdict` / `getVerdictStats` in `cognitive/reasoning.ts`; CLI
+  `compost reason verdict <chain_id> <kind> [--note]` + `compost reason
+  stats`; MCP tools `compost.reason.verdict` (write) +
+  `compost.reason.stats` (read). CHAIN_PROMPT calibrated with 4-tier
+  confidence anchors + 3-shot examples (high/medium/low) — debate 024
+  established LLM self-evaluation is unreliable, so calibration shapes
+  distribution rather than denoising it; the *real* signal channel is
+  user verdict (labeled data for retrieval β/γ tuning + debate 026 entry).
+  Tests: 645 → 660 (+15: round-trip, idempotency-survives-verdict, status
+  orthogonality, CHECK constraint, empty-ledger zeros, calibration mean
+  computation, migrator count 18→19). Verdict='rejected' is finer-grained
+  than status='user_rejected': chain stays visible in
+  `listRecentChains` so it can be referenced as labeled negative data.
 - ✅ **e2e Engram integration test** (commit `9e49e5d`, 2026-04-25) —
   closes the mock-vs-mock gap noted at debate 024 ship: `writer.test.ts`
   uses `FakeMcpClient` (mocks Engram) and Engram's

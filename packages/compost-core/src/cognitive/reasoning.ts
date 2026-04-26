@@ -59,6 +59,16 @@ export type SeedKind = "fact" | "question" | "gap" | "curiosity_cluster";
 
 export type ChainStatus = "active" | "stale" | "superseded" | "user_rejected";
 
+/**
+ * User verdict — orthogonal to ChainStatus. Migration 0019.
+ *   confirmed: chain is correct/useful as written
+ *   refined:   partially right; user adjusted or supplemented
+ *   rejected:  chain is wrong (do NOT use as positive labeled data)
+ *
+ * NULL = unjudged (default for newly synthesized chains).
+ */
+export type ChainVerdict = "confirmed" | "refined" | "rejected";
+
 export interface ReasoningSeed {
   kind: SeedKind;
   id: string;
@@ -108,6 +118,9 @@ export interface ReasoningChain {
   confidence: number;
   status: ChainStatus;
   engram_insight_id: string | null;
+  user_verdict: ChainVerdict | null;
+  verdict_at: string | null;
+  verdict_note: string | null;
   created_at: string;
   reused_existing: boolean;
 }
@@ -320,9 +333,49 @@ async function gatherCandidates(
 // LLM chain synthesis
 // ---------------------------------------------------------------------------
 
-const CHAIN_PROMPT = `Given a seed and a set of related facts retrieved from a personal knowledge base, write a concise reasoning chain (2-4 sentences) that connects them. Only use information from the facts provided. If the facts do not support a coherent chain, say so explicitly.
+// Calibration (S662, 2026-04-26): debate 024 established LLM self-evaluation
+// is fundamentally unreliable. Anchors + 3-shot examples don't make the signal
+// trustworthy — they shape its distribution so verdict-labeled data has more
+// usable spread to calibrate against. Without anchors, local 18-30GB models
+// pile every chain at 0.85-1.00 (observed on dogfood 2026-04-25, 10/10 chains
+// returned 1.00). With anchors, distribution should spread across 0.3-0.9.
+const CHAIN_PROMPT = `You synthesize concise reasoning chains over a personal knowledge base.
 
-Output JSON only: {"chain": "...", "confidence": 0.0-1.0}
+Task: given a seed and a set of related facts, write a 2-4 sentence chain that
+connects them. Use ONLY information from the provided facts. If the facts do
+not support a coherent chain, return chain=null and explain in failure_reason.
+
+Confidence anchors (calibrate honestly — the user reads these):
+  0.9-1.0  every step is directly supported; chain holds even if one fact removed
+  0.7-0.8  chain is well-supported; some inference but well-anchored
+  0.5-0.6  plausible synthesis; one or two leaps that need verification
+  0.3-0.4  speculative; facts are loosely related, multiple inferential gaps
+  0.0-0.2  facts do not actually connect; do not force a chain
+
+Examples:
+
+Example 1 (high confidence — direct chain)
+  Seed: polymer chemistry studies molecular weight distribution
+  Facts:
+    [1] molecular weight affects polymer viscosity
+    [2] polymer viscosity determines processing temperature
+  Output: {"chain":"Molecular weight controls polymer viscosity, which in turn sets the processing temperature, so the polymer chemistry's molecular-weight focus directly drives processing parameters.","confidence":0.85}
+
+Example 2 (medium — one inferential leap)
+  Seed: cron job runs daily at 03:00 UTC
+  Facts:
+    [1] backup scheduler uses daily cadence
+    [2] grace-window fire pattern allows late starts up to 2 hours
+  Output: {"chain":"The 03:00 UTC daily cron is consistent with the backup scheduler's daily cadence, and the 2-hour grace window means late starts up to 05:00 UTC still count as the day's run.","confidence":0.6}
+
+Example 3 (low — facts do not connect)
+  Seed: user prefers dark theme
+  Facts:
+    [1] LanceDB stores 768-dimensional vectors
+    [2] FTS5 supports BM25 ranking
+  Output: {"chain":null,"confidence":0.1}
+
+Output JSON only: {"chain": "..." or null, "confidence": 0.0-1.0}
 
 Seed: `;
 
@@ -562,6 +615,9 @@ export async function runReasoning(
     confidence: answer.confidence,
     status: "active",
     engram_insight_id: null,
+    user_verdict: null,
+    verdict_at: null,
+    verdict_note: null,
     created_at: new Date().toISOString(),
     reused_existing: false,
   };
@@ -585,6 +641,9 @@ function rowToChain(row: Record<string, unknown>): ReasoningChain {
     confidence: row.confidence as number,
     status: row.status as ChainStatus,
     engram_insight_id: (row.engram_insight_id as string | null) ?? null,
+    user_verdict: (row.user_verdict as ChainVerdict | null) ?? null,
+    verdict_at: (row.verdict_at as string | null) ?? null,
+    verdict_note: (row.verdict_note as string | null) ?? null,
     created_at: row.created_at as string,
     reused_existing: false,
   };
@@ -626,4 +685,110 @@ export function listRecentChains(
     )
     .all(limit) as Array<Record<string, unknown>>;
   return rows.map(rowToChain);
+}
+
+// ---------------------------------------------------------------------------
+// User verdict — write + read aggregates (migration 0019, S662)
+// ---------------------------------------------------------------------------
+
+export const CHAIN_VERDICTS: readonly ChainVerdict[] = [
+  "confirmed",
+  "refined",
+  "rejected",
+] as const;
+
+export interface VerdictStats {
+  total: number;
+  unjudged: number;
+  confirmed: number;
+  refined: number;
+  rejected: number;
+  /** confirmed + refined out of judged (NULL excluded). 0 when no judgments. */
+  positive_rate: number;
+  /** confidence mean for confirmed chains (LLM-side calibration check). */
+  mean_confidence_confirmed: number | null;
+  /** confidence mean for rejected chains. Lower-than-confirmed = good calibration. */
+  mean_confidence_rejected: number | null;
+}
+
+/**
+ * Stamp a user verdict on a chain. Idempotent UPDATE — re-running with the
+ * same verdict overwrites verdict_at and note (treats it as the latest user
+ * judgment). Returns true when a row matched, false when chainId is unknown.
+ *
+ * Does NOT mutate `status`. Verdict='rejected' is finer-grained than
+ * status='user_rejected': the chain stays visible in `listRecentChains`,
+ * downstream consumers see the negative label, and an explicit `--archive`
+ * (deferred) is the path to also flip status.
+ */
+export function setVerdict(
+  db: Database,
+  chainId: string,
+  verdict: ChainVerdict,
+  note?: string | null
+): boolean {
+  if (!CHAIN_VERDICTS.includes(verdict)) {
+    throw new Error(
+      `setVerdict: invalid verdict '${verdict}'. Must be one of: ${CHAIN_VERDICTS.join(", ")}`
+    );
+  }
+  const result = db.run(
+    `UPDATE reasoning_chains
+       SET user_verdict = ?,
+           verdict_at = datetime('now'),
+           verdict_note = ?
+     WHERE chain_id = ?`,
+    [verdict, note ?? null, chainId]
+  );
+  return result.changes > 0;
+}
+
+/**
+ * Aggregate verdict counts. Used by:
+ *   - debate 026 entry-condition gate (≥10 chains, ≥50% confirmed, ≥3 conf>0.7)
+ *   - calibration health check (mean_confidence_confirmed should exceed
+ *     mean_confidence_rejected; if not, the LLM's self-confidence is
+ *     anti-correlated with user judgment and the prompt needs another pass)
+ *   - CLI / MCP `compost reason stats` surface
+ */
+export function getVerdictStats(db: Database): VerdictStats {
+  // IFNULL on SUM(): empty table makes SUM return NULL; we want 0. AVG can
+  // legitimately return NULL when no row matches the verdict — that NULL
+  // signals "no calibration data yet" and is preserved in the output type.
+  const row = db
+    .query(
+      `SELECT
+         COUNT(*)                                                AS total,
+         IFNULL(SUM(CASE WHEN user_verdict IS NULL    THEN 1 ELSE 0 END), 0) AS unjudged,
+         IFNULL(SUM(CASE WHEN user_verdict='confirmed' THEN 1 ELSE 0 END), 0) AS confirmed,
+         IFNULL(SUM(CASE WHEN user_verdict='refined'   THEN 1 ELSE 0 END), 0) AS refined,
+         IFNULL(SUM(CASE WHEN user_verdict='rejected'  THEN 1 ELSE 0 END), 0) AS rejected,
+         AVG(CASE WHEN user_verdict='confirmed' THEN confidence END) AS mean_conf_confirmed,
+         AVG(CASE WHEN user_verdict='rejected'  THEN confidence END) AS mean_conf_rejected
+       FROM reasoning_chains`
+    )
+    .get() as {
+    total: number;
+    unjudged: number;
+    confirmed: number;
+    refined: number;
+    rejected: number;
+    mean_conf_confirmed: number | null;
+    mean_conf_rejected: number | null;
+  };
+
+  const judged = row.confirmed + row.refined + row.rejected;
+  const positive_rate =
+    judged > 0 ? (row.confirmed + row.refined) / judged : 0;
+
+  return {
+    total: row.total,
+    unjudged: row.unjudged,
+    confirmed: row.confirmed,
+    refined: row.refined,
+    rejected: row.rejected,
+    positive_rate,
+    mean_confidence_confirmed: row.mean_conf_confirmed,
+    mean_confidence_rejected: row.mean_conf_rejected,
+  };
 }

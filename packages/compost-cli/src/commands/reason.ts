@@ -7,7 +7,11 @@ import {
   runReasoning,
   listRecentChains,
   getChainsBySeed,
+  setVerdict,
+  getVerdictStats,
+  CHAIN_VERDICTS,
   type SeedKind,
+  type ChainVerdict,
 } from "../../../compost-core/src/cognitive/reasoning";
 import { BreakerRegistry } from "../../../compost-core/src/llm/breaker-registry";
 import { OllamaLLMService } from "../../../compost-core/src/llm/ollama";
@@ -133,6 +137,89 @@ export function registerReason(program: Command): void {
         for (const c of chains) {
           process.stdout.write(formatChainSummary(c) + "\n");
         }
+      } finally {
+        db.close();
+      }
+    });
+
+  reason
+    .command("verdict")
+    .description(
+      "Stamp a user verdict on a reasoning chain (debate 026 entry signal — ground-truth feedback channel)."
+    )
+    .argument("<chain_id>", "chain_id (UUIDv5 from reason run/list)")
+    .argument(
+      "<verdict>",
+      `verdict (one of ${CHAIN_VERDICTS.join("/")})`
+    )
+    .option("-n, --note <text>", "optional free-text note explaining the judgment")
+    .option("--json", "machine-readable JSON output")
+    .action((chainId: string, verdictArg: string, opts) => {
+      if (!CHAIN_VERDICTS.includes(verdictArg as ChainVerdict)) {
+        process.stderr.write(
+          `error: invalid verdict '${verdictArg}'. Must be one of: ${CHAIN_VERDICTS.join(", ")}\n`
+        );
+        process.exit(2);
+      }
+      const db = openDb();
+      try {
+        const ok = setVerdict(
+          db,
+          chainId,
+          verdictArg as ChainVerdict,
+          opts.note ?? null
+        );
+        if (!ok) {
+          process.stderr.write(`error: chain_id not found: ${chainId}\n`);
+          process.exit(1);
+        }
+        if (opts.json) {
+          process.stdout.write(
+            JSON.stringify({ chain_id: chainId, verdict: verdictArg, note: opts.note ?? null }) + "\n"
+          );
+        } else {
+          process.stdout.write(
+            `verdict recorded: ${chainId.slice(0, 8)} → ${verdictArg}` +
+              (opts.note ? ` (${opts.note})` : "") +
+              "\n"
+          );
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  reason
+    .command("stats")
+    .description(
+      "Verdict-aggregate stats. Surfaces debate 026 entry-condition progress and LLM self-confidence calibration health."
+    )
+    .option("--json", "machine-readable JSON output")
+    .action((opts) => {
+      const db = openDb();
+      try {
+        const stats = getVerdictStats(db);
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
+          return;
+        }
+        const fmt = (n: number | null) => (n === null ? "n/a" : n.toFixed(2));
+        process.stdout.write(
+          [
+            `chains:           ${stats.total}  (unjudged: ${stats.unjudged})`,
+            `verdicts:         confirmed=${stats.confirmed}  refined=${stats.refined}  rejected=${stats.rejected}`,
+            `positive_rate:    ${(stats.positive_rate * 100).toFixed(1)}%  (confirmed+refined / judged)`,
+            `mean confidence:  confirmed=${fmt(stats.mean_confidence_confirmed)}  rejected=${fmt(stats.mean_confidence_rejected)}`,
+            "",
+            stats.mean_confidence_confirmed !== null &&
+            stats.mean_confidence_rejected !== null &&
+            stats.mean_confidence_confirmed <= stats.mean_confidence_rejected
+              ? "[!] calibration warning: LLM confidence on rejected chains >= confirmed. Prompt needs another pass."
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n") + "\n"
+        );
       } finally {
         db.close();
       }

@@ -11,6 +11,9 @@ import {
   readChain,
   getChainsBySeed,
   listRecentChains,
+  setVerdict,
+  getVerdictStats,
+  CHAIN_VERDICTS,
   POLICY_VERSION,
 } from "../src/cognitive/reasoning";
 import { MockLLMService } from "../src/llm/mock";
@@ -317,6 +320,176 @@ describe("reasoning", () => {
       const recent = listRecentChains(db, 5);
       expect(recent.length).toBeGreaterThan(0);
       expect(recent.every((c) => c.status === "active")).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // User verdict — write + stats (migration 0019, S662)
+  // -------------------------------------------------------------------------
+
+  describe("setVerdict / getVerdictStats", () => {
+    // beforeEach fixture already inserted fact-seed/fact-a/fact-b/fact-c.
+    // Force chain_id divergence between calls by varying policyVersion so
+    // each makeChain produces a fresh row instead of hitting the
+    // idempotency reuse path.
+    let policyTick = 0;
+    async function makeChain(seed: string = "fact-seed", conf: number = 0.7) {
+      policyTick += 1;
+      const llm = new MockLLMService({
+        mode: "happy",
+        response: happyLlmReply(`chain for ${seed}`, conf),
+      });
+      return await runReasoning(db, { kind: "fact", id: seed }, llm, {
+        policyVersion: `verdict-test-${policyTick}`,
+      });
+    }
+
+    test("CHAIN_VERDICTS exposes the canonical enum", () => {
+      expect([...CHAIN_VERDICTS]).toEqual(["confirmed", "refined", "rejected"]);
+    });
+
+    test("setVerdict on unknown chain_id → returns false (no row matched)", () => {
+      const ok = setVerdict(
+        db,
+        "00000000-0000-5000-8000-000000000000",
+        "confirmed"
+      );
+      expect(ok).toBe(false);
+    });
+
+    test("setVerdict round-trip via readChain: verdict + verdict_at + verdict_note populated", async () => {
+      const r = await makeChain();
+      const ok = setVerdict(db, r.chain_id, "confirmed", "matches my recall");
+      expect(ok).toBe(true);
+
+      const reread = readChain(db, r.chain_id);
+      expect(reread).not.toBeNull();
+      expect(reread!.user_verdict).toBe("confirmed");
+      expect(reread!.verdict_note).toBe("matches my recall");
+      expect(reread!.verdict_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    });
+
+    test("setVerdict overwrites on re-call (idempotent treat-latest semantics)", async () => {
+      const r = await makeChain();
+      setVerdict(db, r.chain_id, "confirmed", "first");
+      setVerdict(db, r.chain_id, "rejected", "actually no");
+      const reread = readChain(db, r.chain_id);
+      expect(reread!.user_verdict).toBe("rejected");
+      expect(reread!.verdict_note).toBe("actually no");
+    });
+
+    test("setVerdict does NOT mutate chain status (verdict + status orthogonal)", async () => {
+      const r = await makeChain();
+      setVerdict(db, r.chain_id, "rejected");
+      const reread = readChain(db, r.chain_id);
+      // verdict='rejected' is finer-grained than status='user_rejected';
+      // chain stays active so listRecentChains still surfaces it.
+      expect(reread!.status).toBe("active");
+      expect(listRecentChains(db, 50).map((c) => c.chain_id)).toContain(
+        r.chain_id
+      );
+    });
+
+    test("setVerdict throws on invalid verdict string", async () => {
+      const r = await makeChain();
+      expect(() =>
+        // @ts-expect-error — runtime guard against bad caller
+        setVerdict(db, r.chain_id, "maybe")
+      ).toThrow(/invalid verdict/);
+    });
+
+    test("CHECK constraint rejects bad verdict values at the DB layer", async () => {
+      const r = await makeChain();
+      // Bypass the TS guard to prove the schema constraint also holds.
+      expect(() =>
+        db.run(
+          "UPDATE reasoning_chains SET user_verdict = 'maybe' WHERE chain_id = ?",
+          [r.chain_id]
+        )
+      ).toThrow();
+    });
+
+    test("getVerdictStats on empty ledger → zeros + 0 positive_rate + null means", () => {
+      const s = getVerdictStats(db);
+      expect(s).toEqual({
+        total: 0,
+        unjudged: 0,
+        confirmed: 0,
+        refined: 0,
+        rejected: 0,
+        positive_rate: 0,
+        mean_confidence_confirmed: null,
+        mean_confidence_rejected: null,
+      });
+    });
+
+    test("getVerdictStats: counts split correctly across verdicts + unjudged", async () => {
+      const r1 = await makeChain("fact-seed", 0.9);
+      const r2 = await makeChain("fact-a", 0.8);
+      const r3 = await makeChain("fact-b", 0.4);
+      // r4 stays unjudged
+      await makeChain("fact-c", 0.6);
+
+      setVerdict(db, r1.chain_id, "confirmed");
+      setVerdict(db, r2.chain_id, "refined");
+      setVerdict(db, r3.chain_id, "rejected");
+
+      const s = getVerdictStats(db);
+      expect(s.total).toBe(4);
+      expect(s.confirmed).toBe(1);
+      expect(s.refined).toBe(1);
+      expect(s.rejected).toBe(1);
+      expect(s.unjudged).toBe(1);
+      // confirmed + refined = 2 of 3 judged = 0.6667
+      expect(s.positive_rate).toBeCloseTo(2 / 3, 4);
+    });
+
+    test("getVerdictStats: mean confidence per verdict (calibration health signal)", async () => {
+      const r1 = await makeChain("fact-seed", 0.9);
+      const r2 = await makeChain("fact-a", 0.7);
+      const r3 = await makeChain("fact-b", 0.3);
+
+      setVerdict(db, r1.chain_id, "confirmed");
+      setVerdict(db, r2.chain_id, "confirmed");
+      setVerdict(db, r3.chain_id, "rejected");
+
+      const s = getVerdictStats(db);
+      // mean of (0.9, 0.7) = 0.8 — well-calibrated would have this > rejected mean
+      expect(s.mean_confidence_confirmed).toBeCloseTo(0.8, 2);
+      expect(s.mean_confidence_rejected).toBeCloseTo(0.3, 2);
+    });
+
+    test("verdict survives the idempotency reuse path (debate 024 lesson)", async () => {
+      // Pin policyVersion so the second runReasoning maps to the SAME
+      // chain_id (otherwise default POLICY_VERSION vs makeChain's tick
+      // diverge and we'd be testing a fresh row, not the reuse path).
+      const FROZEN_POLICY = "verdict-reuse-test";
+      const llm1 = new MockLLMService({
+        mode: "happy",
+        response: happyLlmReply("first", 0.7),
+      });
+      const r1 = await runReasoning(
+        db,
+        { kind: "fact", id: "fact-seed" },
+        llm1,
+        { policyVersion: FROZEN_POLICY }
+      );
+      setVerdict(db, r1.chain_id, "confirmed", "established label");
+
+      const llm2 = new MockLLMService({
+        mode: "happy",
+        response: happyLlmReply("ignored", 0.99),
+      });
+      const r2 = await runReasoning(
+        db,
+        { kind: "fact", id: "fact-seed" },
+        llm2,
+        { policyVersion: FROZEN_POLICY }
+      );
+      expect(r2.chain_id).toBe(r1.chain_id);
+      expect(r2.reused_existing).toBe(true);
+      expect(r2.user_verdict).toBe("confirmed");
+      expect(r2.verdict_note).toBe("established label");
     });
   });
 

@@ -33,7 +33,10 @@ import {
 import {
   runReasoning,
   listRecentChains,
+  setVerdict,
+  getVerdictStats,
   type SeedKind,
+  type ChainVerdict,
 } from "../../compost-core/src/cognitive/reasoning";
 
 import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
@@ -751,6 +754,103 @@ export async function startMcpServer(
         };
       } catch (err) {
         log.error({ err }, "compost.reason.list error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.reason.verdict ------------------------------------------
+  // Write-side ground-truth labeling channel (debate 026 entry signal,
+  // S662 2026-04-26). Orthogonal to chain `status`: a chain may stay
+  // active with verdict=rejected so retrieval can surface it as a labeled
+  // negative example without it disappearing from list views.
+  server.registerTool(
+    "compost.reason.verdict",
+    {
+      description:
+        "Stamp a user verdict on a reasoning chain. Verdicts: 'confirmed' (chain is correct), 'refined' (partially right; user adjusted), 'rejected' (wrong — do NOT use as positive label). Orthogonal to chain status; does not archive. Use after the user evaluates a chain output.",
+      inputSchema: z.object({
+        chain_id: z.string(),
+        verdict: z.enum(["confirmed", "refined", "rejected"]),
+        note: z.string().optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        const ok = setVerdict(
+          db,
+          input.chain_id,
+          input.verdict as ChainVerdict,
+          input.note ?? null
+        );
+        if (!ok) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `chain_id not found: ${input.chain_id}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                chain_id: input.chain_id,
+                verdict: input.verdict,
+                note: input.note ?? null,
+              }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.reason.verdict error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.reason.stats --------------------------------------------
+  // Read-only verdict aggregate. Surfaces debate 026 entry-condition
+  // progress (positive_rate ≥ 0.5 + total ≥ 10 prerequisites) and LLM
+  // self-confidence calibration health (mean_confidence_confirmed should
+  // exceed mean_confidence_rejected; inversion = recalibrate prompt).
+  server.registerTool(
+    "compost.reason.stats",
+    {
+      description:
+        "Verdict aggregate over reasoning_chains. Returns total / unjudged / per-verdict counts, positive_rate (confirmed+refined / judged), and mean confidence per verdict for calibration health. Read-only.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      try {
+        const stats = getVerdictStats(db);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(stats) },
+          ],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.reason.stats error");
         return {
           content: [
             {
