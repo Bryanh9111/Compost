@@ -269,8 +269,8 @@ Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
 | L2 | Periodic self-organization (reflect, decay, wiki synth) | ✅ Phase 2-3 |
 | L3 | Self-correction (contradiction arbitration, wiki versioning) | ✅ Phase 3 |
 | L4 | **Autonomous exploration** (curiosity, gap tracking, user-approved crawl) | 🔨 Phase 6 |
-| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🔨 Phase 7 |
-| L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7 |
+| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🚧 Phase 7 (entry + verdict + hybrid scheduler ✅; β/γ deferred) |
+| L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7+ |
 
 ### Phase 4 P1 (✅ shipped 2026-04-17 — fork-ready personal brain)
 
