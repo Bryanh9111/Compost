@@ -13,6 +13,13 @@ import {
   type SeedKind,
   type ChainVerdict,
 } from "../../../compost-core/src/cognitive/reasoning";
+import {
+  readState as readSchedulerState,
+  pauseScheduler,
+  resumeScheduler,
+  getRecentVerdictStats,
+  SOFT_GATE_WINDOW,
+} from "../../../compost-core/src/cognitive/reason-scheduler";
 import { BreakerRegistry } from "../../../compost-core/src/llm/breaker-registry";
 import { OllamaLLMService } from "../../../compost-core/src/llm/ollama";
 
@@ -220,6 +227,81 @@ export function registerReason(program: Command): void {
             .filter(Boolean)
             .join("\n") + "\n"
         );
+      } finally {
+        db.close();
+      }
+    });
+
+  const scheduler = reason
+    .command("scheduler")
+    .description(
+      "Phase 7 L5 hybrid scheduler control (debate 026). Background scheduler picks recently-active subjects every 6h, runs runReasoning(), verdict-feedback gates throttle on quality regression."
+    );
+
+  scheduler
+    .command("status", { isDefault: true })
+    .description("Show scheduler state (paused, last cycle, recent verdict signal)")
+    .option("--json", "machine-readable JSON output")
+    .action((opts) => {
+      const db = openDb();
+      try {
+        const state = readSchedulerState(db);
+        const recent = getRecentVerdictStats(db, SOFT_GATE_WINDOW);
+        if (opts.json) {
+          process.stdout.write(
+            JSON.stringify({ state, recent_verdict_window: recent }, null, 2) +
+              "\n"
+          );
+          return;
+        }
+        const lines: string[] = [
+          `paused:           ${state.paused ? "yes" : "no"}` +
+            (state.paused
+              ? `  (since ${state.paused_at ?? "?"}: ${state.paused_reason ?? "(no reason)"})`
+              : ""),
+          `last cycle:       ${state.last_cycle_at ?? "(never run)"}`,
+          `consecutive soft skips: ${state.consecutive_skipped_cycles}`,
+          `recent verdict (last ${SOFT_GATE_WINDOW}): judged=${recent.judged} confirmed=${recent.confirmed} refined=${recent.refined} rejected=${recent.rejected}  rate=${(recent.rejected_rate * 100).toFixed(0)}%`,
+        ];
+        if (state.last_cycle_stats) {
+          const s = state.last_cycle_stats;
+          lines.push(
+            `last cycle stats: gate=${s.gate_decision}  attempted=${s.chains_attempted} succeeded=${s.chains_succeeded} idempotent=${s.chains_skipped_idempotent}`
+          );
+          if (s.gate_detail) lines.push(`                  ${s.gate_detail}`);
+        }
+        process.stdout.write(lines.join("\n") + "\n");
+      } finally {
+        db.close();
+      }
+    });
+
+  scheduler
+    .command("pause")
+    .description("Manually pause the scheduler (must call resume to restart)")
+    .option(
+      "-r, --reason <text>",
+      "explanation for pause (visible in status)",
+      "manual"
+    )
+    .action((opts) => {
+      const db = openDb();
+      try {
+        pauseScheduler(db, opts.reason);
+        process.stdout.write(`scheduler paused: ${opts.reason}\n`);
+      } finally {
+        db.close();
+      }
+    });
+
+  scheduler
+    .command("resume")
+    .description("Resume the scheduler (clears paused state + soft-skip counter)")
+    .action(() => {
+      const db = openDb();
+      try {
+        resumeScheduler(db);
+        process.stdout.write("scheduler resumed\n");
       } finally {
         db.close();
       }

@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 19 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 20 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(19);
+    expect(result.applied).toHaveLength(20);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -45,6 +45,7 @@ describe("migrator", () => {
       "0017_crawl_queue",
       "0018_reasoning_chains",
       "0019_reasoning_chain_verdict",
+      "0020_reasoning_scheduler_state",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -91,6 +92,7 @@ describe("migrator", () => {
       "ranking_audit_log",
       "ranking_profile",
       "reasoning_chains",         // 0018 Phase 7 L5 (debate 025)
+      "reasoning_scheduler_state",// 0020 Phase 7 L5 hybrid scheduler (debate 026)
       "source",
       "source_context",
       "user_pattern_events",      // 0015 user model schema
@@ -179,12 +181,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(19);
+    expect(before.pending).toHaveLength(20);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(19);
+    expect(after.applied).toHaveLength(20);
     expect(after.pending).toHaveLength(0);
   });
 

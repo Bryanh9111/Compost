@@ -3,6 +3,7 @@ import { drainOne } from "../../compost-core/src/ledger/outbox";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
 import { triage } from "../../compost-core/src/cognitive/triage";
 import { synthesizeWiki } from "../../compost-core/src/cognitive/wiki";
+import { runCycle } from "../../compost-core/src/cognitive/reason-scheduler";
 import type { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import type { LLMService } from "../../compost-core/src/llm/types";
 import { ingestUrl } from "../../compost-core/src/pipeline/web-ingest";
@@ -21,6 +22,7 @@ const REFLECT_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const DRAIN_EMPTY_SLEEP_MS = 1000; // 1s backoff when queue is empty
 const INGEST_EMPTY_SLEEP_MS = 2000; // 2s backoff when ingest queue is empty
 const FRESHNESS_CHECK_INTERVAL_MS = 60_000; // 60s between freshness loop ticks
+const REASONING_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours (debate 026 §Q2 (p))
 
 export interface Scheduler {
   stop(): void;
@@ -634,6 +636,60 @@ export function startGraphHealthScheduler(db: Database): Scheduler {
       } catch (err) {
         log.error({ err }, "graph-health scheduler error");
         await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS);
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning scheduler — Phase 7 L5 (r) hybrid (debate 026)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reasoning scheduler: every 6h, runs one L5 cycle (selectSeeds → runReasoning
+ * over budget seeds → write back derived_from edges + verdict-feedback gates).
+ *
+ * INDEPENDENT timer (Codex argument: coupling to reflect would mean reflect
+ * failure stalls reasoning per the swallow-and-continue pattern at
+ * scheduler.ts:104-153).
+ *
+ * Cycle errors are logged and swallowed so one bad cycle does not stall the
+ * cadence. Per-seed failures are absorbed inside runCycle (failure_reason
+ * persists at the chain row level for inspection via `compost reason list`).
+ */
+export function startReasoningScheduler(
+  db: Database,
+  llm: BreakerRegistry | LLMService,
+  vectorStore?: VectorStore,
+  intervalMs: number = REASONING_INTERVAL_MS
+): Scheduler {
+  let running = true;
+
+  async function loop() {
+    while (running) {
+      await Bun.sleep(intervalMs);
+      if (!running) break;
+      try {
+        const stats = await runCycle(db, llm, vectorStore);
+        log.info(
+          {
+            gate: stats.gate_decision,
+            attempted: stats.chains_attempted,
+            succeeded: stats.chains_succeeded,
+            idempotent: stats.chains_skipped_idempotent,
+          },
+          "reasoning cycle complete"
+        );
+      } catch (err) {
+        log.error({ err }, "reasoning cycle error (continuing)");
       }
     }
   }

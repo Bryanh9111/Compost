@@ -684,9 +684,31 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     a new table; out-of-slice schema work.
   - **Reflection prompts (δ)** — LLM-cost model + UX design first.
   - **User model update loop (ε)** — L6 layer; depends on β.
-  - **`(r)` hybrid scheduler** — earned only after dogfood data shows
-    chain quality distribution; entry condition: ≥10 chains, ≥50%
-    user-confirmed, ≥3 with confidence > 0.7.
+  - ~~**`(r)` hybrid scheduler**~~ → ✅ shipped (debate 026, 2026-04-26).
+    Migration 0020 `reasoning_scheduler_state` (single-row table, CHECK id=1).
+    `cognitive/reason-scheduler.ts` exposes `runCycle` / `selectSeeds` / 
+    `canTriggerCycle` / `getRecentVerdictStats` (the recent-window helper
+    Codex flagged as missing; existing `getVerdictStats` is global aggregate).
+    `startReasoningScheduler` runs an INDEPENDENT 6h timer (Codex argument:
+    coupling to reflect risks reflect failure stalling reasoning per the
+    swallow-and-continue pattern at `scheduler.ts:104-153`). Gate is
+    three-layer: below-entry skip (chains<10) → hard pause (manual or after
+    K=4 consecutive soft skips, auto-resume at 7d to avoid product death)
+    → soft per-cycle skip (recent rejected_rate ≥50% with bootstrap floor
+    of 5 judged). Seed source is recently-active subjects (last 7d) with
+    `adapter != 'engram'` surge guard (Codex+Sonnet — engram-pull bulk
+    imports are canonical KB content not "user activity"). MCP exposes
+    `compost.reason.scheduler.status` read-only only (Q5 (II) trust-boundary:
+    agent observes, user steers; pause/resume require operator intent).
+    Tests: 660 → 677 (+17 in `reason-scheduler.test.ts`: state R/W,
+    pause/resume, recent verdict stats, surge guard, 7d window cutoff,
+    budget cap, three gate layers, 7d auto-resume, hard-transition,
+    happy-path counter reset). debate 026 4-way vote: Q1(c) 2/4 + Codex
+    ledger evidence demolished Q1(a), Q2(p) 3/4, Q3(iv) 2/4 + Opus 7d
+    auto-resume modifier, Q4(A) 4/4 unanimous, Q5(II) 3/4. Out of scope
+    deferred to debate 027/028/029: (b) verdict-similarity seed source,
+    (d) multi-source weighted, (r) adaptive cadence, β pattern detection,
+    γ hypothesis generation.
   - **`--push-engram` flag** — schema column `engram_insight_id`
     reserved; wiring deferred until L5 outputs prove cross-project
     value.

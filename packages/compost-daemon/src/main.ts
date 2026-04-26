@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
-import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startIngestWorker } from "./scheduler";
+import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startReasoningScheduler, startIngestWorker } from "./scheduler";
 import type { Scheduler } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
@@ -134,6 +134,14 @@ export async function startDaemon(
     dataDir,
   });
   const freshnessSched: Scheduler = startFreshnessLoop(db, dataDir);
+  // Phase 7 L5 hybrid scheduler (debate 026). Independent timer (NOT coupled
+  // to reflect): cycle picks recently-active subjects, runs runReasoning(),
+  // verdict-feedback gates throttle on quality regression.
+  const reasoningSched: Scheduler = startReasoningScheduler(
+    db,
+    llmRegistry,
+    vectorStore
+  );
 
   // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
   // if Engram is unreachable — construction failures downgrade to warn.
@@ -165,6 +173,7 @@ export async function startDaemon(
     reflectSched.stop();
     ingestSched.stop();
     freshnessSched.stop();
+    reasoningSched.stop();
     engramState.flusher?.stop();
     engramState.poller?.stop();
     await engramState.shutdown().catch((err) => {

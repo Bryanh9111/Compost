@@ -38,6 +38,11 @@ import {
   type SeedKind,
   type ChainVerdict,
 } from "../../compost-core/src/cognitive/reasoning";
+import {
+  readState as readSchedulerState,
+  getRecentVerdictStats,
+  SOFT_GATE_WINDOW,
+} from "../../compost-core/src/cognitive/reason-scheduler";
 
 import { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import pino from "pino";
@@ -851,6 +856,46 @@ export async function startMcpServer(
         };
       } catch (err) {
         log.error({ err }, "compost.reason.stats error");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ----- compost.reason.scheduler.status ----------------------------------
+  // READ-ONLY scheduler observability (debate 026 §Q5 (II)). Pause/resume are
+  // user-policy decisions deliberately NOT exposed to the agent — preserves
+  // trust boundary: agent observes, user steers. Lets agent explain "no
+  // proactive chains since last hour because scheduler paused" without giving
+  // it the power to silently disable the brain.
+  server.registerTool(
+    "compost.reason.scheduler.status",
+    {
+      description:
+        "Read scheduler state: paused/running, last cycle stats (gate decision, chains attempted/succeeded), and recent verdict-window signal. Read-only — pause/resume require operator intent and live in the CLI only.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      try {
+        const state = readSchedulerState(db);
+        const recent = getRecentVerdictStats(db, SOFT_GATE_WINDOW);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ state, recent_verdict_window: recent }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error({ err }, "compost.reason.scheduler.status error");
         return {
           content: [
             {
