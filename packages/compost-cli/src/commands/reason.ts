@@ -42,6 +42,38 @@ function openDb(): Database {
   return db;
 }
 
+const CHAIN_ID_LEN = 36;
+const MIN_PREFIX_LEN = 4;
+
+/**
+ * Resolve a chain_id input that may be a full UUIDv5 (36 chars) or a
+ * unique prefix (>=4 chars), git-checkout style. Throws Error with a
+ * caller-friendly message on no-match, ambiguous, or too-short input.
+ */
+export function resolveChainIdPrefix(db: Database, input: string): string {
+  if (input.length === CHAIN_ID_LEN) return input;
+  if (input.length < MIN_PREFIX_LEN) {
+    throw new Error(
+      `prefix too short: '${input}' (need >= ${MIN_PREFIX_LEN} chars)`
+    );
+  }
+  const matches = db
+    .query(
+      "SELECT chain_id FROM reasoning_chains WHERE chain_id LIKE ? || '%' LIMIT 5"
+    )
+    .all(input) as { chain_id: string }[];
+  if (matches.length === 0) {
+    throw new Error(`no chain_id matches prefix '${input}'`);
+  }
+  if (matches.length > 1) {
+    const list = matches.map((m) => m.chain_id.slice(0, 12)).join(", ");
+    throw new Error(
+      `ambiguous prefix '${input}' matches ${matches.length} chains: ${list}`
+    );
+  }
+  return matches[0]!.chain_id;
+}
+
 export function registerReason(program: Command): void {
   const reason = program
     .command("reason")
@@ -154,7 +186,10 @@ export function registerReason(program: Command): void {
     .description(
       "Stamp a user verdict on a reasoning chain (debate 026 entry signal — ground-truth feedback channel)."
     )
-    .argument("<chain_id>", "chain_id (UUIDv5 from reason run/list)")
+    .argument(
+      "<chain_id>",
+      "chain_id — full UUIDv5 (36 chars) or unique prefix (>=4 chars, git-checkout style)"
+    )
     .argument(
       "<verdict>",
       `verdict (one of ${CHAIN_VERDICTS.join("/")})`
@@ -170,23 +205,30 @@ export function registerReason(program: Command): void {
       }
       const db = openDb();
       try {
+        let fullChainId: string;
+        try {
+          fullChainId = resolveChainIdPrefix(db, chainId);
+        } catch (err) {
+          process.stderr.write(`error: ${(err as Error).message}\n`);
+          process.exit(1);
+        }
         const ok = setVerdict(
           db,
-          chainId,
+          fullChainId,
           verdictArg as ChainVerdict,
           opts.note ?? null
         );
         if (!ok) {
-          process.stderr.write(`error: chain_id not found: ${chainId}\n`);
+          process.stderr.write(`error: chain_id not found: ${fullChainId}\n`);
           process.exit(1);
         }
         if (opts.json) {
           process.stdout.write(
-            JSON.stringify({ chain_id: chainId, verdict: verdictArg, note: opts.note ?? null }) + "\n"
+            JSON.stringify({ chain_id: fullChainId, verdict: verdictArg, note: opts.note ?? null }) + "\n"
           );
         } else {
           process.stdout.write(
-            `verdict recorded: ${chainId.slice(0, 8)} → ${verdictArg}` +
+            `verdict recorded: ${fullChainId.slice(0, 8)} → ${verdictArg}` +
               (opts.note ? ` (${opts.note})` : "") +
               "\n"
           );
