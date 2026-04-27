@@ -14,6 +14,7 @@ import { startEngramPoller } from "./engram-poller";
 import type { EngramMcpClient } from "../../compost-engram-adapter/src/writer";
 import type { EngramStreamClient } from "../../compost-engram-adapter/src/stream-puller";
 import { PendingWritesQueue } from "../../compost-engram-adapter/src/pending-writes";
+import { recoverStaleRuns } from "./recovery";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -128,6 +129,11 @@ export async function startDaemon(
     llm: llmRegistry,
     dataDir,
   });
+  try {
+    recoverStaleRuns(db);
+  } catch (err) {
+    log.error({ err }, "stale derivation_run recovery failed (continuing)");
+  }
   const ingestSched: Scheduler = startIngestWorker(db, {
     embeddingService: embSvc,
     vectorStore,
