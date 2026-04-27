@@ -269,7 +269,7 @@ Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
 | L2 | Periodic self-organization (reflect, decay, wiki synth) | ✅ Phase 2-3 |
 | L3 | Self-correction (contradiction arbitration, wiki versioning) | ✅ Phase 3 |
 | L4 | **Autonomous exploration** (curiosity, gap tracking, user-approved crawl) | 🔨 Phase 6 |
-| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🚧 Phase 7 (entry + verdict + hybrid scheduler ✅; β/γ deferred) |
+| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🚧 Phase 7 (entry + verdict + hybrid scheduler + daemon long-run infra ✅; β/γ deferred) |
 | L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7+ |
 
 ### Phase 4 P1 (✅ shipped 2026-04-17 — fork-ready personal brain)
@@ -684,6 +684,31 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     a new table; out-of-slice schema work.
   - **Reflection prompts (δ)** — LLM-cost model + UX design first.
   - **User model update loop (ε)** — L6 layer; depends on β.
+  - ✅ **Daemon long-run infrastructure** (2026-04-27 — dogfound 65h silent
+    outage 4-24~4-27 because daemon was not supervised + status only
+    returned `{pid, uptime}` so MCP read-path masked the failure).
+    5 commits to main:
+    - `d726e22` ops: `scripts/com.zion.compost-daemon.plist` (launchd KeepAlive=true,
+      ThrottleInterval=60, repo-internal + symlink, log merged into ~/.compost/daemon.log)
+    - `ce80ac1` fix: `recoverStaleRuns(db, opts?)` cleans status='running'
+      derivation_run rows older than 1h on startup (idx_derivation_run_active
+      collision class) — wired into startDaemon + 5 unit tests.
+    - `396fb94` feat: `Scheduler.getHealth(): {name, last_tick_at, error_count, running}`
+      across all 7 startXxx factories + control-socket aggregation; CLI prints
+      tabular per-scheduler status; 10 new tests.
+    - `f4f4c76` feat: wire `startBackupScheduler` (03:00 UTC daily) +
+      `startGraphHealthScheduler` (04:00 UTC daily) into main.ts (previously
+      exported but never called); ARCHITECTURE.md scheduler hook table updated.
+    - `0f5d1c7` ops: `scripts/com.zion.compost-dogfood-7d.plist` one-shot
+      launchd routine fires 2026-05-04 09:03 EDT, runs `claude -p` with
+      `scripts/dogfood-7d-prompt.txt`, appends markdown report to
+      `~/.compost/dogfood-7d-report.md` (debate 027 entry-condition check:
+      chain≥30 / verdict-similarity stable / user feedback).
+    
+    Engram guardrail `76d8e4206e18` (global, pinned) codifies the three-layer
+    daemon health contract (process layer + observability layer + business
+    interface layer) so this class of failure is documented for any future
+    long-running daemon project.
   - ~~**`(r)` hybrid scheduler**~~ → ✅ shipped (debate 026, 2026-04-26).
     Migration 0020 `reasoning_scheduler_state` (single-row table, CHECK id=1).
     `cognitive/reason-scheduler.ts` exposes `runCycle` / `selectSeeds` / 
