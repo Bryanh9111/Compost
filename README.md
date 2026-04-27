@@ -175,7 +175,7 @@ ladder** (L1 → L6) rather than "portability / ecosystem" thinking. See
 | **4** | L3 | Fork-ready personal brain | **Done** -- PII redactor, bench, origin-hash, user model schema |
 | **5** | L3↔L4 | Bidirectional Engram loop | **Done** -- read+write MCP transports, pending queue, engram-push / engram-pull / daemon auto-wire |
 | **6 P0** | L4 | Autonomous exploration | **Done** -- gap tracker, digest push, wiki provenance JOIN, curiosity-agent MVP, user-approved crawl queue |
-| **7** | L5 | Analytical partner | **In progress** -- entry slice + verdict signal + hybrid scheduler shipped (debates 025/026); daemon long-run infra (launchd plist + 7-scheduler health surface + stale-row recovery, 2026-04-27); β pattern detection + γ hypothesis generation deferred |
+| **7** | L5 | Analytical partner | **In progress** -- entry slice + verdict signal + hybrid scheduler shipped (debates 025/026); daemon long-run infra (launchd plist + 7-scheduler health surface + stale-row recovery + dogfood routine, 2026-04-27); verdict CLI prefix matching (git-checkout style); β pattern detection + γ hypothesis generation deferred |
 | 8 | — | Portability (descoped) | Export / import bundles — defer-on-demand |
 | 9 | — | Ecosystem (descoped) | More adapters, multimodal metadata — defer-on-demand |
 

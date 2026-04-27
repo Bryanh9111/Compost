@@ -704,6 +704,24 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
       `scripts/dogfood-7d-prompt.txt`, appends markdown report to
       `~/.compost/dogfood-7d-report.md` (debate 027 entry-condition check:
       chain≥30 / verdict-similarity stable / user feedback).
+    - `872623b` docs: QUICKSTART step 5/6 rewritten for launchd workflow
+      and the daily verdict-labelling routine (cchains/cstats zsh helpers).
+    - `9d270b2` feat: `compost reason verdict <prefix>` accepts a unique
+      chain_id prefix (>=4 chars) via `resolveChainIdPrefix(db, input)`,
+      git-checkout style "ambiguous" / "no match" / "too short" errors;
+      102/102 tests including 5 new (full UUID / unique / ambiguous /
+      no-match / too-short). Codex CLI handoff failed (monthly quota +
+      `codex exec` 0B output across 5 min); local fallback per CLAUDE.md
+      role architecture, surgical scope (one helper + wire-in + test).
+    
+    Dogfood preparation (2026-04-27 EOD): bulk-ingested 36 source-of-truth
+    docs across 5 projects (Athena 14 selected + Engram/QuotaFlow/Onyx 6
+    each + ModelSelector 4) yielding +635 facts (656 → 1291 active).
+    Six pre-calibration `l5-v1` reasoning chain seeds were `archive_reason='manual'`
+    soft-tombstoned to keep retrieval focused on `l5-v1-calibrated` policy
+    going forward. Engram `9734e9dc61d5` (dogfood daily protocol) +
+    `cbe509a7f84a` (post-session handover) capture the routine for
+    next-session resumption.
     
     Engram guardrail `76d8e4206e18` (global, pinned) codifies the three-layer
     daemon health contract (process layer + observability layer + business
