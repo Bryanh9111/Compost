@@ -316,3 +316,6 @@ that take a SQLite writer lock for > 1s MUST declare a time window:
 | `startFreshnessLoop` | 60s | continuous | read-only |
 | `startBackupScheduler` (P0-7) | 24h | **03:00 UTC** (between reflect runs) | VACUUM INTO -- avoids reflect lock by time-window separation |
 | `startGraphHealthScheduler` (P0-3) | 24h | **04:00 UTC** (after backup completes) | `takeSnapshot` runs Union-Find over active facts + fact_links; SQL writer lock ~100ms at 10K facts. Buffer hour after backup tolerates large-db VACUUM |
+| `startReasoningScheduler` (Phase 7 L5, debate 026) | 6h | independent timer (NOT coupled to reflect) | seed selection from recently-active subjects + 3-layer gate (entry / hard-pause / soft-skip with K=4 promotion). Per-cycle errors logged + swallowed. |
+
+All schedulers implement `getHealth(): { name, last_tick_at, error_count, running }`. Daemon control socket aggregates the array under `status.schedulers` so an outwardly-alive daemon with a dead sub-loop is no longer invisible (dogfound 2026-04-27 — daemon ran 65h while no scheduler ticked because MCP read-path masked the failure). Process-layer supervision via `scripts/com.zion.compost-daemon.plist` (macOS launchd KeepAlive=true, ThrottleInterval=60).

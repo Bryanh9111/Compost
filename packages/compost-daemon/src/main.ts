@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
-import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startReasoningScheduler, startIngestWorker } from "./scheduler";
+import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startReasoningScheduler, startIngestWorker, startBackupScheduler, startGraphHealthScheduler } from "./scheduler";
 import type { Scheduler, SchedulerHealth } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
@@ -153,12 +153,26 @@ export async function startDaemon(
     llmRegistry,
     vectorStore
   );
+  // P0-7 backup scheduler: daily 03:00 UTC SQLite VACUUM INTO + retention prune.
+  // P0-3 graph-health scheduler: daily 04:00 UTC graph snapshot.
+  // Both were previously exported but never wired in main.ts (dogfound 2026-04-27).
+  const backupDir = join(dataDir, "backups");
+  if (!existsSync(backupDir)) {
+    mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  }
+  const backupSched: Scheduler = startBackupScheduler(db, {
+    ledgerPath: dbPath,
+    backupDir,
+  });
+  const graphHealthSched: Scheduler = startGraphHealthScheduler(db);
   const schedulers: RegisteredScheduler[] = [
     { name: "drain", scheduler: drainSched },
     { name: "reflect", scheduler: reflectSched },
     { name: "ingest", scheduler: ingestSched },
     { name: "freshness", scheduler: freshnessSched },
     { name: "reasoning", scheduler: reasoningSched },
+    { name: "backup", scheduler: backupSched },
+    { name: "graph-health", scheduler: graphHealthSched },
   ];
 
   // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
@@ -192,6 +206,8 @@ export async function startDaemon(
     ingestSched.stop();
     freshnessSched.stop();
     reasoningSched.stop();
+    backupSched.stop();
+    graphHealthSched.stop();
     engramState.flusher?.stop();
     engramState.poller?.stop();
     await engramState.shutdown().catch((err) => {

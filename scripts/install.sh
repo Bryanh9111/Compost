@@ -34,13 +34,14 @@ bun install
 
 # Data directory setup (idempotent - mkdir -p and chmod are safe to repeat)
 echo "==> creating data directory"
-mkdir -p "${COMPOST_DIR}"/{blobs,wiki,logs}
+mkdir -p "${COMPOST_DIR}"/{blobs,wiki,logs,backups}
 
 echo "==> locking down permissions (chmod 700 - owner only)"
 chmod 700 "${COMPOST_DIR}"
 chmod 700 "${COMPOST_DIR}/blobs"
 chmod 700 "${COMPOST_DIR}/wiki"
 chmod 700 "${COMPOST_DIR}/logs"
+chmod 700 "${COMPOST_DIR}/backups"
 # Rationale: ~/.compost holds the user's entire ingested memory. Default macOS
 # umask 022 creates world-readable dirs. chmod 700 closes the multi-user-machine
 # data leak. See §9 of compost-v2-spec.md.
