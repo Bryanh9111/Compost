@@ -755,6 +755,21 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
   - **`--push-engram` flag** — schema column `engram_insight_id`
     reserved; wiring deferred until L5 outputs prove cross-project
     value.
+  - **Engram `forget` → Compost `archive` reverse-sync** — when a user
+    forgets an Engram memory, the corresponding Compost facts derived from
+    that memory should auto-archive instead of decaying naturally over the
+    30d half-life. Two-step design (sketched 2026-04-27):
+    - Engram side: new `stream_forgotten_for_compost(cursor)` MCP tool
+      mirroring `stream_for_compost`'s cursor-based shape but emitting
+      `forget` events.
+    - Compost side: second poll loop in `engram-poller`, reverse-lookup
+      `facts WHERE observations.source_id IN (forgotten_mem_ids)`, soft-
+      archive with new `archive_reason='engram_forgotten'` enum value
+      (migration 0021).
+    - Estimated ~2-3h total across both repos. Deferred until post-debate-
+      027 to avoid touching the engram-pull data path during dogfood (any
+      bug here would taint chain growth measurement). Backlog memory:
+      Engram pinned procedure (TBD id at write time).
 
 ### Phase 8 — Portability (descoped from former Phase 5)
 
