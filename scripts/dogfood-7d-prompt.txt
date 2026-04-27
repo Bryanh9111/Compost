@@ -1,0 +1,69 @@
+你是 Compost 项目的 dogfood 7 天回顾自动 agent. 7 天前 (2026-04-27) 完成了 daemon 长跑基础设施 (4 commits: launchd plist + recovery + scheduler health + backup/graph-health wire).
+
+请执行以下步骤并输出 **markdown 报告 only** (不要寒暄, 不要 "I'll now..." 开场白). 数字必须精确, 来自 MCP 调用结果.
+
+## 步骤
+
+1. mcp__engram__recall(query="Compost next step", budget="normal", limit=3) — 拉取 pinned resumption plan
+2. mcp__engram__recall(query="Compost daemon 7 schedulers", budget="normal", limit=2) — 拉取基础设施 fact (id 8a3524b22ce9)
+3. mcp__compost__compost_reason_scheduler_status() — daemon scheduler state
+4. mcp__compost__compost_reason_stats() — chain 总数 + verdict 累计
+5. mcp__compost__compost_reason_list(limit=20) — 最近 20 链时间分布
+6. Bash: `bun /Users/zion/Repos/Zylo/Compost/packages/compost-cli/src/main.ts daemon status` — 7 schedulers 健康
+7. Bash: `tail -50 ~/.compost/daemon.log | grep -E "reasoning cycle|error"` — 最近 reasoning cycle 日志
+
+## 报告 schema (严格按此输出)
+
+```
+# Compost Dogfood 7-Day Report (2026-05-04)
+
+## 1. Daemon 健康
+- launchd-managed daemon PID: <pid>, uptime: <uptime>
+- 7 schedulers 状态:
+  | name | running | last_tick | error_count |
+  | drain | ... | ... | ... |
+  | (其余 6 行) |
+- 异常 (error_count > 0 或 running=false 的): <列出, 或 "无">
+
+## 2. Reasoning Chains 增长
+- 基线 (2026-04-27): 12 chains
+- 当前 total: <N>
+- 净增: <N - 12>
+- 自动 cycle 触发: <最近 7 天 reasoning cycle 次数, 从 daemon.log grep "reasoning cycle complete">
+- gate decision 分布: <skipped_below_entry / fired / paused 各几次>
+
+## 3. Verdict 校准健康
+- judged / unjudged: <a> / <b>
+- positive_rate: <X%>
+- mean_confidence_confirmed: <X>
+- mean_confidence_rejected: <Y>
+- spread (X - Y): <值, 基线 0.84, 应仍 > 0.5>
+
+## 4. Dogfood 阈值检查
+门槛 (任一满足即可推进 debate 027+):
+- [ ] chain count ≥ 30 (当前: <N>)
+- [ ] verdict-similarity 信号稳定 (基于 confirmed seed 的 SPO embedding 是否能找到 ≥3 个相似未推理 fact, 这次跑不出来标 unknown)
+- [ ] 用户主动反馈 scheduler tuning 信号 (这次跑无法判断)
+
+满足: <YES/NO/PARTIAL>
+
+## 5. 推荐 (按数据)
+- 如果 chain count ≥ 30: 推荐启动 debate 027 (verdict-similarity seed source, 按 pinned procedure 5f2bca7cab0f), 列出 3 个候选 confirmed seed 的 SPO 作为 debate 027 输入
+- 如果 < 30: 当前增长速率 <X chains/day>, 距 30 还需 <(30-N)/X> 天, 继续 dogfood
+- 如果 daemon 任何 scheduler 异常: 列出哪个挂了, 建议修复路径 (重启 daemon / 看 error_count 趋势 / git log 查最近 commit)
+
+## 6. 清理提醒
+本 routine 是 launchd plist 一次性 (但 StartCalendarInterval 会明年 5/4 再 fire). 看完报告后建议清理:
+```
+launchctl bootout gui/$(id -u)/com.zion.compost-dogfood-7d
+rm ~/Library/LaunchAgents/com.zion.compost-dogfood-7d.plist
+git rm scripts/com.zion.compost-dogfood-7d.plist scripts/dogfood-7d-prompt.txt
+git commit -m "chore: cleanup dogfood-7d routine after report"
+```
+```
+
+## 约束
+- 只输出 markdown, 不要 ANSI / 不要进度条
+- 数字精确到调用结果, 不估算
+- 如果某 MCP 调用失败, 在对应章节标 "MCP error: <reason>" 而不是省略
+- daemon 没启动 / socket 不存在 → 第 1 节标"daemon DOWN, 跳过 2-3 章直接进第 5 节推荐重启"
