@@ -12,6 +12,46 @@ function sockPath(): string {
   return join(dataDir(), "daemon.sock");
 }
 
+interface SchedulerHealth {
+  name: string;
+  last_tick_at: string | null;
+  error_count: number;
+  running: boolean;
+}
+
+interface DaemonStatus {
+  pid: number;
+  uptime: number;
+  schedulers?: SchedulerHealth[];
+}
+
+function isDaemonStatus(value: unknown): value is DaemonStatus {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record["pid"] === "number" && typeof record["uptime"] === "number";
+}
+
+export function formatDaemonStatus(value: unknown): string {
+  if (!isDaemonStatus(value)) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  const uptimeSeconds = Math.round(value.uptime);
+  const lines = [`pid: ${value.pid}  uptime: ${uptimeSeconds}s`];
+  if (Array.isArray(value.schedulers)) {
+    const nameWidth = Math.max(9, ...value.schedulers.map((s) => s.name.length));
+    lines.push("schedulers:");
+    for (const scheduler of value.schedulers) {
+      const state = scheduler.running ? "[running]" : "[stopped]";
+      const lastTick = scheduler.last_tick_at ?? "never";
+      lines.push(
+        `  ${scheduler.name.padEnd(nameWidth)} ${state} last_tick=${lastTick.padEnd(19)} errors=${scheduler.error_count}`
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 /**
  * Send a command over the Unix control socket, return parsed response.
  */
@@ -69,10 +109,10 @@ export function registerDaemon(program: Command): void {
 
   daemon
     .command("status")
-    .description("Print daemon status JSON")
+    .description("Print daemon status")
     .action(async () => {
       const result = await sendSocket("status");
-      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      process.stdout.write(formatDaemonStatus(result) + "\n");
     });
 
   daemon

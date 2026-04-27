@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { createConnection } from "net";
 import { startDaemon, stopDaemon } from "../src/main";
 import { appendToOutbox } from "../../compost-core/src/ledger/outbox";
 import { drainOne } from "../../compost-core/src/ledger/outbox";
@@ -23,6 +24,25 @@ function cleanupDir(dir: string): void {
   } catch {
     // ignore
   }
+}
+
+async function sendSocket(sockPath: string, cmd: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const sock = createConnection(sockPath);
+    let buf = "";
+    sock.on("data", (chunk) => {
+      buf += chunk.toString();
+      const nl = buf.indexOf("\n");
+      if (nl !== -1) {
+        sock.destroy();
+        resolve(JSON.parse(buf.slice(0, nl)));
+      }
+    });
+    sock.on("error", reject);
+    sock.on("connect", () => {
+      sock.write(`${cmd}\n`);
+    });
+  });
 }
 
 /** Open an in-memory DB with all migrations and policies applied. */
@@ -101,6 +121,33 @@ describe("startDaemon", () => {
       .get() as { policy_id: string } | null;
     expect(row?.policy_id).toBe("tp-2026-04");
     db.close();
+  });
+
+  it("status includes per-scheduler health without removing pid and uptime", async () => {
+    tmpDir = makeTmpDir();
+    const dataDir = join(tmpDir, "compost-status");
+
+    await startDaemon(dataDir, false);
+
+    const status = await sendSocket(join(dataDir, "daemon.sock"), "status") as {
+      pid?: unknown;
+      uptime?: unknown;
+      schedulers?: unknown;
+    };
+    expect(status.pid).toBe(process.pid);
+    expect(typeof status.uptime).toBe("number");
+    expect(Array.isArray(status.schedulers)).toBe(true);
+
+    const schedulers = status.schedulers as Array<Record<string, unknown>>;
+    for (const name of ["drain", "reflect", "ingest", "freshness", "reasoning"]) {
+      const health = schedulers.find((s) => s["name"] === name);
+      expect(health).toBeDefined();
+      expect(typeof health?.["running"]).toBe("boolean");
+      expect(typeof health?.["error_count"]).toBe("number");
+      expect(
+        health?.["last_tick_at"] === null || typeof health?.["last_tick_at"] === "string"
+      ).toBe(true);
+    }
   });
 });
 

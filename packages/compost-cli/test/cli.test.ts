@@ -8,7 +8,7 @@ import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { appendToOutbox, drainOne } from "../../compost-core/src/ledger/outbox";
 import { query } from "../../compost-core/src/query/search";
 import { reflect } from "../../compost-core/src/cognitive/reflect";
-import { registerDaemon } from "../src/commands/daemon";
+import { formatDaemonStatus, registerDaemon } from "../src/commands/daemon";
 import { registerAdd } from "../src/commands/add";
 import { registerQuery } from "../src/commands/query";
 import { registerDoctor } from "../src/commands/doctor";
@@ -77,6 +77,37 @@ describe("CLI program structure", () => {
     expect(sub).toContain("stop");
     expect(sub).toContain("status");
     expect(sub).toContain("reload");
+  });
+
+  it("formats daemon status with scheduler health", () => {
+    const output = formatDaemonStatus({
+      pid: 12345,
+      uptime: 100.2,
+      schedulers: [
+        {
+          name: "ingest",
+          last_tick_at: "2026-04-27T13:30:00Z",
+          error_count: 0,
+          running: true,
+        },
+        {
+          name: "reflect",
+          last_tick_at: null,
+          error_count: 2,
+          running: false,
+        },
+      ],
+    });
+
+    expect(output).toContain("pid: 12345  uptime: 100s");
+    expect(output).toContain("schedulers:");
+    expect(output).toContain("ingest");
+    expect(output).toContain("[running]");
+    expect(output).toContain("last_tick=2026-04-27T13:30:00Z");
+    expect(output).toContain("reflect");
+    expect(output).toContain("[stopped]");
+    expect(output).toContain("last_tick=never");
+    expect(output).toContain("errors=2");
   });
 
   it("doctor has --reconcile, --measure-hook, --drain-retry options", () => {

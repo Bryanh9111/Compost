@@ -4,7 +4,7 @@ import { join } from "path";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
 import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startReasoningScheduler, startIngestWorker } from "./scheduler";
-import type { Scheduler } from "./scheduler";
+import type { Scheduler, SchedulerHealth } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
 import { OllamaLLMService } from "../../compost-core/src/llm/ollama";
@@ -27,6 +27,11 @@ const DEFAULT_DATA_DIR = join(
 export interface DaemonHandle {
   db: Database;
   stop(): Promise<void>;
+}
+
+export interface RegisteredScheduler {
+  name: string;
+  scheduler: Scheduler;
 }
 
 /**
@@ -148,6 +153,13 @@ export async function startDaemon(
     llmRegistry,
     vectorStore
   );
+  const schedulers: RegisteredScheduler[] = [
+    { name: "drain", scheduler: drainSched },
+    { name: "reflect", scheduler: reflectSched },
+    { name: "ingest", scheduler: ingestSched },
+    { name: "freshness", scheduler: freshnessSched },
+    { name: "reasoning", scheduler: reasoningSched },
+  ];
 
   // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
   // if Engram is unreachable — construction failures downgrade to warn.
@@ -158,7 +170,7 @@ export async function startDaemon(
 
   // 7. Unix socket control server (stop/status/reload)
   const sockPath = join(dataDir, "daemon.sock");
-  const socketServer = await startControlSocket(sockPath, db);
+  const socketServer = await startControlSocket(sockPath, db, schedulers);
 
   // 8. MCP stdio server (skip in test environments that pass withMcp=false)
   let mcpHandle: { stop(): Promise<void> } | null = null;
@@ -227,7 +239,8 @@ interface SocketServer {
 
 async function startControlSocket(
   sockPath: string,
-  db: Database
+  db: Database,
+  schedulers: RegisteredScheduler[] = []
 ): Promise<SocketServer> {
   // Remove stale socket
   tryUnlink(sockPath);
@@ -242,7 +255,11 @@ async function startControlSocket(
         if (cmd === "stop") {
           void stopDaemon().then(() => process.exit(0));
         } else if (cmd === "status") {
-          const info = { pid: process.pid, uptime: process.uptime() };
+          const info = {
+            pid: process.pid,
+            uptime: process.uptime(),
+            schedulers: collectSchedulerHealth(schedulers),
+          };
           _socket.write(JSON.stringify(info) + "\n");
         } else if (cmd === "reload") {
           try {
@@ -279,6 +296,22 @@ async function startControlSocket(
   };
 }
 
+export function collectSchedulerHealth(schedulers: RegisteredScheduler[]): SchedulerHealth[] {
+  return schedulers.map(({ name, scheduler }) => {
+    try {
+      return scheduler.getHealth();
+    } catch (err) {
+      log.error({ err, scheduler: name }, "scheduler health check failed");
+      return {
+        name,
+        last_tick_at: null,
+        error_count: 1,
+        running: false,
+      };
+    }
+  });
+}
+
 function tryUnlink(path: string): void {
   try {
     unlinkSync(path);
@@ -292,8 +325,8 @@ function tryUnlink(path: string): void {
 // ---------------------------------------------------------------------------
 
 interface EngramSchedulerState {
-  flusher: Scheduler | null;
-  poller: Scheduler | null;
+  flusher: { stop(): void | Promise<void> } | null;
+  poller: { stop(): void | Promise<void> } | null;
   shutdown: () => Promise<void>;
 }
 
@@ -324,7 +357,7 @@ async function maybeStartEngramSchedulers(
   if (!runFlusher && !runPoller) return NOOP_SHUTDOWN;
 
   // ------- Flusher (Compost -> Engram; MCP stdio) -------
-  let flusherSched: Scheduler | null = null;
+  let flusherSched: { stop(): void | Promise<void> } | null = null;
   let flusherQueue: PendingWritesQueue | null = null;
   let flusherMcpClient = engramOpts.flusherMcpClient ?? null;
   let flusherOwnsClient = false;
@@ -380,7 +413,7 @@ async function maybeStartEngramSchedulers(
   }
 
   // ------- Poller (Engram -> Compost; CLI spawn) -------
-  let pollerSched: Scheduler | null = null;
+  let pollerSched: { stop(): void | Promise<void> } | null = null;
   const pollerClient = engramOpts.pollerStreamClient ?? null;
   const pollerBin =
     engramOpts.engramBin ?? process.env["COMPOST_ENGRAM_BIN"] ?? "engram";

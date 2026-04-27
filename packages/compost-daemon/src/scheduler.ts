@@ -8,7 +8,7 @@ import type { BreakerRegistry } from "../../compost-core/src/llm/breaker-registr
 import type { LLMService } from "../../compost-core/src/llm/types";
 import { ingestUrl } from "../../compost-core/src/pipeline/web-ingest";
 import { claimOne, complete, fail } from "../../compost-core/src/queue/lease";
-import { getActivePolicy, validatePolicyExists } from "../../compost-core/src/policies/registry";
+import { getActivePolicy } from "../../compost-core/src/policies/registry";
 import { v7 as uuidv7 } from "uuid";
 import { existsSync } from "fs";
 import { resolve, join } from "path";
@@ -24,8 +24,16 @@ const INGEST_EMPTY_SLEEP_MS = 2000; // 2s backoff when ingest queue is empty
 const FRESHNESS_CHECK_INTERVAL_MS = 60_000; // 60s between freshness loop ticks
 const REASONING_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours (debate 026 §Q2 (p))
 
+export interface SchedulerHealth {
+  name: string;
+  last_tick_at: string | null;
+  error_count: number;
+  running: boolean;
+}
+
 export interface Scheduler {
-  stop(): void;
+  stop(): void | Promise<void>;
+  getHealth(): SchedulerHealth;
 }
 
 /**
@@ -34,12 +42,15 @@ export interface Scheduler {
  */
 export function startDrainLoop(db: Database): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
 
   async function loop() {
     while (running) {
       try {
         const result = drainOne(db);
         if (!result) {
+          lastTickAt = new Date().toISOString();
           // queue empty — sleep before next poll
           await Bun.sleep(DRAIN_EMPTY_SLEEP_MS);
         } else {
@@ -63,8 +74,10 @@ export function startDrainLoop(db: Database): Scheduler {
               "correction scan failed (continuing)"
             );
           }
+          lastTickAt = new Date().toISOString();
         }
       } catch (err) {
+        errorCount++;
         log.error({ err }, "drain loop error");
         await Bun.sleep(DRAIN_EMPTY_SLEEP_MS);
       }
@@ -77,6 +90,9 @@ export function startDrainLoop(db: Database): Scheduler {
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "drain", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -108,6 +124,8 @@ export function startReflectScheduler(
   opts: ReflectSchedulerOpts = {}
 ): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
   const intervalMs = opts.intervalMs ?? REFLECT_INTERVAL_MS;
 
   async function loop() {
@@ -118,6 +136,7 @@ export function startReflectScheduler(
         const report = reflect(db);
         log.info({ report }, "reflect complete");
       } catch (err) {
+        errorCount++;
         log.error({ err }, "reflect error");
         continue; // skip triage + wiki synth when reflect failed
       }
@@ -131,6 +150,7 @@ export function startReflectScheduler(
         const triageReport = triage(db);
         log.info({ triageReport }, "triage complete");
       } catch (err) {
+        errorCount++;
         log.error({ err }, "triage error (continuing)");
       }
 
@@ -139,9 +159,11 @@ export function startReflectScheduler(
           const wikiResult = await synthesizeWiki(db, opts.llm, opts.dataDir);
           log.info({ wikiResult }, "wiki synthesis complete");
         } catch (err) {
+          errorCount++;
           log.error({ err }, "wiki synthesis error (continuing)");
         }
       }
+      lastTickAt = new Date().toISOString();
     }
   }
 
@@ -150,6 +172,9 @@ export function startReflectScheduler(
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "reflect", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -160,6 +185,8 @@ export function startReflectScheduler(
  */
 export function startFreshnessLoop(db: Database, dataDir: string): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
 
   async function loop() {
     while (running) {
@@ -181,7 +208,10 @@ export function startFreshnessLoop(db: Database, dataDir: string): Scheduler {
           )
           .all(nowSec, nowSec) as Array<{ source_id: string; uri: string }>;
 
-        if (dueSources.length === 0) continue;
+        if (dueSources.length === 0) {
+          lastTickAt = new Date().toISOString();
+          continue;
+        }
 
         for (const src of dueSources) {
           if (!running) break;
@@ -198,10 +228,13 @@ export function startFreshnessLoop(db: Database, dataDir: string): Scheduler {
               log.warn({ url: src.uri, error: result.error }, "freshness: ingest failed");
             }
           } catch (err) {
+            errorCount++;
             log.error({ err, url: src.uri }, "freshness: source error");
           }
         }
+        lastTickAt = new Date().toISOString();
       } catch (err) {
+        errorCount++;
         log.error({ err }, "freshness loop error");
       }
     }
@@ -212,6 +245,9 @@ export function startFreshnessLoop(db: Database, dataDir: string): Scheduler {
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "freshness", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -258,6 +294,8 @@ function computeHash(content: string): string {
  */
 export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
 
   async function processOne(): Promise<boolean> {
     const workerId = `daemon:${process.pid}`;
@@ -429,6 +467,7 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
       );
       return true;
     } catch (err) {
+      errorCount++;
       const errorMsg = err instanceof Error ? err.message : String(err);
       db.run(
         `UPDATE derivation_run SET status = 'failed', finished_at = datetime('now'), error = ? WHERE derivation_id = ?`,
@@ -444,10 +483,12 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
     while (running) {
       try {
         const processed = await processOne();
+        lastTickAt = new Date().toISOString();
         if (!processed) {
           await Bun.sleep(INGEST_EMPTY_SLEEP_MS);
         }
       } catch (err) {
+        errorCount++;
         log.error({ err }, "ingest worker loop error");
         await Bun.sleep(INGEST_EMPTY_SLEEP_MS);
       }
@@ -459,6 +500,9 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "ingest", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -533,6 +577,8 @@ export function startBackupScheduler(
   opts: BackupSchedulerOpts
 ): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
   const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
 
   function msUntilNextWindow(): number {
@@ -561,9 +607,11 @@ export function startBackupScheduler(
           },
           "backup complete"
         );
+        lastTickAt = new Date().toISOString();
         // Sleep most of the day to leave the 03:00 window before next check
         await Bun.sleep(BACKUP_INTERVAL_MS - 60_000);
       } catch (err) {
+        errorCount++;
         log.error({ err, backupDir: opts.backupDir }, "backup scheduler error");
         await Bun.sleep(BACKUP_INTERVAL_MS);
       }
@@ -575,6 +623,9 @@ export function startBackupScheduler(
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "backup", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -609,6 +660,8 @@ export function msUntilNextGraphHealthWindow(now: Date = new Date()): number {
  */
 export function startGraphHealthScheduler(db: Database): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
 
   async function loop() {
     while (running) {
@@ -631,9 +684,11 @@ export function startGraphHealthScheduler(db: Database): Scheduler {
           },
           "graph-health snapshot taken"
         );
+        lastTickAt = new Date().toISOString();
         // Sleep most of the day before re-checking the next window
         await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS - 60_000);
       } catch (err) {
+        errorCount++;
         log.error({ err }, "graph-health scheduler error");
         await Bun.sleep(GRAPH_HEALTH_INTERVAL_MS);
       }
@@ -645,6 +700,9 @@ export function startGraphHealthScheduler(db: Database): Scheduler {
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "graph-health", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
@@ -672,6 +730,8 @@ export function startReasoningScheduler(
   intervalMs: number = REASONING_INTERVAL_MS
 ): Scheduler {
   let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
 
   async function loop() {
     while (running) {
@@ -688,7 +748,9 @@ export function startReasoningScheduler(
           },
           "reasoning cycle complete"
         );
+        lastTickAt = new Date().toISOString();
       } catch (err) {
+        errorCount++;
         log.error({ err }, "reasoning cycle error (continuing)");
       }
     }
@@ -699,6 +761,9 @@ export function startReasoningScheduler(
   return {
     stop() {
       running = false;
+    },
+    getHealth() {
+      return { name: "reasoning", last_tick_at: lastTickAt, error_count: errorCount, running };
     },
   };
 }
