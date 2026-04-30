@@ -770,6 +770,73 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
       027 to avoid touching the engram-pull data path during dogfood (any
       bug here would taint chain growth measurement). Backlog memory:
       Engram pinned procedure (TBD id at write time).
+  - ~~**`compost add` race condition error reporting**~~ → ✅ shipped
+    (codex task `ae965761822471e15`, 2026-04-29). When concurrent
+    drainer (compost-daemon `startDrainLoop` 1s poll, or external worker
+    e.g. `athena`) wins the outbox row, the synchronous `add` path's
+    `drainOne()` used to return null and report `{"ok":false,"error":
+    "drain returned null"}` even though facts were already generated
+    by the concurrent drainer. Fix in
+    `packages/compost-core/src/pipeline/ingest.ts`: new
+    `getConcurrentDrainFacts` helper queries
+    `observe_outbox` (by adapter+source_id+idempotency_key) →
+    `observations` → `facts WHERE archived_at IS NULL` →
+    `derivation_run` (latest by finished_at/started_at) when
+    `drainOne` returns null. If facts present: return
+    `{ok:true, already_drained_by_concurrent_worker:true, facts_count, ...}`.
+    If absent: upgrade error to `"drain returned null and no facts
+    found — investigate concurrent drainer or schema corruption"`.
+    2 new tests in
+    `packages/compost-core/test/ingest-concurrent-drain.test.ts` cover
+    both branches. Live retry of `compost add SocratiCode.md` (the
+    2026-04-29 batch ingest false-fail, observe_id `019ddbab-2830-...`)
+    returns `ok:true, facts_count:4`. Test suite 699/699 green. Engram
+    insight `4134cadd0e9d` traces the pre-fix diagnosis.
+  - **Ranking diversity constraint for `compost ask` / `compost query`**
+    — current top-K ranking is dominated by `w1_semantic` (~0.96) with
+    `w2_temporal` (~0.15), so a single high-recency source can saturate
+    the LLM context window and crowd out the rest of the ledger.
+    Verified 2026-04-29: querying "我有哪些 AI agent 相关的 GitHub
+    repo" after ingesting 463 GitWiki repo notes only returned the
+    single Engram-derived fact, none of the 463 GitWiki facts. Fix
+    direction: after top-K retrieval, deduplicate by `source_uri`
+    and/or `fact.subject` so each source contributes at most N hits;
+    emit a per-source-cluster summary into the LLM synthesis prompt.
+    Sketch lives in `packages/compost-core/src/pipeline/ranking.ts`
+    (rank assembly) and the `ask` command's hit-to-prompt builder.
+    Defer to post-dogfood (5/4+) — touches the `ask` retrieval path
+    that user verdict signals depend on; tweaking mid-dogfood would
+    contaminate calibration data.
+  - **Inventory-class question path** ("我有哪些 X" 类问题) — current
+    `ask` runs single-fact retrieval and lets the LLM stitch a list,
+    which truncates aggressively under top-K. Better path: detect
+    inventory intent at `ask` entry, run `wiki_pages` or grouped
+    `subject` aggregation against the candidate corpus, hand the LLM
+    a pre-grouped list with explicit "enumerate everything, do not
+    drop entries" instruction. Same defer rationale as ranking
+    diversity (post-dogfood, ask path).
+  - **Obsidian vault → Compost incremental sync scheduler** — current
+    workflow is manual (`comm -23 <all_md> <already_ingested>` then
+    `compost add` per file). 2026-04-29 batch verified the path works
+    (463 files, ~5min on local ollama). Productize as a daemon
+    scheduler in `packages/compost-daemon/src/scheduler.ts` (alongside
+    drain/reflect/reasoning loops): hourly walk of configured vault
+    roots, diff against ledger, ingest delta, log to
+    `~/.compost/vault-sync.log`. Configuration via
+    `~/.compost/config.json` `vault_roots: string[]`. Defer to post-
+    dogfood — adds a new daemon coroutine that could perturb existing
+    scheduler timings. Engram fact `6354319c8450` captures the batch
+    performance baseline used for sizing.
+  - **jsonl extractor** — `packages/compost-ingest/compost_ingest/
+    extractors/markdown.py` is the only structured-text extractor;
+    `.jsonl` files (42 in vaults: XHS `notes.jsonl` author/tags/
+    image_urls, GitWiki `Graph/*.jsonl` repo metadata) are skipped.
+    Adding a jsonl extractor that emits one observation per line and
+    extracts SPO from typed fields would unlock structured signal
+    that's denser than the surrounding markdown. Estimate ~1h for
+    extractor + dispatcher hookup + tests. Defer to post-dogfood —
+    re-running reflect to backfill historical jsonl observations
+    would touch the same chain-source corpus the dogfood is measuring.
 
 ### Phase 8 — Portability (descoped from former Phase 5)
 

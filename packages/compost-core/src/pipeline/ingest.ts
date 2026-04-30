@@ -16,6 +16,7 @@ export interface IngestResult {
   chunks_count?: number;
   facts_count?: number;
   embedded_count?: number;
+  already_drained_by_concurrent_worker?: boolean;
   error?: string;
 }
 
@@ -57,6 +58,52 @@ function detectMimeType(filePath: string): string {
   if (filePath.endsWith(".html") || filePath.endsWith(".htm"))
     return "text/html";
   return "text/plain";
+}
+
+function getConcurrentDrainFacts(
+  db: Database,
+  event: OutboxEvent
+): { observe_id: string; facts_count: number; derivation_id?: string } | null {
+  const outboxRow = db
+    .query(
+      `SELECT observe_id FROM observe_outbox
+       WHERE adapter = ? AND source_id = ? AND idempotency_key = ?`
+    )
+    .get(event.adapter, event.source_id, event.idempotency_key) as {
+    observe_id: string | null;
+  } | null;
+
+  if (!outboxRow?.observe_id) return null;
+
+  const observation = db
+    .query("SELECT observe_id FROM observations WHERE observe_id = ?")
+    .get(outboxRow.observe_id) as { observe_id: string } | null;
+
+  if (!observation) return null;
+
+  const facts = db
+    .query(
+      `SELECT COUNT(*) AS facts_count
+       FROM facts
+       WHERE observe_id = ? AND archived_at IS NULL`
+    )
+    .get(observation.observe_id) as { facts_count: number };
+
+  const derivation = db
+    .query(
+      `SELECT derivation_id
+       FROM derivation_run
+       WHERE observe_id = ?
+       ORDER BY COALESCE(finished_at, started_at) DESC
+       LIMIT 1`
+    )
+    .get(observation.observe_id) as { derivation_id: string } | null;
+
+  return {
+    observe_id: observation.observe_id,
+    facts_count: facts.facts_count,
+    derivation_id: derivation?.derivation_id,
+  };
 }
 
 /**
@@ -115,7 +162,22 @@ export async function ingestFile(
   // Step 2: Drain (observation + queue entry)
   const drainResult = drainOne(db);
   if (!drainResult) {
-    return { ok: false, error: "drain returned null (possibly already drained)" };
+    const concurrentDrain = getConcurrentDrainFacts(db, event);
+    if (concurrentDrain && concurrentDrain.facts_count > 0) {
+      return {
+        ok: true,
+        observe_id: concurrentDrain.observe_id,
+        derivation_id: concurrentDrain.derivation_id,
+        facts_count: concurrentDrain.facts_count,
+        already_drained_by_concurrent_worker: true,
+      };
+    }
+
+    return {
+      ok: false,
+      error:
+        "drain returned null and no facts found — investigate concurrent drainer or schema corruption",
+    };
   }
 
   const observeId = drainResult.observe_id;
