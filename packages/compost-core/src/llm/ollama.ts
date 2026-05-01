@@ -1,10 +1,11 @@
 import type { LLMService, LLMGenerateOptions, LLMServiceConfig } from "./types";
+import { withOllamaLock } from "../ollama/lock";
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
 const DEFAULT_MODEL = "gemma4:31b";
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TEMPERATURE = 0.3;
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 
 interface OllamaGenerateResponse {
   response: string;
@@ -27,52 +28,54 @@ export class OllamaLLMService implements LLMService {
   }
 
   async generate(prompt: string, opts: LLMGenerateOptions = {}): Promise<string> {
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      opts.timeoutMs ?? this.timeoutMs
-    );
+    return withOllamaLock(`compost:generate:${this.model}`, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        opts.timeoutMs ?? this.timeoutMs
+      );
 
-    try {
-      const body: Record<string, unknown> = {
-        model: this.model,
-        prompt,
-        stream: false,
-        // Suppress thinking-mode for "thinking" capability models (e.g.
-        // gemma4:31b, qwen3.5:35b). Without this, Ollama routes all
-        // generated tokens into a separate `thinking` field while
-        // `response` stays empty until the thinking phase finishes —
-        // which with bounded num_predict typically never does. Effect:
-        // every Compost LLM call (ask / wiki synth / L5 reason) was
-        // silently returning empty strings on these models.
-        // Dogfood-found 2026-04-25.
-        think: false,
-        options: {
-          num_predict: opts.maxTokens ?? this.defaultMaxTokens,
-          temperature: opts.temperature ?? this.defaultTemperature,
-        },
-      };
+      try {
+        const body: Record<string, unknown> = {
+          model: this.model,
+          prompt,
+          stream: false,
+          // Suppress thinking-mode for "thinking" capability models (e.g.
+          // gemma4:31b, qwen3.5:35b). Without this, Ollama routes all
+          // generated tokens into a separate `thinking` field while
+          // `response` stays empty until the thinking phase finishes —
+          // which with bounded num_predict typically never does. Effect:
+          // every Compost LLM call (ask / wiki synth / L5 reason) was
+          // silently returning empty strings on these models.
+          // Dogfood-found 2026-04-25.
+          think: false,
+          options: {
+            num_predict: opts.maxTokens ?? this.defaultMaxTokens,
+            temperature: opts.temperature ?? this.defaultTemperature,
+          },
+        };
 
-      if (opts.systemPrompt) {
-        body.system = opts.systemPrompt;
+        if (opts.systemPrompt) {
+          body.system = opts.systemPrompt;
+        }
+
+        const res = await fetch(`${this.baseUrl}/api/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Ollama generate failed (${res.status}): ${text.slice(0, 200)}`);
+        }
+
+        const data = (await res.json()) as OllamaGenerateResponse;
+        return data.response;
+      } finally {
+        clearTimeout(timer);
       }
-
-      const res = await fetch(`${this.baseUrl}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Ollama generate failed (${res.status}): ${text.slice(0, 200)}`);
-      }
-
-      const data = (await res.json()) as OllamaGenerateResponse;
-      return data.response;
-    } finally {
-      clearTimeout(timer);
-    }
+    });
   }
 }

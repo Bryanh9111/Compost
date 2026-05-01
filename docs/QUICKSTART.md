@@ -10,6 +10,13 @@ Prerequisites:
 - `uv` (Python package manager)
 - `ollama` with `nomic-embed-text:v1.5` pulled
 
+On the 48GB Mac deployment, Compost shares Ollama with GitWiki and
+xhswiki. The Ollama launchd service should run with
+`OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, and
+`OLLAMA_KEEP_ALIVE=60s`; Compost's Ollama clients also acquire the
+machine-level lock at `~/.cache/zylo-ollama/ollama.lock` before
+embedding or generation calls.
+
 ```bash
 git clone https://github.com/Bryanh9111/Compost.git
 cd Compost

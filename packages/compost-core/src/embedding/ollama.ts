@@ -1,8 +1,9 @@
 import type { EmbeddingService, EmbeddingServiceConfig } from "./types";
+import { withOllamaLock } from "../ollama/lock";
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
 const DEFAULT_MODEL = "nomic-embed-text:v1.5";
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_BATCH_SIZE = 64;
 
 interface OllamaEmbedResponse {
@@ -39,42 +40,44 @@ export class OllamaEmbeddingService implements EmbeddingService {
   }
 
   private async embedBatch(texts: string[]): Promise<Float32Array[]> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    return withOllamaLock(`compost:embed:${this.model}`, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    try {
-      const res = await fetch(`${this.baseUrl}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, input: texts }),
-        signal: controller.signal,
-      });
+      try {
+        const res = await fetch(`${this.baseUrl}/api/embed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: this.model, input: texts }),
+          signal: controller.signal,
+        });
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(
-          `Ollama embed failed (${res.status}): ${body.slice(0, 200)}`
-        );
-      }
-
-      const data = (await res.json()) as OllamaEmbedResponse;
-
-      if (!data.embeddings || data.embeddings.length !== texts.length) {
-        throw new Error(
-          `Ollama returned ${data.embeddings?.length ?? 0} embeddings for ${texts.length} inputs`
-        );
-      }
-
-      return data.embeddings.map((vec) => {
-        if (vec.length !== this.dim) {
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
           throw new Error(
-            `Expected dim=${this.dim}, got ${vec.length} from ${this.model}`
+            `Ollama embed failed (${res.status}): ${body.slice(0, 200)}`
           );
         }
-        return new Float32Array(vec);
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+
+        const data = (await res.json()) as OllamaEmbedResponse;
+
+        if (!data.embeddings || data.embeddings.length !== texts.length) {
+          throw new Error(
+            `Ollama returned ${data.embeddings?.length ?? 0} embeddings for ${texts.length} inputs`
+          );
+        }
+
+        return data.embeddings.map((vec) => {
+          if (vec.length !== this.dim) {
+            throw new Error(
+              `Expected dim=${this.dim}, got ${vec.length} from ${this.model}`
+            );
+          }
+          return new Float32Array(vec);
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    });
   }
 }

@@ -20,7 +20,7 @@ export interface EmbeddingServiceConfig {
   baseUrl?: string;
   /** Model name to use. Default: nomic-embed-text:v1.5 */
   model?: string;
-  /** Request timeout in ms. Default: 30000 */
+  /** Request timeout in ms. Default: 180000 */
   timeoutMs?: number;
   /** Max texts per batch request. Default: 64 */
   batchSize?: number;
