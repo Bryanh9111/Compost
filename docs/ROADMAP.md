@@ -240,6 +240,7 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 | Integrated with Engram | 5 | Bidirectional channel: Engram events flow in, Compost insights flow back |
 | Autonomous exploration | 6 | Curiosity agent + Gap tracker + proactive push (L4 self-evolution) |
 | Analytical partner | 7 | Cross-fact reasoning + pattern detection + daily digest (L5) |
+| Quality regression gate | 6/7 prep | **Done** -- `bench/quality.bench.ts` LLM-as-judge over 3 hand-labeled fixtures (coverage / hallucinations / faithfulness); network-gated, no opik dependency, runs against any local Ollama model. Establishes the synthesis-quality baseline before L4 / L5 features ship. |
 | Portable | 8 | seed templates + export/import (for machine migration) |
 | Ecosystem | 9 | openclaw / multimodal / metrics (optional extensions) |
 
@@ -258,6 +259,10 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 - Goal: **10+ year single-user deep-personalization companion**
 - Distribution: **MIT open source, fork-template model** — anyone can `git clone` and grow their own; no central instance, no PR acceptance, no community maintenance overhead
 - Relationship with Engram: **bidirectional core channel** (not opt-in) — Engram events flow into Compost as a source, Compost insights flow back to Engram as new entries
+
+### Integration posture toward external observability platforms (added 2026-04-30)
+
+External evaluation/observability stacks — Comet opik in particular — are **not** to be installed as dependencies even when their feature set overlaps the L5/L6 evaluation surface. Reasons (pinned Engram decision `b73625577d5c`): (1) opik is enterprise SaaS-style with Postgres + ClickHouse + Web UI, fundamentally heavier than Compost's local-first SQLite + LanceDB; (2) Compost's MIT fork-template distribution would force every fork to host opik, breaking the "git clone and grow your own" anchor; (3) HC-1 independence forbids hard third-party deps; (4) Compost already implements decision_audit + correction_events + triage + arbitration + health_signals, which cover most opik concepts locally. Permitted use: **steal design concepts** into local SQLite-native form (e.g., the LLM-as-judge pattern in `bench/quality.bench.ts`).
 
 ### Self-evolution levels
 
