@@ -64,9 +64,10 @@ reasoning / backup / graph-health). On macOS the supported pattern is a
 launchd plist that survives reboots and crashes:
 
 ```bash
-ln -sf "$(pwd)/scripts/com.zion.compost-daemon.plist" \
-       ~/Library/LaunchAgents/com.zion.compost-daemon.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.zion.compost-daemon.plist
+cp scripts/com.example.compost-daemon.plist ~/Library/LaunchAgents/com.example.compost-daemon.plist
+plutil -replace EnvironmentVariables.COMPOST_REPO -string "$(pwd)" \
+       ~/Library/LaunchAgents/com.example.compost-daemon.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.compost-daemon.plist
 ```
 
 Verify health (note `[running]` per scheduler — not just `pid + uptime`):
@@ -84,7 +85,7 @@ compost daemon status
 Restart after code changes (skips the 60s ThrottleInterval):
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.zion.compost-daemon
+launchctl kickstart -k gui/$(id -u)/com.example.compost-daemon
 ```
 
 Without the daemon, `compost add` still works — the outbox is drained

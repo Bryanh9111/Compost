@@ -73,7 +73,7 @@ describe("compost backup / restore CLI (audit fix #4)", () => {
     expect(b.exitCode).toBe(0);
 
     // Write our own PID into the pid file -- this process IS alive
-    const pidFile = join(dataDir, "compost.pid");
+    const pidFile = join(dataDir, "daemon.pid");
     writeFileSync(pidFile, String(process.pid));
 
     const r = await runCli(["restore"], dataDir);
@@ -88,7 +88,7 @@ describe("compost backup / restore CLI (audit fix #4)", () => {
 
     // Write a PID that does not exist. PID 1 is always alive on Unix, so
     // pick a high number unlikely to collide.
-    const pidFile = join(dataDir, "compost.pid");
+    const pidFile = join(dataDir, "daemon.pid");
     const fakeStalePid = 9999998;
     writeFileSync(pidFile, String(fakeStalePid));
 
@@ -100,7 +100,7 @@ describe("compost backup / restore CLI (audit fix #4)", () => {
 
   test("restore handles unreadable/garbage PID file as stale", async () => {
     await runCli(["backup"], dataDir);
-    const pidFile = join(dataDir, "compost.pid");
+    const pidFile = join(dataDir, "daemon.pid");
     writeFileSync(pidFile, "not-a-number\n");
     const r = await runCli(["restore"], dataDir);
     expect(r.exitCode).toBe(0);

@@ -24,7 +24,7 @@ function backupDir(): string {
   return join(dataDir(), "backups");
 }
 function pidFile(): string {
-  return join(dataDir(), "compost.pid");
+  return join(dataDir(), "daemon.pid");
 }
 
 function openDb(): Database {

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.compost-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd "$COMPOST_REPO" &amp;&amp; exec bun packages/compost-cli/src/main.ts daemon start</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>COMPOST_REPO</key>
+        <string>/absolute/path/to/Compost</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/compost-daemon.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/compost-daemon.stderr.log</string>
+
+    <key>Nice</key>
+    <integer>5</integer>
+</dict>
+</plist>

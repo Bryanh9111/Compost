@@ -9,7 +9,7 @@
 CREATE TABLE observe_outbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,  -- monotonic, global; feeds observations.adapter_sequence per-adapter via window
   adapter TEXT NOT NULL,                  -- e.g. 'compost-adapter-claude-code'
-  source_id TEXT NOT NULL,                -- e.g. 'claude-code:018f:/Users/zion/Repos/Zylo/Compost'
+  source_id TEXT NOT NULL,                -- e.g. 'claude-code:018f:/path/to/project'
   source_kind TEXT NOT NULL               -- denormalized from source.kind so drain can skip a JOIN
     CHECK(source_kind IN ('local-file','local-dir','web','claude-code','host-adapter','sensory')),
   source_uri TEXT NOT NULL,               -- e.g. 'file:///Users/.../notes.md' -- registers source row if missing

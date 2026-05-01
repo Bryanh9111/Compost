@@ -25,18 +25,28 @@ import {
  * survives the round-trip across MCP stdio JSON-RPC + real schema CHECKs +
  * the real `_find_compost_duplicate` path in store.py.
  *
- * Skipped automatically when `engram-server` is not on disk — set
- * `ENGRAM_BIN` to override the default search location.
+ * Skipped automatically when `engram-server` is not on PATH — set
+ * `ENGRAM_BIN` to override the command.
  */
 
-const DEFAULT_ENGRAM_BIN = "/Users/zion/Repos/Zylo/Engram/.venv/bin/engram-server";
-const ENGRAM_BIN = process.env["ENGRAM_BIN"] ?? DEFAULT_ENGRAM_BIN;
+function resolveEngramBin(): string | null {
+  if (process.env["ENGRAM_BIN"]) return process.env["ENGRAM_BIN"];
+  const proc = Bun.spawnSync({
+    cmd: ["/bin/sh", "-lc", "command -v engram-server"],
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  if (proc.exitCode !== 0) return null;
+  return new TextDecoder().decode(proc.stdout).trim() || null;
+}
 
-const skipIfNoEngram = !existsSync(ENGRAM_BIN);
+const ENGRAM_BIN = resolveEngramBin();
+
+const skipIfNoEngram = !ENGRAM_BIN || (ENGRAM_BIN.includes("/") && !existsSync(ENGRAM_BIN));
 
 describe("e2e Engram integration (real subprocess)", () => {
   if (skipIfNoEngram) {
-    test.skip(`engram-server not at ${ENGRAM_BIN} — set ENGRAM_BIN to override`, () => {});
+    test.skip("engram-server not on PATH — set ENGRAM_BIN to override", () => {});
     return;
   }
 

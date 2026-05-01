@@ -693,8 +693,9 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     outage 4-24~4-27 because daemon was not supervised + status only
     returned `{pid, uptime}` so MCP read-path masked the failure).
     5 commits to main:
-    - `d726e22` ops: `scripts/com.zion.compost-daemon.plist` (launchd KeepAlive=true,
-      ThrottleInterval=60, repo-internal + symlink, log merged into ~/.compost/daemon.log)
+    - `d726e22` ops: first launchd supervision landed as a local instance;
+      the public tree now keeps only `scripts/com.example.compost-daemon.plist`
+      so forks do not inherit personal absolute paths.
     - `ce80ac1` fix: `recoverStaleRuns(db, opts?)` cleans status='running'
       derivation_run rows older than 1h on startup (idx_derivation_run_active
       collision class) — wired into startDaemon + 5 unit tests.
@@ -704,11 +705,10 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     - `f4f4c76` feat: wire `startBackupScheduler` (03:00 UTC daily) +
       `startGraphHealthScheduler` (04:00 UTC daily) into main.ts (previously
       exported but never called); ARCHITECTURE.md scheduler hook table updated.
-    - `0f5d1c7` ops: `scripts/com.zion.compost-dogfood-7d.plist` one-shot
-      launchd routine fires 2026-05-04 09:03 EDT, runs `claude -p` with
-      `scripts/dogfood-7d-prompt.txt`, appends markdown report to
-      `~/.compost/dogfood-7d-report.md` (debate 027 entry-condition check:
-      chain≥30 / verdict-similarity stable / user feedback).
+    - `0f5d1c7` ops: one-shot local dogfood routine for debate 027 entry
+      conditions (chain≥30 / verdict-similarity stable / user feedback).
+      The public repo no longer tracks the personal launchd instance or
+      prompt file.
     - `872623b` docs: QUICKSTART step 5/6 rewritten for launchd workflow
       and the daily verdict-labelling routine (cchains/cstats zsh helpers).
     - `9d270b2` feat: `compost reason verdict <prefix>` accepts a unique
