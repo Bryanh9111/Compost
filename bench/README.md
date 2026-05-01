@@ -32,6 +32,7 @@ or a CI comparator.
 | SQLite BM25 | `sqlite-query.bench.ts` | default | `query()` BM25-only, no vectorStore (FTS5 + Stage-2 rerank) |
 | LanceDB ANN | `lancedb-ann.bench.ts` | `COMPOST_BENCH_NETWORK=true` | Stub — full impl deferred to Phase 5 |
 | LLM latency | `llm-latency.bench.ts` | `COMPOST_BENCH_NETWORK=true` | Ollama roundtrip p50 / p95 |
+| Wiki quality | `quality.bench.ts` | `COMPOST_BENCH_NETWORK=true` | LLM-as-judge `coverage_pct` / `hallucinations` / `faithfulness` over 3 hand-labeled fixtures (judge model `gemma4:31b`, override via `COMPOST_BENCH_JUDGE_MODEL`) |
 
 ## Sample output (Apple Silicon, local)
 
@@ -41,6 +42,8 @@ or a CI comparator.
 {"name":"sqlite-query-bm25-1000","p50_ms":1.01,"p95_ms":3.71,"p99_ms":8.12,"fixture_size":1000}
 {"name":"sqlite-query-bm25-10000","p50_ms":3.02,"p95_ms":5.94,"fixture_size":10000}
 ```
+
+Quality bench output is one JSON line per fixture (3 fixtures: `compost-architecture`, `engram-constraints`, `quotaflow-purpose`). Schema: `{name, topic, coverage_pct, hallucinations, faithfulness, notes, wiki_chars, judge_model, layer:"quality-wiki"}`. There is no `p95_ms` because this is a quality regression gate, not a latency gate. Baselines should be captured to `bench/baseline-quality.json` with the same `coverage_pct`/`faithfulness` thresholds as the regression contract — interpret regressions as "synthesis quality dropped" rather than "synthesis got slower."
 
 ## CI regression gate
 
