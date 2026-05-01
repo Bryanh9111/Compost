@@ -43,7 +43,9 @@ or a CI comparator.
 {"name":"sqlite-query-bm25-10000","p50_ms":3.02,"p95_ms":5.94,"fixture_size":10000}
 ```
 
-Quality bench output is one JSON line per fixture (3 fixtures: `compost-architecture`, `engram-constraints`, `quotaflow-purpose`). Schema: `{name, topic, coverage_pct, hallucinations, faithfulness, notes, wiki_chars, judge_model, layer:"quality-wiki"}`. There is no `p95_ms` because this is a quality regression gate, not a latency gate. Baselines should be captured to `bench/baseline-quality.json` with the same `coverage_pct`/`faithfulness` thresholds as the regression contract — interpret regressions as "synthesis quality dropped" rather than "synthesis got slower."
+Quality bench output is one JSON line per fixture (3 fixtures: `compost-architecture`, `engram-constraints`, `quotaflow-purpose`). Schema: `{name, topic, coverage_pct, hallucinations, faithfulness, notes, wiki_chars, judge_model, layer:"quality-wiki"}`. There is no `p95_ms` because this is a quality regression gate, not a latency gate. Baselines are captured to `bench/baseline-quality.json` with the same `coverage_pct`/`faithfulness` thresholds as the regression contract — interpret regressions as "synthesis quality dropped" rather than "synthesis got slower."
+
+Initial baseline (2026-05-01, git_sha `98fcb32`, judge `gemma4:31b`, 3 sequential runs × 3 fixtures = 9 judgments) carries `saturation_flag.triggered=true`: judge gave `coverage_pct=100 / faithfulness=1.0 / hallucinations=0` on all 9 judgments with `stddev=0`, while `wiki_chars` did vary (compost-architecture 688-754, quotaflow-purpose 498-515). LLM synthesis is stochastic; judge scores are not — meaning the current judge prompt cannot discriminate quality regressions in this fixture set. Use the baseline as a regression *floor* (loose thresholds: `coverage_pct_min: 90`, `faithfulness_min: 0.85`, `hallucinations_max: 2`), not as proof of quality. Tighten thresholds only after fixture hardening (expand to 8-10 fixtures with harder seeds, or switch judge model to break self-bias). See `saturation_flag.remediation_options` in the baseline file.
 
 ## CI regression gate
 

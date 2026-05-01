@@ -240,7 +240,7 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 | Integrated with Engram | 5 | Bidirectional channel: Engram events flow in, Compost insights flow back |
 | Autonomous exploration | 6 | Curiosity agent + Gap tracker + proactive push (L4 self-evolution) |
 | Analytical partner | 7 | Cross-fact reasoning + pattern detection + daily digest (L5) |
-| Quality regression gate | 6/7 prep | **Done** -- `bench/quality.bench.ts` LLM-as-judge over 3 hand-labeled fixtures (coverage / hallucinations / faithfulness); network-gated, no opik dependency, runs against any local Ollama model. Establishes the synthesis-quality baseline before L4 / L5 features ship. |
+| Quality regression gate | 6/7 prep | **Done** -- `bench/quality.bench.ts` LLM-as-judge over 3 hand-labeled fixtures (coverage / hallucinations / faithfulness); network-gated, no opik dependency, runs against any local Ollama model. Establishes the synthesis-quality baseline before L4 / L5 features ship. Initial baseline captured 2026-05-01 to `bench/baseline-quality.json` (3 sequential runs × 3 fixtures, judge `gemma4:31b`, git_sha `98fcb32`); carries `saturation_flag.triggered=true` because all 9 judgments returned `coverage=100 / faithfulness=1.0 / hallucinations=0` with `stddev=0` while `wiki_chars` varied (688-754 / 498-515). Treated as regression floor with loose thresholds (`coverage_pct_min: 90`, `faithfulness_min: 0.85`, `hallucinations_max: 2`); tightening blocked on fixture hardening (8-10 fixtures, harder seeds, or non-gemma4 judge to break self-bias). |
 | Portable | 8 | seed templates + export/import (for machine migration) |
 | Ecosystem | 9 | openclaw / multimodal / metrics (optional extensions) |
 
@@ -797,6 +797,28 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     2026-04-29 batch ingest false-fail, observe_id `019ddbab-2830-...`)
     returns `ok:true, facts_count:4`. Test suite 699/699 green. Engram
     insight `4134cadd0e9d` traces the pre-fix diagnosis.
+  - **`compost add` queue residual when concurrent drain wins** — sibling
+    bug to the race condition above, surfaced 2026-05-01 during dogfood
+    health check. Symptom: `~/.compost/daemon.log` spamming
+    `UNIQUE constraint failed: index 'idx_derivation_run_active'` once
+    per ~30s. Root cause: when `getConcurrentDrainFacts` returns
+    `ok:true` (concurrent drainer wrote facts), the synchronous `add`
+    path does not mark `ingest_queue.completed_at`. Daemon worker keeps
+    re-claiming the row, attempts `INSERT INTO derivation_run` for an
+    `(observe_id, layer, transform_policy, model_id, ...)` tuple that
+    already has a `succeeded` row, collides on the partial UNIQUE index
+    (predicate `WHERE status IN ('pending','running','succeeded')`).
+    Mitigation done 2026-05-01: manual reconcile of 3 stuck queue rows
+    via `UPDATE ingest_queue SET completed_at = datetime('now')
+    WHERE id IN (...) AND EXISTS (succeeded derivation_run)`; daemon
+    log immediately quiets. Fix path: in `packages/compost-core/src/
+    pipeline/ingest.ts` `add()` path, when `getConcurrentDrainFacts`
+    branch returns ok, also update `ingest_queue.completed_at = now()`
+    inside the same transaction. ~30 LoC + 1 test (concurrent-drain
+    queue-close branch). Defer to post-dogfood for the same reason as
+    other ingest-path edits: touching `ingest.ts` mid-dogfood would
+    perturb chain-growth measurement. Diagnostic Engram memory TBD at
+    write time.
   - **Ranking diversity constraint for `compost ask` / `compost query`**
     — current top-K ranking is dominated by `w1_semantic` (~0.96) with
     `w2_temporal` (~0.15), so a single high-recency source can saturate
