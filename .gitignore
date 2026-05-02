@@ -57,3 +57,9 @@ coverage/
 scripts/com.zion.*.plist
 scripts/com.[a-z]*.[a-z]*-daemon.plist
 !scripts/com.example.*.plist
+
+# Personal debate transcripts (kept local; multi-AI debate sessions often
+# contain personal context, machine paths, and project specifics that
+# shouldn't ship in the public MIT fork-template). Each fork can keep its
+# own debates/ directory locally — they are not part of the public artifact.
+debates/

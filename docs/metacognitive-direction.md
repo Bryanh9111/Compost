@@ -3,7 +3,7 @@
 > **Authored**: 2026-05-02
 > **Supersedes**: Phases 5-7 wisdom-extraction trajectory
 > **Related**: ROADMAP.md "Strategic Direction v4" subsection
-> **Plan-of-record**: `/Users/zion/.claude/plans/vast-petting-ladybug.md`
+> **Plan-of-record**: maintainer's local plan file (kept outside this repo)
 > **Engram seal**: pinned decision (id assigned at write time, see References)
 
 ---
@@ -181,7 +181,7 @@ The relationship to existing `observations` / `facts` tables: those become **inp
 ## 8. Phase 1-5 roadmap with deliverables
 
 ### Phase 1 (Week 1, 2026-05-02 to 2026-05-08) — this commit
-Plan-of-record: `/Users/zion/.claude/plans/vast-petting-ladybug.md` (7 deliverables; see plan).
+Plan-of-record: maintainer's local plan file (kept outside this repo; 7 deliverables).
 
 Deliverables:
 1. Lock direction in CLAUDE.md / AGENTS.md / ROADMAP.md / this doc
@@ -224,8 +224,8 @@ Review gate: at each phase, check 30/90/180-day signals from §6.
 
 ## 9. References
 
-- **ROADMAP**: `/Users/zion/Repos/Zylo/Compost/docs/ROADMAP.md` "Strategic Direction v4 (2026-05-02 metacognitive turn)" subsection
-- **Plan-of-record**: `/Users/zion/.claude/plans/vast-petting-ladybug.md` (Week 1 implementation plan with 7 deliverables + 9 amendments + verification)
+- **ROADMAP**: `docs/ROADMAP.md` "Strategic Direction v4 (2026-05-02 metacognitive turn)" subsection
+- **Plan-of-record**: maintainer's local plan file (kept outside this repo; Week 1 implementation plan with 7 deliverables + 9 amendments + verification)
 - **Engram memories** (written 2026-05-02 as part of this turn):
   - `88c0de87fea8` (pinned decision, kind=decision) — locking the v4 direction (4a in plan); SUPERSEDES Phases 5-7 wisdom-extraction trajectory
   - `a8a292013323` (pinned procedure) — anti-drift guidance "how to verify Compost in v4 framing" (4c in plan)

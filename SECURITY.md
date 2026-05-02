@@ -56,6 +56,36 @@ Both emit JSON to stdout. Neither modifies the database — remediation (purge r
 
 `install.sh` checks for known sync service paths and refuses to proceed. For cross-machine use, use `compost export` + `compost import` (Phase 8 roadmap) rather than folder sync.
 
+## Public-artifact hygiene (MIT fork-template policy)
+
+Compost ships as an MIT fork-template — anyone can `git clone` and grow their own. To keep the public artifact clean across forks:
+
+### Path conventions in tracked docs
+
+- **Tilde paths (`~/.compost/`, `~/.engram/`, `~/.claude/`) are accepted** — they are standard Unix shorthand, portable across users, and match the convention this codebase already uses.
+- **Absolute `/Users/<username>/` paths are forbidden** in tracked files. They leak the maintainer's username and home structure to every fork.
+- When referencing the maintainer's local files (e.g. plans, scratchpads) in tracked docs, use phrases like "maintainer's local plan file (kept outside this repo)" rather than the absolute path.
+
+### Locally-only directories (gitignored)
+
+Some directories contain personal context (multi-AI debate transcripts, scratch plans, machine-specific configs) that don't belong in the public artifact:
+
+- `debates/` — multi-AI debate session transcripts. Each fork keeps its own locally; the maintainer's are not committed.
+- `scripts/com.<username>.*.plist` — personal launchd plists. The public template lives at `scripts/com.example.*.plist` with placeholder paths.
+- `bench/baseline-*.json` outside the published baselines — local experiment baselines stay local.
+
+The `.gitignore` enforces this. If you fork Compost, your own debates/ stays private to your fork by default.
+
+### What still needs hand-review before any push
+
+Even with `.gitignore` and PII redactor in place, hand-review every commit for:
+- Absolute `/Users/<your-username>/` or `/home/<you>/` paths that snuck into docs or test fixtures
+- Email addresses, real phone numbers, real account ids
+- Project-specific names from your private projects that aren't part of Compost
+- Backup paths that disclose your machine's directory structure
+
+Run `git grep "/Users/$(whoami)\|/home/$(whoami)\|<your-email>" -- ':!bench/baseline*.json'` before committing if you're paranoid; it should return zero hits.
+
 ## Reporting vulnerabilities
 
 This is a personal project without a formal security response process. If you find a vulnerability:

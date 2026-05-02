@@ -296,7 +296,7 @@ Success signals for v4 (review at intervals):
 - 90 days: zsh + git + Obsidian capture live; `coverage_audit` CLI works for 3+ test queries; pattern detection emits first behavior digest
 - 180 days: user can answer "what did I do this week / month" from Compost alone (cross-system); user reports "I no longer hand-track my work in Obsidian for retrospect purposes"; zero pivot-back urge
 
-Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550). Plan-of-record source: `/Users/zion/.claude/plans/vast-petting-ladybug.md`. Long-form rationale: `docs/metacognitive-direction.md`.
+Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550). Plan-of-record source: maintainer's local plan file (kept outside this repo). Long-form rationale: `docs/metacognitive-direction.md`.
 
 ### Self-evolution levels
 
