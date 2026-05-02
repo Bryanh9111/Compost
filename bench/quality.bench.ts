@@ -1,4 +1,10 @@
 /**
+ * FROZEN 2026-05-02 v4 metacognitive turn — wiki synthesis layer frozen as
+ * background scheduler. This bench measures a frozen surface and is not
+ * part of the active regression gate. Retained for historical trial
+ * documentation + future revival if Phase 4 (b) scheduled batch wisdom is
+ * activated. See docs/metacognitive-direction.md for v4 sunset rationale.
+ *
  * quality.bench.ts — measures wiki synthesis quality via LLM-as-judge.
  *
  * Network-gated: only runs with COMPOST_BENCH_NETWORK=true. Needs a

@@ -1,5 +1,8 @@
 {
   "schema_version": 1,
+  "frozen": true,
+  "frozen_at": "2026-05-02",
+  "frozen_reason": "v4 metacognitive turn — wiki synthesis layer frozen as background scheduler; this baseline measures a frozen surface. On-demand wisdom (compost ask) uses different synthesis path. See docs/metacognitive-direction.md.",
   "captured_at": "2026-05-01T03:51:13Z",
   "git_sha": "98fcb32f1f9a29769f2743b587868a12ef2227c4",
   "judge_model": "gemma4:31b",

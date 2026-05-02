@@ -67,6 +67,21 @@ interface OutboxRow {
   appended_at: string;
 }
 
+interface DraftObservationPayload {
+  content: string;
+  mime_type: string;
+  occurred_at: string;
+  metadata?: unknown;
+  contexts?: unknown;
+  [key: string]: unknown;
+}
+
+const AUTO_WRAPPED_METADATA = {
+  auto_wrapped: true,
+  auto_wrapped_reason:
+    "non-JSON payload accepted by v4 consumer-flexibility tolerance",
+};
+
 /**
  * Drain one outbox row. Implements spec §1.6.2 canonical single-DB transaction.
  *
@@ -109,51 +124,29 @@ export function drainOne(db: Database): DrainResult | null {
     return null;
   }
 
-  // Parse payload for observation fields
-  let parsedPayload: {
-    content?: string;
-    mime_type?: string;
-    occurred_at?: string;
-    metadata?: Record<string, unknown>;
-    [key: string]: unknown;
-  };
-
+  let parsedPayload: DraftObservationPayload;
   try {
-    parsedPayload = JSON.parse(pending.payload);
-  } catch {
-    recordDrainFailure(db, pending.seq, "invalid JSON payload");
+    parsedPayload = draftObservationFromPending(pending);
+  } catch (e) {
+    recordDrainFailure(
+      db,
+      pending.seq,
+      e instanceof Error ? e.message : String(e)
+    );
     return null;
-  }
-
-  // Derive missing fields from hook payloads:
-  // Hook shim writes {session_id, hook_event_name, ...} without occurred_at/mime_type.
-  // Use appended_at as fallback for occurred_at, and application/json for mime_type.
-  if (!parsedPayload.occurred_at) {
-    parsedPayload.occurred_at = pending.appended_at;
-  }
-  if (!parsedPayload.mime_type) {
-    parsedPayload.mime_type = "application/json";
-  }
-  // For hook payloads, the entire payload IS the content
-  if (!parsedPayload.content) {
-    parsedPayload.content = pending.payload;
   }
 
   try {
     const observeId = uuidv7();
-    const contentHash = computeHash(parsedPayload.content ?? "");
+    const contentHash = computeHash(parsedPayload.content);
     const rawHash = computeHash(pending.payload);
     const now = new Date().toISOString().replace("T", " ").replace("Z", "");
 
-    // Parse contexts from the outbox event's payload
     let contexts: string[] = [];
-    try {
-      const fullPayload = JSON.parse(pending.payload);
-      if (Array.isArray(fullPayload.contexts)) {
-        contexts = fullPayload.contexts;
-      }
-    } catch {
-      // contexts are optional
+    if (Array.isArray(parsedPayload.contexts)) {
+      contexts = parsedPayload.contexts.filter(
+        (context): context is string => typeof context === "string"
+      );
     }
 
     const tx = db.transaction(() => {
@@ -266,6 +259,83 @@ export function drainOne(db: Database): DrainResult | null {
     );
     return null;
   }
+}
+
+function draftObservationFromPending(
+  pending: OutboxRow
+): DraftObservationPayload {
+  if (pending.payload.length === 0) {
+    throw new Error("empty payload");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(pending.payload);
+  } catch {
+    return autoWrappedPayload(pending.payload, pending.appended_at);
+  }
+
+  if (!isRecord(parsed) || !hasOwnContent(parsed)) {
+    return autoWrappedPayload(
+      typeof parsed === "string" ? parsed : pending.payload,
+      pending.appended_at,
+      isRecord(parsed) ? parsed : undefined
+    );
+  }
+
+  const content = parsed["content"];
+  if (typeof content !== "string") {
+    return autoWrappedPayload(pending.payload, pending.appended_at, parsed);
+  }
+
+  const hasMetadata = Object.prototype.hasOwnProperty.call(parsed, "metadata");
+  const mimeType =
+    typeof parsed["mime_type"] === "string"
+      ? parsed["mime_type"]
+      : typeof parsed["mime"] === "string"
+        ? parsed["mime"]
+        : "application/json";
+  const occurredAt =
+    typeof parsed["occurred_at"] === "string"
+      ? parsed["occurred_at"]
+      : pending.appended_at;
+
+  return {
+    ...parsed,
+    content,
+    mime_type: mimeType,
+    occurred_at: occurredAt,
+    ...(hasMetadata ? { metadata: parsed["metadata"] } : {}),
+  };
+}
+
+function autoWrappedPayload(
+  content: string,
+  occurredAt: string,
+  parsedObject?: Record<string, unknown>
+): DraftObservationPayload {
+  const metadata = {
+    ...(isRecord(parsedObject?.["metadata"]) ? parsedObject["metadata"] : {}),
+    ...AUTO_WRAPPED_METADATA,
+  };
+
+  return {
+    content,
+    mime_type: "text/plain",
+    occurred_at: occurredAt,
+    metadata,
+    ...(parsedObject && Array.isArray(parsedObject["contexts"])
+      ? { contexts: parsedObject["contexts"] }
+      : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwnContent(value: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(value, "content");
 }
 
 /**

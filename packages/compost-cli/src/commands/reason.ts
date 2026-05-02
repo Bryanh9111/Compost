@@ -184,7 +184,7 @@ export function registerReason(program: Command): void {
   reason
     .command("verdict")
     .description(
-      "Stamp a user verdict on a reasoning chain (debate 026 entry signal — ground-truth feedback channel)."
+      "[FROZEN v4 turn 2026-05-02] Stamp a user verdict on a reasoning chain. Reasoning_chain background production frozen in v4 metacognitive turn; this command remains functional for the historical 26 chains only. See docs/metacognitive-direction.md."
     )
     .argument(
       "<chain_id>",

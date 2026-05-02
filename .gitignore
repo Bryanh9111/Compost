@@ -52,3 +52,8 @@ logs/
 coverage/
 .nyc_output/
 .claude/
+
+# Personal launchd plists (per-user, never commit; com.example.*.plist is the public template)
+scripts/com.zion.*.plist
+scripts/com.[a-z]*.[a-z]*-daemon.plist
+!scripts/com.example.*.plist

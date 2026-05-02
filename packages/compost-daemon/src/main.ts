@@ -3,7 +3,9 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
-import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startReasoningScheduler, startIngestWorker, startBackupScheduler, startGraphHealthScheduler } from "./scheduler";
+// startReasoningScheduler removed from import 2026-05-02 v4 metacognitive turn — see line 151.
+// To revive: re-add to import + swap the noop reasoningSched back to startReasoningScheduler(db, llmRegistry, vectorStore).
+import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startIngestWorker, startBackupScheduler, startGraphHealthScheduler } from "./scheduler";
 import type { Scheduler, SchedulerHealth } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
@@ -145,14 +147,27 @@ export async function startDaemon(
     dataDir,
   });
   const freshnessSched: Scheduler = startFreshnessLoop(db, dataDir);
+  // FROZEN 2026-05-02 v4 metacognitive turn — reasoning_chain background
+  // generation halted; on-demand reasoning still available via `compost ask`
+  // synthesis path. See docs/metacognitive-direction.md for rationale.
+  // To revive: re-add startReasoningScheduler to import (line 6) + swap noop
+  // below back to startReasoningScheduler(db, llmRegistry, vectorStore).
+  // Schema (reasoning_chains table), CLI (compost reason verdict), and existing
+  // 26 chains all preserved as historical-trial data.
   // Phase 7 L5 hybrid scheduler (debate 026). Independent timer (NOT coupled
   // to reflect): cycle picks recently-active subjects, runs runReasoning(),
   // verdict-feedback gates throttle on quality regression.
-  const reasoningSched: Scheduler = startReasoningScheduler(
-    db,
-    llmRegistry,
-    vectorStore
-  );
+  const reasoningSched: Scheduler = {
+    stop() {},
+    getHealth() {
+      return {
+        name: "reasoning-frozen-v4",
+        running: false,
+        last_tick_at: null,
+        error_count: 0,
+      };
+    },
+  };
   // P0-7 backup scheduler: daily 03:00 UTC SQLite VACUUM INTO + retention prune.
   // P0-3 graph-health scheduler: daily 04:00 UTC graph snapshot.
   // Both were previously exported but never wired in main.ts (dogfound 2026-04-27).

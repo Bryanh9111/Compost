@@ -264,6 +264,40 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 
 External evaluation/observability stacks — Comet opik in particular — are **not** to be installed as dependencies even when their feature set overlaps the L5/L6 evaluation surface. Reasons (pinned Engram decision `b73625577d5c`): (1) opik is enterprise SaaS-style with Postgres + ClickHouse + Web UI, fundamentally heavier than Compost's local-first SQLite + LanceDB; (2) Compost's MIT fork-template distribution would force every fork to host opik, breaking the "git clone and grow your own" anchor; (3) HC-1 independence forbids hard third-party deps; (4) Compost already implements decision_audit + correction_events + triage + arbitration + health_signals, which cover most opik concepts locally. Permitted use: **steal design concepts** into local SQLite-native form (e.g., the LLM-as-judge pattern in `bench/quality.bench.ts`).
 
+### Strategic Direction v4 (2026-05-02 metacognitive turn)
+
+Following user-driven product calibration on 2026-05-01/02, Compost's identity reframes from "personal AI brain that synthesizes knowledge" to "cross-system action ledger + metacognitive index + behavior pattern engine (primary) + on-demand wisdom retrieval (auxiliary)" over the existing Engram + Obsidian + git + claude-mem stack. v3 strategic positioning above remains accurate at the product-identity level (single-user, MIT fork-template, 10+ year horizon); v4 sharpens the layer-of-stack identity.
+
+Compost does NOT:
+- Generate or own persistent knowledge (that is Obsidian's role per vault)
+- Store atomic memories or constraints (that is Engram's role)
+- Run background wisdom production schedulers that persist synthesized fact
+
+Compost DOES (primary, metacognitive):
+- Capture every meaningful agent/user action across tools (Claude Code, Codex, zsh, git, Obsidian file edits) into a unified time-series ledger
+- Maintain `artifact_locations`: for any topic, which system holds the canonical record (Engram memory_id / Obsidian path / git commit / claude-mem session / ROADMAP section / handoff doc)
+- Surface coverage gaps: "you did X, recorded in Engram=✓ ROADMAP=✓ Obsidian=✗"
+- Detect behavior patterns over time (sequential mining, NOT LLM): work rhythms, decision habits, language style evolution
+- Route queries: "this question's answer lives in <Obsidian vault X> not in me"
+
+Compost DOES (auxiliary, on-demand wisdom):
+- (a) `compost ask <question>`: user-triggered LLM synthesis over the metacognitive ledger; answer returned ephemerally, NOT persisted as fact. This preserves the "user wants synthesis when asking, not when not asking" principle. Already implemented; preserved through v4 turn.
+
+Wisdom roadmap (sequential, NOT parallel):
+- Phase 1 (now): (a) on-demand `compost ask` retained. Background production frozen.
+- Phase 2-3 (1-3 months): action_log schema + capture expansion (zsh / git / Obsidian). Richer ledger for (a) to draw from.
+- Phase 4 (3-6 months): (b) scheduled batch wisdom — weekly/monthly LLM scan produces "this week your habits / cross-tool pattern" report. Batch output is a digest read by user, NOT persisted as fact in metacognitive ledger.
+- Phase 5 (6-12 months): (c) real-time contextual wisdom surfacing — when user does X, system proactively notes "this is similar to Y you did 3 weeks ago, that resulted in Z". Requires push UX design + trigger discipline.
+
+Wisdom-layer features built in Phases 5-7 (`reasoning_chain` table, `synthesizeWiki`, verdict CLI, `quality.bench.ts`, dogfood-7d routine, debate 026 reasoning scheduler, debate 024 verdict calibration) are **frozen as historical trial path** — schemas retained, code retained, but no further investment. Do not delete; the trial itself is data about what direction works for this user. Background production is what's frozen — `compost ask` (the on-demand path) is preserved. See `docs/metacognitive-direction.md` for the full sunset/freeze list with file:line references and the rationale of each freeze.
+
+Success signals for v4 (review at intervals):
+- 30 days: `action_log` schema design accepted; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days
+- 90 days: zsh + git + Obsidian capture live; `coverage_audit` CLI works for 3+ test queries; pattern detection emits first behavior digest
+- 180 days: user can answer "what did I do this week / month" from Compost alone (cross-system); user reports "I no longer hand-track my work in Obsidian for retrospect purposes"; zero pivot-back urge
+
+Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550). Plan-of-record source: `/Users/zion/.claude/plans/vast-petting-ladybug.md`. Long-form rationale: `docs/metacognitive-direction.md`.
+
 ### Self-evolution levels
 
 Compost's autonomy ladder. We are currently at L3, targeting L5-L6.

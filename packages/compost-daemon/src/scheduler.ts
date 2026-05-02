@@ -154,7 +154,12 @@ export function startReflectScheduler(
         log.error({ err }, "triage error (continuing)");
       }
 
-      if (opts.llm && opts.dataDir) {
+      // FROZEN 2026-05-02 v4 metacognitive turn — wiki page background synthesis
+      // halted; on-demand wiki retrieval+synthesis still available via `compost ask`.
+      // See docs/metacognitive-direction.md for rationale.
+      // Env-gated for revival: WIKI_SYNTHESIS_ENABLED=true reactivates without
+      // code change. synthesizeWiki function preserved + import retained.
+      if (process.env.WIKI_SYNTHESIS_ENABLED === "true" && opts.llm && opts.dataDir) {
         try {
           const wikiResult = await synthesizeWiki(db, opts.llm, opts.dataDir);
           log.info({ wikiResult }, "wiki synthesis complete");

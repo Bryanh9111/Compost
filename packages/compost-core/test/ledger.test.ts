@@ -157,9 +157,11 @@ describe("ledger/outbox", () => {
 
   test("drainOne increments drain_attempts and quarantines after 5 failures", () => {
     const event = makeEvent({
-      // Bad payload that will cause drain to fail at observation insert
-      // (missing required fields parsed from payload)
-      payload: "not-valid-json-for-drain",
+      // Empty payload — explicitly rejected by v4 consumer-flexibility tolerance
+      // (see outbox-payload-tolerance.test.ts case 4). Plain non-JSON strings now
+      // auto-wrap successfully (v4 turn 2026-05-02), so use empty string here to
+      // trigger the legitimate drain-failure path that this test exercises.
+      payload: "",
     });
     appendToOutbox(db, event);
 
