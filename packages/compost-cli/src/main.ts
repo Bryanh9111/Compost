@@ -20,6 +20,7 @@ import { registerCrawl } from "./commands/crawl";
 import { registerCapture } from "./commands/capture";
 import { registerCover } from "./commands/cover";
 import { registerRoute } from "./commands/route";
+import { registerDid } from "./commands/did";
 import { registerMcp } from "./commands/mcp";
 import { registerReason } from "./commands/reason";
 
@@ -49,6 +50,7 @@ registerCrawl(program);
 registerCapture(program);
 registerCover(program);
 registerRoute(program);
+registerDid(program);
 registerMcp(program);
 registerReason(program);
 

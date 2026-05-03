@@ -18,6 +18,7 @@ import { registerDrain } from "../src/commands/drain";
 import { registerCapture } from "../src/commands/capture";
 import { registerCover } from "../src/commands/cover";
 import { registerRoute } from "../src/commands/route";
+import { registerDid } from "../src/commands/did";
 import type { ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ function buildProgram(): Command {
   registerCapture(program);
   registerCover(program);
   registerRoute(program);
+  registerDid(program);
   return program;
 }
 
@@ -75,6 +77,7 @@ describe("CLI program structure", () => {
     expect(names).toContain("capture");
     expect(names).toContain("cover");
     expect(names).toContain("route");
+    expect(names).toContain("did");
   });
 
   it("cover has metacognitive audit options", () => {
@@ -98,6 +101,18 @@ describe("CLI program structure", () => {
     expect(optionNames).toContain("--since-days");
     expect(optionNames).toContain("--repo-root");
     expect(optionNames).toContain("--no-docs");
+    expect(optionNames).toContain("--json");
+  });
+
+  it("did has action timeline options", () => {
+    const program = buildProgram();
+    const did = program.commands.find((c) => c.name() === "did");
+    expect(did).toBeDefined();
+    const optionNames = did!.options.map((o) => o.long);
+    expect(optionNames).toContain("--project");
+    expect(optionNames).toContain("--source");
+    expect(optionNames).toContain("--limit");
+    expect(optionNames).toContain("--now");
     expect(optionNames).toContain("--json");
   });
 

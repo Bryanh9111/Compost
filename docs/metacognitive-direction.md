@@ -136,7 +136,8 @@ These are **observable signals**, not feelings. If at any review point the signa
 - [ ] User has used `compost ask` at least 3 times in real workflow (not just testing)
 
 ### 180 days (target: 2026-11-02)
-- [ ] User can answer "what did I do this week / month" from Compost alone (cross-system aggregated)
+- [x] `compost did <date>` / `compost did "this week"` can aggregate `action_log` rows by day, source, project, and artifact pointer
+- [ ] User can answer "what did I do this week / month" from Compost alone in routine workflow (cross-system aggregated)
 - [ ] User self-reports: "I no longer hand-track my work in Obsidian for retrospect purposes"
 - [ ] Zero pivot-back urge from user (no "let's revive reasoning chain" requests)
 - [ ] At least one cross-project pattern surfaced by Compost that user hadn't consciously noticed
@@ -229,13 +230,18 @@ Review gate: 30-day success signals + verification checklist in plan file.
   routing — landed (`bun run typecheck`, `bun test` = 731 pass / 0 fail).
   Verified live with: "v4 turn coverage audit", "which Obsidian vault has my
   XHS strategy notes", and "what did I work on last week".
+- D2-6 did slice: `compost did <date>` / `compost did "this week"` CLI +
+  deterministic action timeline aggregation — landed (`bun run typecheck`,
+  `bun test` = 737 pass / 0 fail). It groups `action_log` rows by UTC day,
+  source system, project, and artifact pointer without using LLM synthesis or
+  frozen background reasoning/wiki/verdict paths.
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 
 ### Phase 3 (Month 2) — element CLI primitives
 - `compost cover <topic>` — coverage audit ("Engram=yes, ROADMAP=yes, Obsidian=no") — landed in D2-4
 - `compost route <question>` — "this answer lives in <vault Y>" — landed in D2-5
-- `compost did <date>` / `compost did "this week"` — action time-window aggregation
+- `compost did <date>` / `compost did "this week"` — action time-window aggregation — landed in D2-6
 - Cross-system reconciler: nightly job comparing action_log vs Engram/Obsidian/git for missing pointers
 
 ### Phase 4 (Month 3-6) — pattern detection + (b) scheduled batch wisdom

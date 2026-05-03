@@ -46,3 +46,16 @@ export type {
   RouteQuestionReport,
   RouteSystemId,
 } from "./metacognitive/router";
+export {
+  formatActionTimeline,
+  parseActionTimelineWindow,
+  summarizeActionTimeline,
+} from "./metacognitive/action-timeline";
+export type {
+  ActionTimelineAction,
+  ActionTimelineOptions,
+  ActionTimelineReport,
+  ActionTimelineWindow,
+  CountSummary,
+  DayActionGroup,
+} from "./metacognitive/action-timeline";

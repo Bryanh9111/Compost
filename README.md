@@ -145,7 +145,7 @@ Hook cold-start: p95 < 30ms on Apple Silicon (measured, not guessed).
 packages/
   compost-core/            # Pure library: schema, ledger, queue, query, ranking, embedding, storage, reflect
   compost-daemon/          # Long-running process: MCP server, drain loop, reflect/freshness scheduler
-  compost-cli/             # CLI: add, query, ask, capture, doctor, hook, reflect, drain
+  compost-cli/             # CLI: add, query, ask, capture, cover, route, did, doctor
   compost-hook-shim/       # Fast cold-start hook for Claude Code (< 30ms p95)
   compost-ingest/          # Python extraction (markdown + web/trafilatura -> chunks + facts)
   compost-engram-adapter/  # Bidirectional channel to Engram: splitter, pending-writes, writer (Phase 5 S4)
@@ -208,7 +208,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 ## Stats
 
 - **~20K lines** of TypeScript + ~800 lines Python
-- **731 tests**, 0 failures
+- **737 tests**, 0 failures
 - **21 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017, reasoning scheduler state in 0020, action_log in 0021)
 - **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
 - **16 MCP tools** exposed to agents (Phase 0-2 + Phase 6 P0 gap/curiosity/digest/crawl + active fact→gap)
