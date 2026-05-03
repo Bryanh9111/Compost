@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { v7 as uuidv7 } from "uuid";
 import { computeOriginHash } from "./origin";
+import { processObservationAction } from "../metacognitive/action-processor";
 
 /**
  * OutboxEvent — what writers (hook shim, adapters) pass to appendToOutbox.
@@ -245,6 +246,11 @@ export function drainOne(db: Database): DrainResult | null {
          WHERE seq = ?`,
         [canonicalId, pending.seq]
       );
+
+      // STEP 8: Best-effort v4 metacognitive lift. This writes the normalized
+      // action surface for coverage/pattern queries without blocking the
+      // durable observation path if an adapter payload is unusual.
+      processObservationAction(db, canonicalId);
 
       return canonicalId;
     });

@@ -35,6 +35,7 @@ Compost is a **4-layer knowledge base** with an append-only provenance ledger as
    d. INSERT OR IGNORE INTO observations (L0 ledger)
    e. Enqueue into ingest_queue
    f. Ack outbox row
+   g. Best-effort metacognitive lift into action_log
 4. Worker claims from ingest_queue (lease protocol: 60s, heartbeat 30s)
 5. Bun.spawn Python extractor (stdin JSON -> stdout JSON)
 6. INSERT facts (L2) + chunks into SQLite

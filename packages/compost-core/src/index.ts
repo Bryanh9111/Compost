@@ -18,3 +18,13 @@ export { is_noteworthy, is_noteworthy as isNoteworthy } from "./ledger/noteworth
 export type { NoteworthyInput, NoteworthyResult } from "./ledger/noteworthy";
 export { ingestFile } from "./pipeline/ingest";
 export type { IngestResult } from "./pipeline/ingest";
+export {
+  processObservationAction,
+  processObservationActions,
+} from "./metacognitive/action-processor";
+export type {
+  ActionProcessBatchOptions,
+  ActionProcessBatchReport,
+  ActionProcessOneResult,
+  ActionProcessStatus,
+} from "./metacognitive/action-processor";

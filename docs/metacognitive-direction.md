@@ -200,7 +200,7 @@ Review gate: 30-day success signals + verification checklist in plan file.
 - Obsidian file watcher (`fswatch` on vault roots, debounced) → outbox
 - `action_log` schema design + migration (`0021_action_log.sql`) — landed
 - Typecheck + full test baseline restored after D2-1 (`c00db8d`; `bun run typecheck`, `bun test` = 704 pass / 0 fail)
-- Action processor: lift observations → action_log records
+- Action processor: lift observations → action_log records — landed (`processObservationAction` / `processObservationActions`)
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 
