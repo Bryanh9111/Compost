@@ -87,7 +87,7 @@ BM25 works independently when vectorStore is null (graceful degradation).
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (9 migrations, 20 tables)
+## Database schema (21 migrations)
 
 ### Core tables
 
@@ -107,12 +107,13 @@ BM25 works independently when vectorStore is null (graceful degradation).
 | `web_fetch_state` | L4 | ETag/Last-Modified/backoff for freshness loop |
 | `facts_fts` | L1 | FTS5 virtual table for BM25 keyword search |
 | `wiki_page_versions` | L3 | Wiki page snapshots before rewrite |
+| `action_log` | metacognitive | Processed action records lifted from raw observations |
 
 ### FK CASCADE chain (critical for reflect GC)
 
 ```
 observations.observe_id CASCADE -> facts, chunks, ingest_queue, captured_item, derivation_run
-observations.observe_id SET NULL -> observe_outbox
+observations.observe_id SET NULL -> observe_outbox, action_log
 facts.fact_id CASCADE -> fact_context, access_log, ranking_audit_log
 wiki_pages.path CASCADE -> wiki_page_observe
 ```
@@ -123,7 +124,7 @@ wiki_pages.path CASCADE -> wiki_page_observe
 
 ```
 src/
-  schema/          9 SQL migrations + migrator.ts
+  schema/          21 SQL migrations + migrator.ts
   policies/        transform_policy registry (tp-2026-04, tp-2026-04-02, tp-2026-04-03)
   ledger/          outbox.ts (append + drain), noteworthy.ts (5-gate dedup)
   queue/           lease.ts (claim, heartbeat, complete, fail)
@@ -312,10 +313,10 @@ that take a SQLite writer lock for > 1s MUST declare a time window:
 |-----------|--------|-------------|-------|
 | `startDrainLoop` | 1s | continuous | brief writer lock per drain |
 | `startIngestWorker` | 2s | continuous | drains own outbox first |
-| `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s. Accepts `{ llm: BreakerRegistry \| LLMService, dataDir }`; when both supplied, calls `synthesizeWiki` after each successful reflect (debate 009 Fix 2). Wiki errors logged + swallowed so one bad topic cannot stall the cadence. |
+| `startReflectScheduler` | 6h | aligned 00:00/06:00/12:00/18:00 UTC | writer lock 1-5s. In v4, background wiki synthesis is frozen by default; legacy wiki hook behavior requires `WIKI_SYNTHESIS_ENABLED=true`. Wiki errors are logged + swallowed so one bad topic cannot stall the cadence. |
 | `startFreshnessLoop` | 60s | continuous | read-only |
 | `startBackupScheduler` (P0-7) | 24h | **03:00 UTC** (between reflect runs) | VACUUM INTO -- avoids reflect lock by time-window separation |
 | `startGraphHealthScheduler` (P0-3) | 24h | **04:00 UTC** (after backup completes) | `takeSnapshot` runs Union-Find over active facts + fact_links; SQL writer lock ~100ms at 10K facts. Buffer hour after backup tolerates large-db VACUUM |
-| `startReasoningScheduler` (Phase 7 L5, debate 026) | 6h | independent timer (NOT coupled to reflect) | seed selection from recently-active subjects + 3-layer gate (entry / hard-pause / soft-skip with K=4 promotion). Per-cycle errors logged + swallowed. |
+| `startReasoningScheduler` (Phase 7 L5, debate 026) | frozen in v4 | stopped health stub | Historical implementation is retained for manual access and schema compatibility, but the daemon no longer starts the background chain-generation loop by default. |
 
 All schedulers implement `getHealth(): { name, last_tick_at, error_count, running }`. Daemon control socket aggregates the array under `status.schedulers` so an outwardly-alive daemon with a dead sub-loop is no longer invisible (dogfound 2026-04-27 — daemon ran 65h while no scheduler ticked because MCP read-path masked the failure). Process-layer supervision is documented with the macOS launchd template at `scripts/com.example.compost-daemon.plist` (KeepAlive=true, ThrottleInterval=60).

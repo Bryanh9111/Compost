@@ -87,8 +87,8 @@ compost doctor --rebuild L1
 | **L0** | Provenance ledger | SQLite (append-only observations) | 0 |
 | **L1** | Vector + keyword index | LanceDB (ANN) + SQLite FTS5 (BM25) | 1-2 |
 | **L2** | Structured facts | SQLite (subject-predicate-object triples) | 1 |
-| **L3** | Wiki synthesis | Markdown on disk + wiki_pages table | 2 |
-| **L4** | Evolution daemon | Freshness loop, reflect, future: curiosity agent | 2+ |
+| **L3** | Historical wiki synthesis | Markdown on disk + wiki_pages table; background rebuild frozen by default in v4 | 2 |
+| **L4** | Metacognitive daemon | Drain, ingest, reflect, freshness, backup, graph-health; action capture expansion | 2+ |
 
 ### Hybrid retrieval (Phase 2)
 
@@ -175,7 +175,7 @@ ladder** (L1 → L6) rather than "portability / ecosystem" thinking. See
 | **4** | L3 | Fork-ready personal brain | **Done** -- PII redactor, bench, origin-hash, user model schema |
 | **5** | L3↔L4 | Bidirectional Engram loop | **Done** -- read+write MCP transports, pending queue, engram-push / engram-pull / daemon auto-wire |
 | **6 P0** | L4 | Autonomous exploration | **Done** -- gap tracker, digest push, wiki provenance JOIN, curiosity-agent MVP, user-approved crawl queue |
-| **7** | L5 | Analytical partner | **In progress** -- entry slice + verdict signal + hybrid scheduler shipped (debates 025/026); daemon long-run infra (launchd plist + 7-scheduler health surface + stale-row recovery + dogfood routine, 2026-04-27); verdict CLI prefix matching (git-checkout style); β pattern detection + γ hypothesis generation deferred |
+| **7** | L5 | Analytical partner | **Historical / frozen in v4** -- entry slice + verdict signal + hybrid scheduler shipped as trial path; background chain generation and dogfood routine are frozen. On-demand `compost ask` remains active; future pattern work moves to `action_log`. |
 | 8 | — | Portability (descoped) | Export / import bundles — defer-on-demand |
 | 9 | — | Ecosystem (descoped) | More adapters, multimodal metadata — defer-on-demand |
 
@@ -208,7 +208,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 ## Stats
 
 - **~20K lines** of TypeScript + ~800 lines Python
-- **606 tests**, 0 failures, 0 skipped
+- **704 tests**, 0 failures
 - **21 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017, reasoning scheduler state in 0020, action_log in 0021)
 - **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
 - **16 MCP tools** exposed to agents (Phase 0-2 + Phase 6 P0 gap/curiosity/digest/crawl + active fact→gap)

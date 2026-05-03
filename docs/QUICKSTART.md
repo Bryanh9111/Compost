@@ -57,11 +57,13 @@ and returns an answer grounded in those facts. If the LLM is down or
 the circuit breaker is open, `ask` falls back to BM25 and clearly
 says so — no silent hallucinations.
 
-## 5. Daemon (recommended for self-evolving use)
+## 5. Daemon (recommended for capture + maintenance)
 
-The daemon runs seven schedulers (drain / ingest / reflect / freshness /
-reasoning / backup / graph-health). On macOS the supported pattern is a
-launchd plist that survives reboots and crashes:
+In v4 the daemon is the capture and maintenance process. It runs drain /
+ingest / reflect / freshness / backup / graph-health. The historical
+reasoning scheduler is still visible in health output as a frozen no-op,
+but it does not generate background chains by default. On macOS the
+supported pattern is a launchd plist that survives reboots and crashes:
 
 ```bash
 cp scripts/com.example.compost-daemon.plist ~/Library/LaunchAgents/com.example.compost-daemon.plist
@@ -79,7 +81,8 @@ compost daemon status
 #   drain        [running] last_tick=...        errors=0
 #   ingest       [running] last_tick=...        errors=0
 #   reflect      [running] last_tick=never      errors=0
-#   ... (7 total)
+#   reasoning    [stopped] last_tick=never      errors=0
+#   ... (7 total, including the frozen reasoning health stub)
 ```
 
 Restart after code changes (skips the 60s ThrottleInterval):
@@ -89,15 +92,15 @@ launchctl kickstart -k gui/$(id -u)/com.example.compost-daemon
 ```
 
 Without the daemon, `compost add` still works — the outbox is drained
-inside the add command itself, but reasoning / reflect / wiki synthesis
-won't fire.
+inside the add command itself, but scheduled drain / ingest / reflect /
+freshness / backup / graph-health maintenance will not run.
 
-## 6. Reasoning + dogfood (Phase 7 L5)
+## 6. On-demand reasoning and historical verdicts
 
-The reasoning scheduler runs every 6h, picks recently-active subjects,
-and writes cross-fact chains to `reasoning_chains`. The chain quality
-gate is steered by **your verdict feedback** — without it, the
-scheduler has no signal to throttle on quality regression.
+Background wisdom production is frozen in v4. `compost ask <question>`
+is the supported on-demand synthesis path. The `compost reason` commands
+remain available for the historical `reasoning_chains` dataset and manual
+inspection; they are not the active production loop.
 
 ```bash
 compost reason list --limit 10                # see new chains (truncated id)
@@ -105,16 +108,16 @@ compost reason list --limit 10 --json | jq    # full UUIDs
 compost reason verdict <chain_id> confirmed --note "..."
 compost reason verdict <chain_id> rejected --note "why wrong"
 compost reason stats                          # cumulative verdict signal
-compost reason scheduler status               # scheduler state + recent window
+compost reason scheduler status               # historical/frozen scheduler state
 ```
 
-Dogfood routine (5 min/day):
+Historical chain inspection:
 
-1. `compost reason list --limit 5` — scan new chains
-2. For each: `compost reason verdict <id> confirmed/refined/rejected --note "..."`
-3. That's it. Don't tune POLICY_VERSION mid-dogfood (invalidates old chains).
+1. `compost reason list --limit 5` — inspect existing chains
+2. Optional: `compost reason verdict <id> confirmed/refined/rejected --note "..."`
+3. Do not treat this as an active daily routine in v4.
 
-Suggested zsh aliases (paste into `~/.zshrc`):
+Optional zsh aliases for historical inspection:
 
 ```bash
 alias cchains='cd /path/to/Compost && bun packages/compost-cli/src/main.ts reason list --json --limit 10 | jq -r ".[] | select(.user_verdict == null) | \"\(.chain_id)  conf=\(.confidence)\n    \(.seed_id // .seed_kind | .[0:80])\""'

@@ -123,7 +123,7 @@ Phase 4 is where `quality.bench.ts` infrastructure naturally revives. Phase 5 is
 These are **observable signals**, not feelings. If at any review point the signals don't hold, escalate to user for direction-check.
 
 ### 30 days (target: 2026-06-02)
-- [ ] `action_log` schema design accepted by user (not necessarily migrated yet)
+- [x] `action_log` schema design accepted and migrated (`0021_action_log.sql`, commit `fda433d`)
 - [ ] PF-1 cross-repo dependency audit clean OR documented for any callers found
 - [ ] Daemon plist restored (Deliverable 6); next macOS reboot does NOT silent-fail capture stack
 - [ ] Outbox quarantine count = 0 sustained for 14 consecutive days (verifies Deliverable 3 codex fix)
@@ -199,6 +199,7 @@ Review gate: 30-day success signals + verification checklist in plan file.
 - git post-commit hook (global `~/.gitconfig` `core.hooksPath`) → outbox
 - Obsidian file watcher (`fswatch` on vault roots, debounced) → outbox
 - `action_log` schema design + migration (`0021_action_log.sql`) — landed
+- Typecheck + full test baseline restored after D2-1 (`c00db8d`; `bun run typecheck`, `bun test` = 704 pass / 0 fail)
 - Action processor: lift observations → action_log records
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
