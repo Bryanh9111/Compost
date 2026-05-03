@@ -208,7 +208,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 ## Stats
 
 - **~20K lines** of TypeScript + ~800 lines Python
-- **725 tests**, 0 failures
+- **731 tests**, 0 failures
 - **21 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017, reasoning scheduler state in 0020, action_log in 0021)
 - **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
 - **16 MCP tools** exposed to agents (Phase 0-2 + Phase 6 P0 gap/curiosity/digest/crawl + active fact→gap)

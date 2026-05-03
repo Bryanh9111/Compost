@@ -225,12 +225,16 @@ Review gate: 30-day success signals + verification checklist in plan file.
   `bun test` = 725 pass / 0 fail). Verified live with:
   "did I record the v4 turn", "what did I work on last week", and
   "which Obsidian vault has my XHS strategy notes".
+- D2-5 route slice: `compost route <question>` CLI + deterministic artifact
+  routing — landed (`bun run typecheck`, `bun test` = 731 pass / 0 fail).
+  Verified live with: "v4 turn coverage audit", "which Obsidian vault has my
+  XHS strategy notes", and "what did I work on last week".
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 
 ### Phase 3 (Month 2) — element CLI primitives
 - `compost cover <topic>` — coverage audit ("Engram=yes, ROADMAP=yes, Obsidian=no") — landed in D2-4
-- `compost route <question>` — "this answer lives in <vault Y>"
+- `compost route <question>` — "this answer lives in <vault Y>" — landed in D2-5
 - `compost did <date>` / `compost did "this week"` — action time-window aggregation
 - Cross-system reconciler: nightly job comparing action_log vs Engram/Obsidian/git for missing pointers
 

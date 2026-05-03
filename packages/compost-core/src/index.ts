@@ -39,3 +39,10 @@ export type {
   CoverageSystemId,
   CoverageSystemReport,
 } from "./metacognitive/coverage-audit";
+export { formatRouteQuestion, routeQuestion } from "./metacognitive/router";
+export type {
+  RouteCandidate,
+  RouteQuestionOptions,
+  RouteQuestionReport,
+  RouteSystemId,
+} from "./metacognitive/router";

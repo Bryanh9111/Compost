@@ -17,6 +17,7 @@ import { registerReflect } from "../src/commands/reflect";
 import { registerDrain } from "../src/commands/drain";
 import { registerCapture } from "../src/commands/capture";
 import { registerCover } from "../src/commands/cover";
+import { registerRoute } from "../src/commands/route";
 import type { ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 
 // ---------------------------------------------------------------------------
@@ -52,6 +53,7 @@ function buildProgram(): Command {
   registerDrain(program);
   registerCapture(program);
   registerCover(program);
+  registerRoute(program);
   return program;
 }
 
@@ -72,6 +74,7 @@ describe("CLI program structure", () => {
     expect(names).toContain("drain");
     expect(names).toContain("capture");
     expect(names).toContain("cover");
+    expect(names).toContain("route");
   });
 
   it("cover has metacognitive audit options", () => {
@@ -79,6 +82,18 @@ describe("CLI program structure", () => {
     const cover = program.commands.find((c) => c.name() === "cover");
     expect(cover).toBeDefined();
     const optionNames = cover!.options.map((o) => o.long);
+    expect(optionNames).toContain("--project");
+    expect(optionNames).toContain("--since-days");
+    expect(optionNames).toContain("--repo-root");
+    expect(optionNames).toContain("--no-docs");
+    expect(optionNames).toContain("--json");
+  });
+
+  it("route has artifact routing options", () => {
+    const program = buildProgram();
+    const route = program.commands.find((c) => c.name() === "route");
+    expect(route).toBeDefined();
+    const optionNames = route!.options.map((o) => o.long);
     expect(optionNames).toContain("--project");
     expect(optionNames).toContain("--since-days");
     expect(optionNames).toContain("--repo-root");
