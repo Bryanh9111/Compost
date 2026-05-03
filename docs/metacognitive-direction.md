@@ -131,7 +131,7 @@ These are **observable signals**, not feelings. If at any review point the signa
 
 ### 90 days (target: 2026-08-02)
 - [x] zsh + git + Obsidian capture hooks live, writing to outbox
-- [ ] `coverage_audit` CLI works for at least 3 test queries (e.g., "did I record the v4 turn", "what did I work on last week", "which Obsidian vault has my XHS strategy notes")
+- [x] `compost cover <topic>` coverage audit CLI works for at least 3 test queries (e.g., "did I record the v4 turn", "what did I work on last week", "which Obsidian vault has my XHS strategy notes")
 - [ ] Pattern detection emits first behavior digest (sequential mining over action_log, NOT LLM-generated)
 - [ ] User has used `compost ask` at least 3 times in real workflow (not just testing)
 
@@ -220,11 +220,16 @@ Review gate: 30-day success signals + verification checklist in plan file.
 - D2-3 Obsidian capture slice: `compost capture obsidian` CLI + local watcher
   LaunchAgent + action processor Obsidian normalization — landed (`bun run
   typecheck`, `bun test` = 720 pass / 0 fail)
+- D2-4 coverage audit slice: `compost cover <topic>` CLI + deterministic
+  action_log/doc/artifact coverage reporting — landed (`bun run typecheck`,
+  `bun test` = 725 pass / 0 fail). Verified live with:
+  "did I record the v4 turn", "what did I work on last week", and
+  "which Obsidian vault has my XHS strategy notes".
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 
 ### Phase 3 (Month 2) — element CLI primitives
-- `compost cover <topic>` — coverage audit ("Engram=✓, ROADMAP=✓, Obsidian=✗")
+- `compost cover <topic>` — coverage audit ("Engram=yes, ROADMAP=yes, Obsidian=no") — landed in D2-4
 - `compost route <question>` — "this answer lives in <vault Y>"
 - `compost did <date>` / `compost did "this week"` — action time-window aggregation
 - Cross-system reconciler: nightly job comparing action_log vs Engram/Obsidian/git for missing pointers

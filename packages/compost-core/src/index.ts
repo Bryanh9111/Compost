@@ -28,3 +28,14 @@ export type {
   ActionProcessOneResult,
   ActionProcessStatus,
 } from "./metacognitive/action-processor";
+export { auditCoverage, formatCoverageAudit } from "./metacognitive/coverage-audit";
+export type {
+  CoverageAction,
+  CoverageAuditOptions,
+  CoverageAuditReport,
+  CoverageEvidence,
+  CoverageGap,
+  CoverageMode,
+  CoverageSystemId,
+  CoverageSystemReport,
+} from "./metacognitive/coverage-audit";
