@@ -260,6 +260,12 @@ function deriveSourceSystem(row: ObservationRow): string {
   if (adapter.includes("git") || row.source_uri.startsWith("git:")) {
     return "git";
   }
+  if (
+    adapter.includes("obsidian") ||
+    row.source_uri.startsWith("obsidian://")
+  ) {
+    return "obsidian";
+  }
   if (adapter === "engram" || row.source_uri.startsWith("engram://")) {
     return "engram";
   }
@@ -305,6 +311,11 @@ function deriveActionSourceId(
     const commitSha = stringValue(payload?.["commit_sha"]);
     if (commitId) return commitId;
     if (commitSha) return `git:${commitSha}`;
+  }
+
+  if (sourceSystem === "obsidian") {
+    const changeId = stringValue(payload?.["change_id"]);
+    if (changeId) return changeId;
   }
 
   if (sourceSystem === "codex" && looksUniqueSourceId(row.source_id)) {
@@ -376,6 +387,16 @@ function deriveWhatText(
     }: ${subject}`;
   }
 
+  if (sourceSystem === "obsidian" && payload) {
+    const vaultName = stringValue(payload["vault_name"]);
+    const relativePath = stringValue(payload["relative_path"]);
+    const event = stringValue(payload["event"]);
+    const path = relativePath ?? stringValue(payload["path"]) ?? "note changed";
+    return `Obsidian note${vaultName ? ` in ${vaultName}` : ""}${
+      event ? ` ${event}` : " changed"
+    }: ${path}`;
+  }
+
   return firstText(row.raw_text) ?? `${row.adapter} observation from ${row.source_uri}`;
 }
 
@@ -409,6 +430,16 @@ function deriveArtifactLocations(
   if (cwd) locations["cwd"] = cwd;
   if (memoryUri) locations["engram_memory_uri"] = memoryUri;
   if (row.source_uri.startsWith("git:")) locations["git_ref"] = row.source_uri;
+  const obsidianVaultName = stringValue(payload?.["vault_name"]);
+  const obsidianRelativePath = stringValue(payload?.["relative_path"]);
+  const obsidianPath = stringValue(payload?.["path"]);
+  if (obsidianVaultName || obsidianRelativePath || obsidianPath) {
+    locations["obsidian"] = {
+      vault: obsidianVaultName,
+      relative_path: obsidianRelativePath,
+      path: obsidianPath,
+    };
+  }
   if (row.source_uri.startsWith("file://")) {
     locations["file_path"] = row.source_uri.slice("file://".length);
   }
@@ -429,6 +460,9 @@ function deriveProject(
 
   const repoRoot = stringValue(payload?.["repo_root"]);
   if (repoRoot) return projectNameFromPath(repoRoot);
+
+  const vaultRoot = stringValue(payload?.["vault_root"]);
+  if (vaultRoot) return projectNameFromPath(vaultRoot);
 
   const uriPath = pathFromSourceUri(row.source_uri);
   if (uriPath) return projectNameFromPath(uriPath);

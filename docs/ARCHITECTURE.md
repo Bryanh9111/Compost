@@ -2,24 +2,29 @@
 
 ## Product identity
 
-Compost is a **personal AI brain and analysis partner** (not a tool, a
-partner). Single-user, local-first, designed for 10+ year continuous
-personalization. Distributed as a fork template — you clone it empty
-and grow it; there is no server, no account, no shared instance.
+Compost is a **cross-system action ledger + metacognitive index** for a
+single-user, local-first knowledge stack. It records what happened across
+agents, shell, git, Obsidian, files, and web sources, then keeps enough
+provenance to answer where the canonical knowledge lives. It is designed
+for 10+ year continuous personalization and ships as a fork template:
+there is no server, no account, and no shared instance.
 
-Compost is the **substrate** side of a two-system stack. The sibling
-system, [Engram](https://github.com/Bryanh9111/Engram), is the
-hippocampus — zero-LLM fast recall over personal memory. They talk
-through a **bidirectional core channel** (not opt-in): Engram events
-flow into Compost as a new ingest source; Compost's synthesized
-insights flow back to Engram as new entries. Either side works alone.
+Compost sits above knowledge-bearing tools. The sibling system,
+[Engram](https://github.com/Bryanh9111/Engram), is the fast memory/action
+layer; Obsidian remains the curated knowledge graph; git remains the code
+history. Compost can synthesize with `compost ask` when the user asks, but
+v4 freezes background wisdom production that would create a competing
+source of truth.
 
 See `docs/CONCEPTS.md` for the L1-L6 self-evolution model and the
 provenance chain, `docs/QUICKSTART.md` for a 5-minute hands-on.
 
 ## System overview
 
-Compost is a **4-layer knowledge base** with an append-only provenance ledger as the source of truth. All knowledge flows through a single write pipeline (`observe -> drain -> extract -> store`), regardless of whether the source is a local file, web URL, or Claude Code conversation.
+Compost is a provenance ledger plus metacognitive action timeline. Raw
+observations flow through a single write pipeline (`observe -> drain ->
+extract -> store`), while action-shaped events are also lifted into
+`action_log` for cross-tool timeline queries.
 
 ## Data flow
 
@@ -27,7 +32,7 @@ Compost is a **4-layer knowledge base** with an append-only provenance ledger as
 
 ```
 1. Source produces event (local file, web URL, Claude Code hook, Codex notify,
-   zsh/git capture, future Obsidian adapter)
+   zsh/git/Obsidian capture)
 2. appendToOutbox(db, OutboxEvent) -> INSERT OR IGNORE observe_outbox
 3. Daemon drain loop -> drainOne(db):
    a. Claim pending outbox row
@@ -46,7 +51,9 @@ Compost is a **4-layer knowledge base** with an append-only provenance ledger as
 10. Mark derivation_run succeeded + complete queue item
 ```
 
-Idempotency: `sha256(adapter + source_id + content)` as idempotency_key. Outbox UNIQUE + observations UNIQUE double protection.
+Idempotency: adapters compute a stable `idempotency_key` from source identity
+and event identity/content. Outbox UNIQUE + observations UNIQUE provide double
+protection.
 
 ### Read path (hybrid retrieval)
 

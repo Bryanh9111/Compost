@@ -1,7 +1,7 @@
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, statSync } from "fs";
+import { basename, join, relative, resolve } from "path";
 import { appendToOutbox } from "../../../compost-core/src/ledger/outbox";
 import type { OutboxEvent } from "../../../compost-core/src/ledger/outbox";
 import { upsertPolicies } from "../../../compost-core/src/policies/registry";
@@ -11,6 +11,7 @@ import { scrub } from "../../../compost-hook-shim/src/pii";
 const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
 const ZSH_ADAPTER = "compost-adapter-zsh";
 const GIT_ADAPTER = "compost-adapter-git";
+const OBSIDIAN_ADAPTER = "compost-adapter-obsidian";
 const DEFAULT_TRANSFORM_POLICY = "tp-2026-04";
 
 export interface ZshCaptureInput {
@@ -51,6 +52,20 @@ export interface GitCaptureBuildResult {
   redactions: number;
 }
 
+export interface ObsidianCaptureInput {
+  vaultRoot: string;
+  filePath: string;
+  event?: string;
+  modifiedAt?: string;
+  capturedAt?: string;
+  sizeBytes?: number | string;
+}
+
+export interface ObsidianCaptureBuildResult {
+  event: OutboxEvent;
+  changeId: string;
+}
+
 interface ZshCaptureOptions {
   command?: string;
   cwd?: string;
@@ -74,6 +89,16 @@ interface GitCaptureOptions {
   authorName?: string;
   committedAt?: string;
   capturedAt?: string;
+  json?: boolean;
+}
+
+interface ObsidianCaptureOptions {
+  vaultRoot?: string;
+  path?: string;
+  event?: string;
+  modifiedAt?: string;
+  capturedAt?: string;
+  sizeBytes?: string;
   json?: boolean;
 }
 
@@ -220,6 +245,66 @@ export function buildGitCaptureEvent(
   };
 }
 
+export function buildObsidianCaptureEvent(
+  input: ObsidianCaptureInput
+): ObsidianCaptureBuildResult | null {
+  const vaultRoot = normalizePath(input.vaultRoot);
+  const filePath = normalizePath(input.filePath);
+  if (!vaultRoot || !filePath || !filePath.endsWith(".md")) return null;
+  if (isIgnoredObsidianPath(vaultRoot, filePath)) return null;
+
+  const relativePath = relative(vaultRoot, filePath);
+  if (!relativePath || relativePath.startsWith("..")) return null;
+
+  const event = input.event?.trim() || "updated";
+  const capturedAt =
+    normalizeTimestamp(input.capturedAt) ?? new Date().toISOString();
+  const modifiedAt = normalizeTimestamp(input.modifiedAt) ?? capturedAt;
+  const sizeBytes = normalizeSize(input.sizeBytes);
+  const vaultName = basename(vaultRoot);
+  const changeId = `obsidian:${vaultRoot}:${relativePath}:${modifiedAt}:${sizeBytes}:${event}`;
+
+  const content = {
+    kind: "obsidian-note-change",
+    change_id: changeId,
+    vault_root: vaultRoot,
+    vault_name: vaultName,
+    path: filePath,
+    relative_path: relativePath,
+    event,
+    modified_at: modifiedAt,
+    captured_at: capturedAt,
+    size_bytes: sizeBytes,
+  };
+
+  const contentJson = JSON.stringify(content);
+  const sourceId = `obsidian:${vaultRoot}:${relativePath}`;
+  const idempotencyKey = sha256hex(`${OBSIDIAN_ADAPTER}:${changeId}`);
+
+  return {
+    changeId,
+    event: {
+      adapter: OBSIDIAN_ADAPTER,
+      source_id: sourceId,
+      source_kind: "host-adapter",
+      source_uri: `obsidian://${vaultName}/${relativePath}`,
+      idempotency_key: idempotencyKey,
+      trust_tier: "first_party",
+      transform_policy: DEFAULT_TRANSFORM_POLICY,
+      payload: JSON.stringify({
+        content: contentJson,
+        mime_type: "application/json",
+        occurred_at: modifiedAt,
+        metadata: {
+          capture: "obsidian",
+          vault_name: vaultName,
+          relative_path: relativePath,
+        },
+      }),
+    },
+  };
+}
+
 export function registerCapture(program: Command): void {
   const capture = program
     .command("capture")
@@ -326,6 +411,59 @@ export function registerCapture(program: Command): void {
         );
       }
     });
+
+  capture
+    .command("obsidian")
+    .description("Capture an Obsidian markdown note change into observe_outbox")
+    .option("--vault-root <path>", "Obsidian vault root")
+    .option("--path <path>", "Markdown note path")
+    .option("--event <event>", "Filesystem event type")
+    .option("--modified-at <iso>", "File modification timestamp")
+    .option("--captured-at <iso>", "Capture timestamp")
+    .option("--size-bytes <bytes>", "File size in bytes")
+    .option("--json", "Print JSON result")
+    .action((opts: ObsidianCaptureOptions) => {
+      const filePath = opts.path ?? process.env["COMPOST_OBSIDIAN_PATH"] ?? "";
+      const statInfo = safeStat(filePath);
+      const built = buildObsidianCaptureEvent({
+        vaultRoot:
+          opts.vaultRoot ?? process.env["COMPOST_OBSIDIAN_VAULT_ROOT"] ?? "",
+        filePath,
+        event: opts.event ?? process.env["COMPOST_OBSIDIAN_EVENT"],
+        modifiedAt:
+          opts.modifiedAt ??
+          process.env["COMPOST_OBSIDIAN_MODIFIED_AT"] ??
+          statInfo?.mtime,
+        capturedAt:
+          opts.capturedAt ?? process.env["COMPOST_OBSIDIAN_CAPTURED_AT"],
+        sizeBytes:
+          opts.sizeBytes ??
+          process.env["COMPOST_OBSIDIAN_SIZE_BYTES"] ??
+          statInfo?.size,
+      });
+
+      if (!built) {
+        if (opts.json) process.stdout.write(JSON.stringify({ skipped: true }) + "\n");
+        return;
+      }
+
+      const db = openDb();
+      try {
+        appendToOutbox(db, built.event);
+      } finally {
+        db.close();
+      }
+
+      if (opts.json) {
+        process.stdout.write(
+          JSON.stringify({
+            queued: true,
+            change_id: built.changeId,
+            idempotency_key: built.event.idempotency_key,
+          }) + "\n"
+        );
+      }
+    });
 }
 
 function shouldSkipCommand(command: string): boolean {
@@ -346,6 +484,34 @@ function normalizeExitStatus(value: number | string | undefined): number {
   const parsed = typeof value === "number" ? value : Number(value ?? 0);
   if (!Number.isFinite(parsed)) return 0;
   return Math.trunc(parsed);
+}
+
+function normalizeSize(value: number | string | undefined): number | null {
+  const parsed = typeof value === "number" ? value : Number(value ?? NaN);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.trunc(parsed);
+}
+
+function normalizePath(value: string): string {
+  return value.trim() ? resolve(value.trim()) : "";
+}
+
+function isIgnoredObsidianPath(vaultRoot: string, filePath: string): boolean {
+  const relativePath = relative(vaultRoot, filePath);
+  if (relativePath.startsWith("..")) return false;
+  const parts = relativePath.split(/[\\/]+/);
+  return parts.includes(".obsidian") || parts.some((part) => part.startsWith("."));
+}
+
+function safeStat(path: string): { mtime: string; size: number } | null {
+  if (!path.trim()) return null;
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile()) return null;
+    return { mtime: stat.mtime.toISOString(), size: stat.size };
+  } catch {
+    return null;
+  }
 }
 
 function isGitSha(value: string): boolean {

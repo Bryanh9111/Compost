@@ -293,10 +293,10 @@ Wisdom-layer features built in Phases 5-7 (`reasoning_chain` table, `synthesizeW
 
 Success signals for v4 (review at intervals):
 - 30 days: `action_log` schema migrated; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days
-- 90 days: zsh + git + Obsidian capture live; `coverage_audit` CLI works for 3+ test queries; pattern detection emits first behavior digest
+- 90 days: zsh + git + Obsidian capture remain live; `coverage_audit` CLI works for 3+ test queries; pattern detection emits first behavior digest
 - 180 days: user can answer "what did I do this week / month" from Compost alone (cross-system); user reports "I no longer hand-track my work in Obsidian for retrospect purposes"; zero pivot-back urge
 
-Implementation baseline after this turn: `fda433d` lands the `action_log` schema foundation; `c00db8d` restores root typecheck and the full test suite while preserving the v4 freeze defaults; `d406830` adds the action processor that lifts drained observations into `action_log` for the metacognitive timeline. The D2-3 capture work adds `compost capture zsh` with a local `preexec_functions`/`precmd_functions` hook, `compost capture git` with a global `post-commit` hook, PII scrubbing before outbox write, and zsh/git normalization in `action_log`.
+Implementation baseline after this turn: `fda433d` lands the `action_log` schema foundation; `c00db8d` restores root typecheck and the full test suite while preserving the v4 freeze defaults; `d406830` adds the action processor that lifts drained observations into `action_log` for the metacognitive timeline. The D2-3 capture work adds `compost capture zsh` with a local `preexec_functions`/`precmd_functions` hook, `compost capture git` with a global `post-commit` hook, `compost capture obsidian` with a local vault watcher, PII scrubbing before outbox write, and zsh/git/Obsidian normalization in `action_log`.
 
 Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550), `23531c7c850b` (post-commit fix baseline). Plan-of-record source: maintainer's local plan file (kept outside this repo). Long-form rationale: `docs/metacognitive-direction.md`.
 
@@ -889,7 +889,9 @@ events (read runtime in S6-slice-1) AND push insights + invalidations
     `~/.compost/config.json` `vault_roots: string[]`. Defer to post-
     dogfood — adds a new daemon coroutine that could perturb existing
     scheduler timings. Engram fact `6354319c8450` captures the batch
-    performance baseline used for sizing.
+    performance baseline used for sizing. This remains distinct from the
+    v4 Obsidian watcher, which records note-change metadata into
+    `action_log` but does not ingest note content.
   - **jsonl extractor** — `packages/compost-ingest/compost_ingest/
     extractors/markdown.py` is the only structured-text extractor;
     `.jsonl` files (42 in vaults: XHS `notes.jsonl` author/tags/

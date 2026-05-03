@@ -255,6 +255,71 @@ describe("metacognitive/action-processor", () => {
     expect(action.project).toBe("Compost");
   });
 
+  test("Obsidian note observations become note timeline actions", () => {
+    const changeId =
+      "obsidian:/Users/example/Vaults/Constellation:XHS Knowledge/XHS Knowledge.md:2026-05-03T04:00:00.000Z:2048:updated";
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "compost-adapter-obsidian",
+        source_id:
+          "obsidian:/Users/example/Vaults/Constellation:XHS Knowledge/XHS Knowledge.md",
+        source_kind: "host-adapter",
+        source_uri: "obsidian://Constellation/XHS Knowledge/XHS Knowledge.md",
+        idempotency_key: "obsidian-note-1",
+        payload: JSON.stringify({
+          content: JSON.stringify({
+            kind: "obsidian-note-change",
+            change_id: changeId,
+            vault_root: "/Users/example/Vaults/Constellation",
+            vault_name: "Constellation",
+            path: "/Users/example/Vaults/Constellation/XHS Knowledge/XHS Knowledge.md",
+            relative_path: "XHS Knowledge/XHS Knowledge.md",
+            event: "updated",
+            modified_at: "2026-05-03T04:00:00.000Z",
+            size_bytes: 2048,
+          }),
+          mime_type: "application/json",
+          occurred_at: "2026-05-03T04:00:00.000Z",
+          metadata: {
+            capture: "obsidian",
+            vault_name: "Constellation",
+            relative_path: "XHS Knowledge/XHS Knowledge.md",
+          },
+        }),
+      })
+    );
+
+    const drained = drainOne(db);
+    expect(drained).toBeTruthy();
+
+    const action = db
+      .query(
+        "SELECT source_system, source_id, what_text, project, artifact_locations FROM action_log"
+      )
+      .get() as {
+      source_system: string;
+      source_id: string;
+      what_text: string;
+      project: string;
+      artifact_locations: string;
+    };
+
+    expect(action.source_system).toBe("obsidian");
+    expect(action.source_id).toBe(changeId);
+    expect(action.what_text).toContain("Obsidian note in Constellation updated");
+    expect(action.what_text).toContain("XHS Knowledge/XHS Knowledge.md");
+    expect(action.project).toBe("Constellation");
+
+    const locations = JSON.parse(action.artifact_locations) as {
+      obsidian: { vault: string; relative_path: string };
+    };
+    expect(locations.obsidian.vault).toBe("Constellation");
+    expect(locations.obsidian.relative_path).toBe(
+      "XHS Knowledge/XHS Knowledge.md"
+    );
+  });
+
   test("processObservationActions backfills observations without action rows", () => {
     appendToOutbox(
       db,

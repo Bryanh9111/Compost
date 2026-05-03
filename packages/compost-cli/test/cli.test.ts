@@ -78,6 +78,7 @@ describe("CLI program structure", () => {
     const sub = capture!.commands.map((c) => c.name());
     expect(sub).toContain("zsh");
     expect(sub).toContain("git");
+    expect(sub).toContain("obsidian");
   });
 
   it("daemon has start/stop/status/reload subcommands", () => {

@@ -130,7 +130,7 @@ These are **observable signals**, not feelings. If at any review point the signa
 - [ ] No regression: `compost ask "<test query>"` still returns LLM synthesis
 
 ### 90 days (target: 2026-08-02)
-- [ ] zsh + git + Obsidian capture hooks live, writing to outbox
+- [x] zsh + git + Obsidian capture hooks live, writing to outbox
 - [ ] `coverage_audit` CLI works for at least 3 test queries (e.g., "did I record the v4 turn", "what did I work on last week", "which Obsidian vault has my XHS strategy notes")
 - [ ] Pattern detection emits first behavior digest (sequential mining over action_log, NOT LLM-generated)
 - [ ] User has used `compost ask` at least 3 times in real workflow (not just testing)
@@ -202,7 +202,12 @@ Review gate: 30-day success signals + verification checklist in plan file.
   `compost capture git` → outbox/action_log — landed for the local operator.
   Captures commit metadata (repo, SHA, branch, subject, author name) but not
   diffs or author email.
-- Obsidian file watcher (`fswatch` on vault roots, debounced) → outbox
+- Obsidian file watcher → `compost capture obsidian` → outbox/action_log —
+  landed for the local operator. The watcher prefers `fswatch` when available
+  and otherwise uses a polling fallback over configured vault roots. The
+  polling path always treats its first startup scan as baseline-only, and state
+  files use a readable prefix plus hash to avoid collisions on non-ASCII note
+  paths.
 - `action_log` schema design + migration (`0021_action_log.sql`) — landed
 - Typecheck + full test baseline restored after D2-1 (`c00db8d`; `bun run typecheck`, `bun test` = 704 pass / 0 fail)
 - Action processor: lift observations → action_log records — landed (`processObservationAction` / `processObservationActions`)
@@ -212,6 +217,9 @@ Review gate: 30-day success signals + verification checklist in plan file.
 - D2-3 git capture slice: `compost capture git` CLI + local global
   `post-commit` hook + action processor git normalization — landed (`bun run
   typecheck`, `bun test` = 716 pass / 0 fail)
+- D2-3 Obsidian capture slice: `compost capture obsidian` CLI + local watcher
+  LaunchAgent + action processor Obsidian normalization — landed (`bun run
+  typecheck`, `bun test` = 720 pass / 0 fail)
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 

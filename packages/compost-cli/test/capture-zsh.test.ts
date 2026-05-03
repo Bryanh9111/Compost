@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildGitCaptureEvent,
+  buildObsidianCaptureEvent,
   buildZshCaptureEvent,
 } from "../src/commands/capture";
 
@@ -97,5 +98,77 @@ describe("capture git", () => {
         commitSha: "not-a-sha",
       })
     ).toBeNull();
+  });
+});
+
+describe("capture obsidian", () => {
+  test("builds an Obsidian note-change outbox event", () => {
+    const built = buildObsidianCaptureEvent({
+      vaultRoot: "/Users/example/Vaults/Constellation",
+      filePath: "/Users/example/Vaults/Constellation/XHS Knowledge/XHS Knowledge.md",
+      event: "updated",
+      modifiedAt: "2026-05-03T04:00:00.000Z",
+      capturedAt: "2026-05-03T04:00:01.000Z",
+      sizeBytes: 2048,
+    });
+
+    expect(built).toBeTruthy();
+    expect(built!.event.adapter).toBe("compost-adapter-obsidian");
+    expect(built!.event.source_kind).toBe("host-adapter");
+    expect(built!.event.source_uri).toBe(
+      "obsidian://Constellation/XHS Knowledge/XHS Knowledge.md"
+    );
+    expect(built!.event.transform_policy).toBe("tp-2026-04");
+
+    const payload = JSON.parse(built!.event.payload) as { content: string };
+    const content = JSON.parse(payload.content) as {
+      kind: string;
+      vault_name: string;
+      relative_path: string;
+      event: string;
+      size_bytes: number;
+    };
+
+    expect(content.kind).toBe("obsidian-note-change");
+    expect(content.vault_name).toBe("Constellation");
+    expect(content.relative_path).toBe("XHS Knowledge/XHS Knowledge.md");
+    expect(content.event).toBe("updated");
+    expect(content.size_bytes).toBe(2048);
+  });
+
+  test("skips non-markdown and .obsidian paths", () => {
+    expect(
+      buildObsidianCaptureEvent({
+        vaultRoot: "/Users/example/Vaults/Constellation",
+        filePath: "/Users/example/Vaults/Constellation/image.png",
+      })
+    ).toBeNull();
+    expect(
+      buildObsidianCaptureEvent({
+        vaultRoot: "/Users/example/Vaults/Constellation",
+        filePath: "/Users/example/Vaults/Constellation/.obsidian/workspace.json",
+      })
+    ).toBeNull();
+  });
+
+  test("keeps idempotency stable for the same note change", () => {
+    const first = buildObsidianCaptureEvent({
+      vaultRoot: "/Users/example/Vaults/Constellation",
+      filePath: "/Users/example/Vaults/Constellation/XHS Knowledge/XHS Knowledge.md",
+      event: "updated",
+      modifiedAt: "2026-05-03T04:00:00.000Z",
+      capturedAt: "2026-05-03T04:00:01.000Z",
+      sizeBytes: 2048,
+    });
+    const second = buildObsidianCaptureEvent({
+      vaultRoot: "/Users/example/Vaults/Constellation",
+      filePath: "/Users/example/Vaults/Constellation/XHS Knowledge/XHS Knowledge.md",
+      event: "updated",
+      modifiedAt: "2026-05-03T04:00:00.000Z",
+      capturedAt: "2026-05-03T04:00:05.000Z",
+      sizeBytes: 2048,
+    });
+
+    expect(first?.event.idempotency_key).toBe(second?.event.idempotency_key);
   });
 });
