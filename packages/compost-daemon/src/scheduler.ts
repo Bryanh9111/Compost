@@ -401,7 +401,7 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
           );
         }
         for (let i = 0; i < output.chunks.length; i++) {
-          const chunk = output.chunks[i];
+          const chunk = output.chunks[i]!;
           insertChunk.run(
             chunk.chunk_id, obs.observe_id, derivationId, i,
             chunk.text, computeHash(chunk.text),
@@ -428,7 +428,7 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
           .all(obs.observe_id) as { fact_id: string }[];
 
         for (let fi = 0; fi < output.facts.length; fi++) {
-          const fact = output.facts[fi];
+          const fact = output.facts[fi]!;
           const factId = factRows[fi]?.fact_id;
           if (factId && fact.source_chunk_ids) {
             for (const cid of fact.source_chunk_ids) {
@@ -442,9 +442,9 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
         const chunkVectors = output.chunks.map((chunk, i) => ({
           chunk_id: chunk.chunk_id,
           fact_id: chunkToFactId.get(chunk.chunk_id)
-            ?? (factRows.length > 0 ? factRows[0].fact_id : `orphan:${obs.observe_id}:${i}`),
+            ?? (factRows[0]?.fact_id ?? `orphan:${obs.observe_id}:${i}`),
           observe_id: obs.observe_id,
-          vector: vectors[i],
+          vector: vectors[i]!,
         }));
 
         await opts.vectorStore.add(chunkVectors);

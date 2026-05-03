@@ -31,6 +31,22 @@ export interface WebIngestOptions {
   policyId?: string;
 }
 
+interface WebExtractionOutput {
+  chunks: Array<{
+    chunk_id: string;
+    text: string;
+    source_chunk_ids?: string[];
+  }>;
+  facts: Array<{
+    subject: string;
+    predicate: string;
+    object: string;
+    confidence?: number;
+    importance?: number;
+    source_chunk_ids?: string[];
+  }>;
+}
+
 function computeHash(content: string): string {
   const hasher = new Bun.CryptoHasher("sha256");
   hasher.update(content);
@@ -44,7 +60,7 @@ function computeHash(content: string): string {
 export async function ingestUrl(
   db: Database,
   url: string,
-  dataDir: string,
+  _dataDir: string,
   opts: WebIngestOptions = {}
 ): Promise<WebIngestResult> {
   const policyId = opts.policyId ?? "tp-2026-04-02";
@@ -98,7 +114,7 @@ export async function ingestUrl(
 
   const content = await res.text();
   const contentType = res.headers.get("content-type") ?? "text/html";
-  const mimeType = contentType.split(";")[0].trim();
+  const mimeType = contentType.split(";")[0]?.trim() ?? "text/html";
 
   // Update fetch state with response headers
   updateFetchState(db, url, {
@@ -156,7 +172,7 @@ export async function ingestUrl(
   );
 
   try {
-    const { resolve, existsSync } = await import("fs");
+    const { existsSync } = await import("fs");
     const { join } = await import("path");
 
     const ingestPkgDir = join(import.meta.dir, "../../..", "compost-ingest");
@@ -193,7 +209,7 @@ export async function ingestUrl(
       throw new Error(`extraction failed (exit ${exitCode}): ${stderr.slice(0, 500)}`);
     }
 
-    const output = JSON.parse(stdout);
+    const output = JSON.parse(stdout) as WebExtractionOutput;
 
     // Write facts + chunks (reuse ingest logic pattern)
     const insertFact = db.prepare(
@@ -214,7 +230,7 @@ export async function ingestUrl(
           fact.confidence ?? 0.8, fact.importance ?? 0.5, observeId, nowUnixSec, 2592000);
       }
       for (let i = 0; i < output.chunks.length; i++) {
-        const chunk = output.chunks[i];
+        const chunk = output.chunks[i]!;
         insertChunk.run(chunk.chunk_id, observeId, derivationId, i, chunk.text,
           computeHash(chunk.text), 0, chunk.text.length, policyId);
       }
@@ -232,7 +248,7 @@ export async function ingestUrl(
 
       const chunkToFactId = new Map<string, string>();
       for (let fi = 0; fi < output.facts.length; fi++) {
-        const fact = output.facts[fi];
+        const fact = output.facts[fi]!;
         const factId = factRows[fi]?.fact_id;
         if (factId && fact.source_chunk_ids) {
           for (const cid of fact.source_chunk_ids) {
@@ -245,7 +261,7 @@ export async function ingestUrl(
         chunk_id: chunk.chunk_id,
         fact_id: chunkToFactId.get(chunk.chunk_id) ?? (factRows[0]?.fact_id ?? `orphan:${observeId}:${i}`),
         observe_id: observeId,
-        vector: vectors[i],
+        vector: vectors[i]!,
       }));
 
       await opts.vectorStore.add(chunkVectors);

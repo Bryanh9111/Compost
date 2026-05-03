@@ -140,7 +140,7 @@ export function writeState(db: Database, patch: StatePatch): void {
   // Build dynamic UPDATE; pass through nulls explicitly so callers can clear
   // fields (e.g. resume sets paused_reason=null).
   const sets: string[] = [];
-  const params: unknown[] = [];
+  const params: Array<string | number | null> = [];
   if ("paused" in patch) {
     sets.push("paused = ?");
     params.push(patch.paused ? 1 : 0);
@@ -479,4 +479,3 @@ export function resumeScheduler(db: Database): void {
     consecutive_skipped_cycles: 0,
   });
 }
-

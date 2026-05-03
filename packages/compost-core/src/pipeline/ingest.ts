@@ -115,7 +115,7 @@ function getConcurrentDrainFacts(
 export async function ingestFile(
   db: Database,
   filePath: string,
-  dataDir: string,
+  _dataDir: string,
   opts: IngestOptions = {}
 ): Promise<IngestResult> {
   const absPath = resolve(filePath);
@@ -285,7 +285,7 @@ export async function ingestFile(
       }
 
       for (let i = 0; i < output.chunks.length; i++) {
-        const chunk = output.chunks[i];
+        const chunk = output.chunks[i]!;
         const chunkHash = computeHash(chunk.text);
         insertChunk.run(
           chunk.chunk_id,
@@ -319,7 +319,7 @@ export async function ingestFile(
         .all(observeId) as { fact_id: string }[];
 
       for (let fi = 0; fi < output.facts.length; fi++) {
-        const fact = output.facts[fi];
+        const fact = output.facts[fi]!;
         const factId = factRows[fi]?.fact_id;
         if (factId && fact.source_chunk_ids) {
           for (const cid of fact.source_chunk_ids) {
@@ -331,13 +331,13 @@ export async function ingestFile(
         }
       }
 
-      const chunkVectors = output.chunks.map((chunk, i) => ({
-        chunk_id: chunk.chunk_id,
-        fact_id: chunkToFactId.get(chunk.chunk_id)
-          ?? (factRows.length > 0 ? factRows[0].fact_id : `orphan:${observeId}:${i}`),
-        observe_id: observeId,
-        vector: vectors[i],
-      }));
+        const chunkVectors = output.chunks.map((chunk, i) => ({
+          chunk_id: chunk.chunk_id,
+          fact_id: chunkToFactId.get(chunk.chunk_id)
+            ?? (factRows[0]?.fact_id ?? `orphan:${observeId}:${i}`),
+          observe_id: observeId,
+          vector: vectors[i]!,
+        }));
 
       await opts.vectorStore.add(chunkVectors);
 

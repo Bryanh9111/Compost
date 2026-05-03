@@ -136,8 +136,8 @@ export function validatePolicyExists(db: Database, policyId: string): void {
  */
 export function getActivePolicy(): TransformPolicy {
   const allPolicies = Object.values(policies);
-  const supersededIds = new Set(
-    allPolicies.map((p) => p.supersedes).filter(Boolean)
+  const supersededIds = new Set<string>(
+    allPolicies.flatMap((p) => (p.supersedes === null ? [] : [p.supersedes]))
   );
 
   const active = allPolicies.filter((p) => !supersededIds.has(p.id));
@@ -149,5 +149,9 @@ export function getActivePolicy(): TransformPolicy {
       new Date(a.effective_from).getTime()
   );
 
-  return active[0];
+  const latest = active[0];
+  if (!latest) {
+    throw new Error("no active transform policy registered");
+  }
+  return latest;
 }

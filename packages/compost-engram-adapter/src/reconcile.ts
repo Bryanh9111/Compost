@@ -1,4 +1,4 @@
-import type { PendingWriteKind, PendingWriteRow, PendingWritesQueue } from "./pending-writes";
+import type { PendingWriteKind, PendingWritesQueue } from "./pending-writes";
 
 /**
  * T1 — `compost doctor --reconcile-engram` report.

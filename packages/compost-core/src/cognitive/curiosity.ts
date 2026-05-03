@@ -156,7 +156,7 @@ export function detectCuriosityClusters(
     let joined = false;
     for (const wc of working) {
       const anchorId = wc.gaps[0]!.problem_id;
-      const tokensAnchor = wc.tokens.get(anchorId) ?? [];
+      const tokensAnchor = Array.from(wc.tokens.get(anchorId) ?? []);
       if (jaccardOverlap(tokensAnchor, tokensG) >= minJaccard) {
         wc.gaps.push(g);
         wc.tokens.set(g.problem_id, new Set(tokensG));

@@ -14,7 +14,7 @@ export { reflect } from "./cognitive/reflect";
 export type { ReflectionReport } from "./cognitive/reflect";
 export { query } from "./query/search";
 export type { QueryHit, QueryOptions, QueryResult } from "./query/search";
-export { isNoteworthy } from "./ledger/noteworthy";
+export { is_noteworthy, is_noteworthy as isNoteworthy } from "./ledger/noteworthy";
 export type { NoteworthyInput, NoteworthyResult } from "./ledger/noteworthy";
 export { ingestFile } from "./pipeline/ingest";
 export type { IngestResult } from "./pipeline/ingest";

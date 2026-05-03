@@ -12,11 +12,11 @@ import { Database } from "bun:sqlite";
 import { join } from "path";
 import { homedir } from "os";
 import { createHash } from "crypto";
-import { scrubEnvelope } from "./pii";
+import { scrubEnvelope, type Envelope } from "./pii";
 
 const ADAPTER_NAME = "compost-adapter-claude-code";
 
-interface HookEnvelope {
+interface HookEnvelope extends Envelope {
   hook_event_name: string;
   session_id: string;
   cwd: string;

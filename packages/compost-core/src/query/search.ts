@@ -65,7 +65,7 @@ function prepareFts5Query(q: string): string {
   // Split into words, filter empties, join with OR
   const words = cleaned.split(/\s+/).filter((w) => w.length > 1);
   if (words.length === 0) return "";
-  if (words.length === 1) return words[0];
+  if (words.length === 1) return words[0]!;
   return words.join(" OR ");
 }
 
@@ -257,7 +257,7 @@ export async function query(
     contexts: (() => {
       try {
         const parsed = JSON.parse(r.contexts_json as string);
-        return Array.isArray(parsed) ? parsed.filter((x: unknown) => x !== null) : [];
+        return Array.isArray(parsed) ? parsed.filter((x: unknown): x is string => typeof x === "string") : [];
       } catch {
         return [];
       }
@@ -292,17 +292,17 @@ export async function query(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     for (let i = 0; i < hits.length; i++) {
-      const h = hits[i];
+      const h = hits[i]!;
       insertAudit.run(
         queryId,
         profileId,
         h.fact_id,
         asOf,
         i + 1,
-        h.ranking_components.w1_semantic,
-        h.ranking_components.w2_temporal,
-        h.ranking_components.w3_access,
-        h.ranking_components.w4_importance,
+        h.ranking_components.w1_semantic ?? 0,
+        h.ranking_components.w2_temporal ?? 0,
+        h.ranking_components.w3_access ?? 0,
+        h.ranking_components.w4_importance ?? 0,
         h.final_score
       );
     }

@@ -161,7 +161,7 @@ export async function startDaemon(
     stop() {},
     getHealth() {
       return {
-        name: "reasoning-frozen-v4",
+        name: "reasoning",
         running: false,
         last_tick_at: null,
         error_count: 0,

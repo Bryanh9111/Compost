@@ -55,8 +55,10 @@ describe("startReflectScheduler wiki hook (Week 4 Day 4)", () => {
   let tmpDir: string;
   let dataDir: string;
   let db: Database;
+  let originalWikiSynthesisEnabled: string | undefined;
 
   beforeEach(() => {
+    originalWikiSynthesisEnabled = process.env.WIKI_SYNTHESIS_ENABLED;
     tmpDir = mkdtempSync(join(tmpdir(), "compost-sched-"));
     dataDir = join(tmpDir, "compost");
     mkdirSync(dataDir, { recursive: true });
@@ -68,11 +70,17 @@ describe("startReflectScheduler wiki hook (Week 4 Day 4)", () => {
   });
 
   afterEach(() => {
+    if (originalWikiSynthesisEnabled === undefined) {
+      delete process.env.WIKI_SYNTHESIS_ENABLED;
+    } else {
+      process.env.WIKI_SYNTHESIS_ENABLED = originalWikiSynthesisEnabled;
+    }
     db.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test("happy path: one tick writes wiki_rebuild audit row + disk file", async () => {
+    process.env.WIKI_SYNTHESIS_ENABLED = "true";
     const registry = new BreakerRegistry(
       new MockLLMService({ mode: "happy", response: "# Paris\n\nseeded" })
     );
@@ -107,6 +115,7 @@ describe("startReflectScheduler wiki hook (Week 4 Day 4)", () => {
   });
 
   test("LLM failure: wiki_pages row gets stale_at, reflect cadence continues", async () => {
+    process.env.WIKI_SYNTHESIS_ENABLED = "true";
     // First tick: happy synth (seeds wiki_pages row so stale_at has
     // something to set on later failure -- wiki.ts only marks existing
     // pages stale, per debate 007 Lock 6).

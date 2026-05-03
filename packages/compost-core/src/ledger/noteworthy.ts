@@ -91,9 +91,9 @@ function computeMinHashSignature(shingles: Set<number>): number[] {
   for (const shingle of shingles) {
     const x = BigInt(shingle >>> 0);
     for (let i = 0; i < MINHASH_PERMUTATIONS; i++) {
-      const [a, b] = _permParams[i];
+      const [a, b] = _permParams[i]!;
       const h = Number((a * x + b) % LARGE_PRIME % (MAX_HASH + 1n));
-      if (h < sig[i]) sig[i] = h;
+      if (h < sig[i]!) sig[i] = h;
     }
   }
   return sig;
@@ -210,7 +210,7 @@ export async function is_noteworthy(
     let novelCount = 0;
     for (const vec of embeddings) {
       const hits = await input.vectorStore.searchByVector(vec, 1);
-      if (hits.length === 0 || hits[0].score < cosineThreshold) {
+      if (hits.length === 0 || hits[0]!.score < cosineThreshold) {
         novelCount++;
       }
     }

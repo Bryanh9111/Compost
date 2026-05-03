@@ -105,7 +105,7 @@ export function getLinks(
   const kindFilter = kinds && kinds.length > 0 ? kinds : null;
 
   let sql: string;
-  const params: unknown[] = [];
+  const params: string[] = [];
 
   if (direction === "out") {
     sql = "SELECT * FROM fact_links WHERE from_fact_id = ?";

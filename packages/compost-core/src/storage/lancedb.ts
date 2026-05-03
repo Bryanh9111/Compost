@@ -77,21 +77,26 @@ export class VectorStore {
     if (!this.table) return [];
 
     const [queryVec] = await this.embeddingService.embed([queryText]);
+    if (!queryVec) return [];
 
-    const results = await this.table
-      .search(Array.from(queryVec))
+    const results = await (this.table.search(Array.from(queryVec)) as unknown as {
+      distanceType(type: string): { limit(n: number): { toArray(): Promise<unknown[]> } };
+    })
       .distanceType("cosine")
       .limit(topK)
       .toArray();
 
-    return results.map((r: Record<string, unknown>) => ({
+    return results.map((row) => {
+      const r = row as Record<string, unknown>;
+      return {
       chunk_id: r.chunk_id as string,
       fact_id: r.fact_id as string,
       observe_id: r.observe_id as string,
       // LanceDB returns _distance (lower = more similar for cosine)
       // Convert to similarity: 1 - distance
       score: 1 - (r._distance as number),
-    }));
+      };
+    });
   }
 
   /**
@@ -103,18 +108,22 @@ export class VectorStore {
   ): Promise<SearchHit[]> {
     if (!this.table) return [];
 
-    const results = await this.table
-      .search(Array.from(vector))
+    const results = await (this.table.search(Array.from(vector)) as unknown as {
+      distanceType(type: string): { limit(n: number): { toArray(): Promise<unknown[]> } };
+    })
       .distanceType("cosine")
       .limit(topK)
       .toArray();
 
-    return results.map((r: Record<string, unknown>) => ({
+    return results.map((row) => {
+      const r = row as Record<string, unknown>;
+      return {
       chunk_id: r.chunk_id as string,
       fact_id: r.fact_id as string,
       observe_id: r.observe_id as string,
       score: 1 - (r._distance as number),
-    }));
+      };
+    });
   }
 
   /**

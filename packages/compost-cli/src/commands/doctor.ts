@@ -196,7 +196,7 @@ export function registerDoctor(program: Command): void {
         const p90 = +percentile(trimmed, 90).toFixed(1);
         const p95 = +percentile(trimmed, 95).toFixed(1);
         const p99 = +percentile(trimmed, 99).toFixed(1);
-        const max = +trimmed[trimmed.length - 1].toFixed(1);
+        const max = +trimmed[trimmed.length - 1]!.toFixed(1);
 
         const stats = {
           n: N,
@@ -311,7 +311,7 @@ export function registerDoctor(program: Command): void {
               chunk_id: c.chunk_id,
               fact_id: c.fact_id ?? `orphan:${c.observe_id}`,
               observe_id: c.observe_id,
-              vector: vectors[j],
+              vector: vectors[j]!,
             }));
 
             await tempStore.add(chunkVectors);

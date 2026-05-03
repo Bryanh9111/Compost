@@ -147,15 +147,15 @@ export interface Envelope {
   [key: string]: unknown;
 }
 
-export interface ScrubEnvelopeResult {
-  envelope: Envelope;
+export interface ScrubEnvelopeResult<T extends Envelope = Envelope> {
+  envelope: T;
   redactions: number;
 }
 
-export function scrubEnvelope(
-  envelope: Envelope,
+export function scrubEnvelope<T extends Envelope>(
+  envelope: T,
   opts: ScrubOpts = {}
-): ScrubEnvelopeResult {
+): ScrubEnvelopeResult<T> {
   const payloadStr = JSON.stringify(envelope.payload ?? {});
   const { scrubbed, redactions } = scrub(payloadStr, opts);
 
