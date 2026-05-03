@@ -15,6 +15,7 @@ import { registerDoctor } from "../src/commands/doctor";
 import { registerHook } from "../src/commands/hook";
 import { registerReflect } from "../src/commands/reflect";
 import { registerDrain } from "../src/commands/drain";
+import { registerCapture } from "../src/commands/capture";
 import type { ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,7 @@ function buildProgram(): Command {
   registerHook(program);
   registerReflect(program);
   registerDrain(program);
+  registerCapture(program);
   return program;
 }
 
@@ -66,6 +68,15 @@ describe("CLI program structure", () => {
     expect(names).toContain("hook");
     expect(names).toContain("reflect");
     expect(names).toContain("drain");
+    expect(names).toContain("capture");
+  });
+
+  it("capture has zsh subcommand", () => {
+    const program = buildProgram();
+    const capture = program.commands.find((c) => c.name() === "capture");
+    expect(capture).toBeDefined();
+    const sub = capture!.commands.map((c) => c.name());
+    expect(sub).toContain("zsh");
   });
 
   it("daemon has start/stop/status/reload subcommands", () => {

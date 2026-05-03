@@ -254,6 +254,9 @@ function deriveSourceSystem(row: ObservationRow): string {
   const adapter = row.adapter.toLowerCase();
   if (adapter.includes("codex")) return "codex";
   if (adapter.includes("claude-code")) return "claude-code";
+  if (adapter.includes("zsh") || row.source_uri.startsWith("zsh://")) {
+    return "zsh";
+  }
   if (adapter === "engram" || row.source_uri.startsWith("engram://")) {
     return "engram";
   }
@@ -287,6 +290,11 @@ function deriveActionSourceId(
 
   if (sourceSystem === "engram" && row.source_uri.startsWith("engram://")) {
     return `${row.source_uri}:${row.adapter_sequence}:${row.observe_id}`;
+  }
+
+  if (sourceSystem === "zsh") {
+    const commandId = stringValue(payload?.["command_id"]);
+    if (commandId) return commandId;
   }
 
   if (sourceSystem === "codex" && looksUniqueSourceId(row.source_id)) {
@@ -332,6 +340,17 @@ function deriveWhatText(
     return `Engram ${engramKind ?? "memory"}${engramProject ? ` for ${engramProject}` : ""}: ${
       firstText(row.raw_text) ?? row.source_uri
     }`;
+  }
+
+  if (sourceSystem === "zsh" && payload) {
+    const command = stringValue(payload["command"]);
+    const exitStatus = numberOrString(payload["exit_status"]);
+    const cwd = stringValue(payload["cwd"]);
+    const detail = command ?? firstText(row.raw_text) ?? "command captured";
+    const location = cwd ? projectNameFromPath(cwd) ?? cwd : project;
+    return `zsh command${location ? ` in ${location}` : ""}${
+      exitStatus ? ` exited ${exitStatus}` : ""
+    }: ${detail}`;
   }
 
   return firstText(row.raw_text) ?? `${row.adapter} observation from ${row.source_uri}`;

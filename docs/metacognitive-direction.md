@@ -195,12 +195,17 @@ Deliverables:
 Review gate: 30-day success signals + verification checklist in plan file.
 
 ### Phase 2 (Week 2-4) — capture expansion
-- zsh `precmd_functions` hook → outbox (reuse RTK history.db where possible)
+- zsh `preexec_functions` + `precmd_functions` hook → `compost capture zsh`
+  → outbox/action_log — landed for the local operator. Commands are scrubbed
+  with the existing hook-shim PII redactor before touching disk.
 - git post-commit hook (global `~/.gitconfig` `core.hooksPath`) → outbox
 - Obsidian file watcher (`fswatch` on vault roots, debounced) → outbox
 - `action_log` schema design + migration (`0021_action_log.sql`) — landed
 - Typecheck + full test baseline restored after D2-1 (`c00db8d`; `bun run typecheck`, `bun test` = 704 pass / 0 fail)
 - Action processor: lift observations → action_log records — landed (`processObservationAction` / `processObservationActions`)
+- D2-3 zsh capture slice: `compost capture zsh` CLI + local shell hook + action
+  processor zsh normalization — landed (`bun run typecheck`, `bun test` =
+  713 pass / 0 fail)
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 

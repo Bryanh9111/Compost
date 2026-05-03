@@ -160,6 +160,52 @@ describe("metacognitive/action-processor", () => {
     expect(action.what_text).toContain("Compost background relies on daemon");
   });
 
+  test("zsh command observations become command timeline actions", () => {
+    const commandId = "zsh:mac:4242:2026-05-03T02:00:00.000Z:abc123";
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "compost-adapter-zsh",
+        source_id: "zsh:zion@mac:4242",
+        source_kind: "host-adapter",
+        source_uri: "zsh://mac/Users/zion/Repos/Zylo/Compost",
+        idempotency_key: "zsh-command-1",
+        payload: JSON.stringify({
+          content: JSON.stringify({
+            kind: "zsh-command",
+            command_id: commandId,
+            command: "git status --short",
+            cwd: "/Users/zion/Repos/Zylo/Compost",
+            exit_status: 0,
+            started_at: "2026-05-03T02:00:00.000Z",
+            ended_at: "2026-05-03T02:00:01.000Z",
+          }),
+          mime_type: "application/json",
+          occurred_at: "2026-05-03T02:00:01.000Z",
+          metadata: { capture: "zsh", command_id: commandId },
+        }),
+      })
+    );
+
+    const drained = drainOne(db);
+    expect(drained).toBeTruthy();
+
+    const action = db
+      .query("SELECT source_system, source_id, what_text, project FROM action_log")
+      .get() as {
+      source_system: string;
+      source_id: string;
+      what_text: string;
+      project: string;
+    };
+
+    expect(action.source_system).toBe("zsh");
+    expect(action.source_id).toBe(commandId);
+    expect(action.what_text).toContain("zsh command in Compost exited 0");
+    expect(action.what_text).toContain("git status --short");
+    expect(action.project).toBe("Compost");
+  });
+
   test("processObservationActions backfills observations without action rows", () => {
     appendToOutbox(
       db,

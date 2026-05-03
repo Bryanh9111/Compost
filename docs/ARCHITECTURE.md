@@ -26,7 +26,8 @@ Compost is a **4-layer knowledge base** with an append-only provenance ledger as
 ### Write path (all adapters unified)
 
 ```
-1. Source produces event
+1. Source produces event (local file, web URL, Claude Code hook, Codex notify,
+   zsh capture, future Obsidian/git adapters)
 2. appendToOutbox(db, OutboxEvent) -> INSERT OR IGNORE observe_outbox
 3. Daemon drain loop -> drainOne(db):
    a. Claim pending outbox row

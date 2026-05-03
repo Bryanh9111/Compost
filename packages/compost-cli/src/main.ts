@@ -17,6 +17,7 @@ import { registerGaps } from "./commands/gaps";
 import { registerDigest } from "./commands/digest";
 import { registerCuriosity } from "./commands/curiosity";
 import { registerCrawl } from "./commands/crawl";
+import { registerCapture } from "./commands/capture";
 import { registerMcp } from "./commands/mcp";
 import { registerReason } from "./commands/reason";
 
@@ -43,6 +44,7 @@ registerGaps(program);
 registerDigest(program);
 registerCuriosity(program);
 registerCrawl(program);
+registerCapture(program);
 registerMcp(program);
 registerReason(program);
 
