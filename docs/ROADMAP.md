@@ -285,14 +285,14 @@ Compost DOES (auxiliary, on-demand wisdom):
 
 Wisdom roadmap (sequential, NOT parallel):
 - Phase 1 (now): (a) on-demand `compost ask` retained. Background production frozen.
-- Phase 2-3 (1-3 months): action_log schema + capture expansion (zsh / git / Obsidian). Richer ledger for (a) to draw from.
+- Phase 2-3 (1-3 months): action_log schema (0021 landed) + capture expansion (zsh / git / Obsidian). Richer ledger for (a) to draw from.
 - Phase 4 (3-6 months): (b) scheduled batch wisdom — weekly/monthly LLM scan produces "this week your habits / cross-tool pattern" report. Batch output is a digest read by user, NOT persisted as fact in metacognitive ledger.
 - Phase 5 (6-12 months): (c) real-time contextual wisdom surfacing — when user does X, system proactively notes "this is similar to Y you did 3 weeks ago, that resulted in Z". Requires push UX design + trigger discipline.
 
 Wisdom-layer features built in Phases 5-7 (`reasoning_chain` table, `synthesizeWiki`, verdict CLI, `quality.bench.ts`, dogfood-7d routine, debate 026 reasoning scheduler, debate 024 verdict calibration) are **frozen as historical trial path** — schemas retained, code retained, but no further investment. Do not delete; the trial itself is data about what direction works for this user. Background production is what's frozen — `compost ask` (the on-demand path) is preserved. See `docs/metacognitive-direction.md` for the full sunset/freeze list with file:line references and the rationale of each freeze.
 
 Success signals for v4 (review at intervals):
-- 30 days: `action_log` schema design accepted; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days
+- 30 days: `action_log` schema migrated; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days
 - 90 days: zsh + git + Obsidian capture live; `coverage_audit` CLI works for 3+ test queries; pattern detection emits first behavior digest
 - 180 days: user can answer "what did I do this week / month" from Compost alone (cross-system); user reports "I no longer hand-track my work in Obsidian for retrospect purposes"; zero pivot-back urge
 

@@ -145,12 +145,12 @@ If 30-day signals fail: pause; investigate; either fix or surface architectural 
 If 90-day signals fail: deeper review; consider whether v4 framing itself needs revision.
 If 180-day signals fail: serious consideration of reverting parts of the freeze (esp. (b) Phase 4 batch wisdom may have arrived early).
 
-## 7. Schema sketch (illustrative, NOT design contract)
+## 7. action_log schema foundation
 
-The actual schema is Phase 2 work and will be designed then. This sketch is illustrative for orientation only.
+Phase 2 D2-1 landed the first schema foundation in `packages/compost-core/src/schema/0021_action_log.sql`. The DDL below is the concept shape; the migration is the authoritative contract.
 
 ```sql
--- Phase 2 (NOT implemented yet, sketch only)
+-- Phase 2 D2-1 foundation
 
 CREATE TABLE action_log (
   action_id TEXT PRIMARY KEY,                  -- uuidv7
@@ -198,7 +198,7 @@ Review gate: 30-day success signals + verification checklist in plan file.
 - zsh `precmd_functions` hook → outbox (reuse RTK history.db where possible)
 - git post-commit hook (global `~/.gitconfig` `core.hooksPath`) → outbox
 - Obsidian file watcher (`fswatch` on vault roots, debounced) → outbox
-- `action_log` schema design + migration (the sketch in §7 turns into actual DDL)
+- `action_log` schema design + migration (`0021_action_log.sql`) — landed
 - Action processor: lift observations → action_log records
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).

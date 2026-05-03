@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 20 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 21 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(20);
+    expect(result.applied).toHaveLength(21);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -46,6 +46,7 @@ describe("migrator", () => {
       "0018_reasoning_chains",
       "0019_reasoning_chain_verdict",
       "0020_reasoning_scheduler_state",
+      "0021_action_log",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -70,6 +71,7 @@ describe("migrator", () => {
     const tableNames = tables.map((t) => t.name);
     expect(tableNames).toEqual([
       "access_log",
+      "action_log",              // 0021 v4 Phase 2 metacognitive action surface
       "captured_item",
       "chunks",
       "context",
@@ -181,13 +183,84 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(20);
+    expect(before.pending).toHaveLength(21);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(20);
+    expect(after.applied).toHaveLength(21);
     expect(after.pending).toHaveLength(0);
+  });
+
+  test("action_log schema exists after 0021", () => {
+    applyMigrations(db);
+
+    const cols = db.query("PRAGMA table_info(action_log)").all() as {
+      name: string;
+      notnull: number;
+      pk: number;
+    }[];
+    const colNames = cols.map((c) => c.name);
+
+    expect(colNames).toEqual([
+      "action_id",
+      "source_system",
+      "source_id",
+      "source_observe_id",
+      "who",
+      "what_text",
+      "when_ts",
+      "project",
+      "artifact_locations",
+      "coverage_audit",
+      "next_query_hint",
+      "created_at",
+      "updated_at",
+    ]);
+    expect(cols.find((c) => c.name === "action_id")?.pk).toBe(1);
+    expect(cols.find((c) => c.name === "source_system")?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === "source_id")?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === "who")?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === "what_text")?.notnull).toBe(1);
+
+    const indexes = db.query("PRAGMA index_list(action_log)").all() as {
+      name: string;
+    }[];
+    const indexNames = indexes.map((i) => i.name).sort();
+
+    expect(indexNames).toContain("idx_action_log_observe");
+    expect(indexNames).toContain("idx_action_log_project");
+    expect(indexNames).toContain("idx_action_log_source");
+    expect(indexNames).toContain("idx_action_log_when");
+
+    db.run(
+      `INSERT INTO action_log (
+        action_id, source_system, source_id, who, what_text, project,
+        artifact_locations, coverage_audit, next_query_hint
+      ) VALUES (
+        'act1', 'codex', 'session:1', 'codex', 'Implemented action_log schema',
+        'compost',
+        '[{"system":"git","commit":"abc123"}]',
+        '{"recorded_in_engram":false,"linked_in_roadmap":true}',
+        'Check repo docs first'
+      )`
+    );
+
+    expect(() =>
+      db.run(
+        `INSERT INTO action_log (
+          action_id, source_system, source_id, who, what_text, artifact_locations
+        ) VALUES ('act2', 'codex', 'session:2', 'codex', 'Bad JSON', '{bad')`
+      )
+    ).toThrow();
+
+    expect(() =>
+      db.run(
+        `INSERT INTO action_log (
+          action_id, source_system, source_id, who, what_text
+        ) VALUES ('act3', 'codex', 'session:1', 'codex', 'Duplicate source')`
+      )
+    ).toThrow();
   });
 
   test("ingest_queue lease columns exist after 0002", () => {
