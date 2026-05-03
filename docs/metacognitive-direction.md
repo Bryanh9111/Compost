@@ -237,7 +237,7 @@ Review gate: 30-day success signals + verification checklist in plan file.
   frozen background reasoning/wiki/verdict paths.
 - D2-7 reconcile slice: `compost reconcile <date>` / `compost reconcile
   "this week"` CLI + daily 05:00 UTC `action-reconcile` daemon scheduler —
-  landed (`bun run typecheck`, `bun test` = 743 pass / 0 fail). It reports
+  landed (`bun run typecheck`, `bun test` = 744 pass / 0 fail). It reports
   missing Engram, Obsidian, git, and durable artifact pointers from
   `action_log` without mutating the ledger or reviving background
   reasoning/wiki/verdict paths.

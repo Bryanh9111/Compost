@@ -16,7 +16,10 @@ import {
 } from "../src/scheduler";
 import { collectSchedulerHealth } from "../src/main";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
-import { upsertPolicies } from "../../compost-core/src/policies/registry";
+import {
+  getActivePolicy,
+  upsertPolicies,
+} from "../../compost-core/src/policies/registry";
 import type { EmbeddingService } from "../../compost-core/src/embedding/types";
 import type { LLMService } from "../../compost-core/src/llm/types";
 import type { VectorStore } from "../../compost-core/src/storage/lancedb";
@@ -269,5 +272,77 @@ describe("scheduler health", () => {
         running: false,
       },
     ]);
+  });
+
+  test("ingest: completes stale queue row when matching derivation already succeeded", async () => {
+    const db = makeDb();
+    const dir = makeTempDir();
+    openDbs.push(db);
+    tempDirs.push(dir);
+
+    const policy = getActivePolicy();
+    db.run(
+      `INSERT INTO source (id, uri, kind, trust_tier)
+       VALUES ('source-1', 'file:///already.md', 'local-file', 'first_party')`
+    );
+    db.run(
+      `INSERT INTO observations VALUES (
+         'obs-already-done',
+         'source-1',
+         'file:///already.md',
+         datetime('now'),
+         datetime('now'),
+         'hash-1',
+         'already processed',
+         NULL,
+         NULL,
+         'text/markdown',
+         'test-adapter',
+         1,
+         'first_party',
+         'idem-already-done',
+         ?,
+         NULL,
+         NULL,
+         NULL
+       )`,
+      [policy.id]
+    );
+    db.run(
+      `INSERT INTO ingest_queue (observe_id, source_kind, priority)
+       VALUES ('obs-already-done', 'local-file', 1)`
+    );
+    db.run(
+      `INSERT INTO derivation_run (
+         derivation_id, observe_id, layer, transform_policy, status, finished_at
+       ) VALUES (
+         'derivation-already-done',
+         'obs-already-done',
+         'L2',
+         ?,
+         'succeeded',
+         datetime('now')
+       )`,
+      [policy.id]
+    );
+
+    const scheduler = startIngestWorker(db, {
+      embeddingService,
+      vectorStore,
+      dataDir: dir,
+    });
+
+    await waitFor(() => {
+      const row = db
+        .query(
+          "SELECT completed_at FROM ingest_queue WHERE observe_id = 'obs-already-done'"
+        )
+        .get() as { completed_at: string | null };
+      return row.completed_at !== null;
+    }, "stale queue row was not completed");
+
+    expect(scheduler.getHealth().error_count).toBe(0);
+    scheduler.stop();
+    await releaseAllSleeps();
   });
 });

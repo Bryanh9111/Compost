@@ -293,6 +293,28 @@ function computeHash(content: string): string {
   return hasher.digest("hex");
 }
 
+function hasSucceededIngestDerivation(
+  db: Database,
+  observeId: string,
+  policyId: string
+): boolean {
+  const row = db
+    .query(
+      `SELECT 1
+       FROM derivation_run
+       WHERE observe_id = ?
+         AND layer = 'L2'
+         AND transform_policy = ?
+         AND model_id = ''
+         AND coalesce(context_scope_id, '') = ''
+         AND coalesce(extraction_profile, '') = ''
+         AND status = 'succeeded'
+       LIMIT 1`
+    )
+    .get(observeId, policyId);
+  return row !== null;
+}
+
 /**
  * Ingest worker: claims from ingest_queue, runs Python extraction,
  * writes facts/chunks to SQLite, generates embeddings + writes to LanceDB.
@@ -326,6 +348,15 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
 
     if (!obs) {
       fail(db, claimed.id, claimed.lease_token, "observation not found");
+      return true;
+    }
+
+    if (hasSucceededIngestDerivation(db, obs.observe_id, policy.id)) {
+      complete(db, claimed.id, claimed.lease_token);
+      log.info(
+        { observe_id: obs.observe_id },
+        "ingest worker: already processed"
+      );
       return true;
     }
 
