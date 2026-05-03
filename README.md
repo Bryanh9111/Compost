@@ -198,7 +198,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - `docs/QUICKSTART.md` — 5-minute hands-on from clone to first query
 - `docs/CONCEPTS.md` — L1-L6 self-evolution, provenance, decay, Compost ↔ Engram bridge
 - `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
-- `docs/ROADMAP.md` — Phase 4 (shipped) → Phase 5 closed (bidirectional Engram loop runtime-live) → **Phase 6 P0 complete + MCP agent surface + fact→gap matching** (16 MCP tools reach gaps / curiosity / digest / crawl; agent-reachable L4) → Phase 7 analytical partner next
+- `docs/ROADMAP.md` — v4 metacognitive baseline: background reasoning/wiki/verdict work is frozen; action-log capture, coverage audit, artifact routing, timeline retrospectives, and missing-pointer reconciliation are live; next investment is deterministic pattern detection over `action_log`
 - `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
 - `docs/phase-5-open-questions.md`, `docs/phase-5-user-model-design.md` — Phase 5 pre-work
 - `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`

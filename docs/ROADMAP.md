@@ -239,7 +239,7 @@ Captured 2026-04-15 after debate 009 Week 3 audit + subsequent fix application.
 | Fork-ready personal brain | 4 | PII + bench + examples + docs — anyone can `git clone` and grow their own |
 | Integrated with Engram | 5 | Bidirectional channel: Engram events flow in, Compost insights flow back |
 | Autonomous exploration | 6 | Curiosity agent + Gap tracker + proactive push (L4 self-evolution) |
-| Analytical partner | 7 | Cross-fact reasoning + pattern detection + daily digest (L5) |
+| Analytical partner trial | 7 | Historical / frozen in v4: cross-fact reasoning, verdict signal, and hybrid scheduler shipped as trial path; current next work is deterministic pattern detection over `action_log`, not new background reasoning chains |
 | Quality regression gate | 6/7 prep | **Done** -- `bench/quality.bench.ts` LLM-as-judge over 3 hand-labeled fixtures (coverage / hallucinations / faithfulness); network-gated, no opik dependency, runs against any local Ollama model. Establishes the synthesis-quality baseline before L4 / L5 features ship. Initial baseline captured 2026-05-01 to `bench/baseline-quality.json` (3 sequential runs × 3 fixtures, judge `gemma4:31b`, git_sha `98fcb32`); carries `saturation_flag.triggered=true` because all 9 judgments returned `coverage=100 / faithfulness=1.0 / hallucinations=0` with `stddev=0` while `wiki_chars` varied (688-754 / 498-515). Treated as regression floor with loose thresholds (`coverage_pct_min: 90`, `faithfulness_min: 0.85`, `hallucinations_max: 2`); tightening blocked on fixture hardening (8-10 fixtures, harder seeds, or non-gemma4 judge to break self-bias). |
 | Portable | 8 | seed templates + export/import (for machine migration) |
 | Ecosystem | 9 | openclaw / multimodal / metrics (optional extensions) |
@@ -302,7 +302,7 @@ Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (
 
 ### Self-evolution levels
 
-Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
+Compost's autonomy ladder. v4 keeps the historical L5 reasoning work as frozen trial data and moves current investment to the metacognitive L4/L5 boundary: richer `action_log`, deterministic pattern detection, and user-read digests.
 
 | Level | Capability | Status |
 |-------|-----------|--------|
@@ -310,8 +310,8 @@ Compost's autonomy ladder. We are currently at L3, targeting L5-L6.
 | L2 | Periodic self-organization (reflect, decay, wiki synth) | ✅ Phase 2-3 |
 | L3 | Self-correction (contradiction arbitration, wiki versioning) | ✅ Phase 3 |
 | L4 | **Autonomous exploration** (curiosity, gap tracking, user-approved crawl) | 🔨 Phase 6 |
-| L5 | **Analytical reasoning** (cross-fact reasoning, pattern detection) | 🚧 Phase 7 (entry + verdict + hybrid scheduler + daemon long-run infra ✅; β/γ deferred) |
-| L6 | **User model + proactive push** (knows me, tells me) | 🔨 Phase 7+ |
+| L5 | **Pattern insight** (sequential mining over action_log; optional user-read batch digest later) | Next after D2-7; reasoning_chain scheduler remains frozen |
+| L6 | **Proactive contextual surfacing** (knows me, tells me) | Future; requires trigger discipline and push UX |
 
 ### Phase 4 P1 (✅ shipped 2026-04-17 — fork-ready personal brain)
 
