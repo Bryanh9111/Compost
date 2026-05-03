@@ -257,6 +257,9 @@ function deriveSourceSystem(row: ObservationRow): string {
   if (adapter.includes("zsh") || row.source_uri.startsWith("zsh://")) {
     return "zsh";
   }
+  if (adapter.includes("git") || row.source_uri.startsWith("git:")) {
+    return "git";
+  }
   if (adapter === "engram" || row.source_uri.startsWith("engram://")) {
     return "engram";
   }
@@ -295,6 +298,13 @@ function deriveActionSourceId(
   if (sourceSystem === "zsh") {
     const commandId = stringValue(payload?.["command_id"]);
     if (commandId) return commandId;
+  }
+
+  if (sourceSystem === "git") {
+    const commitId = stringValue(payload?.["commit_id"]);
+    const commitSha = stringValue(payload?.["commit_sha"]);
+    if (commitId) return commitId;
+    if (commitSha) return `git:${commitSha}`;
   }
 
   if (sourceSystem === "codex" && looksUniqueSourceId(row.source_id)) {
@@ -353,6 +363,19 @@ function deriveWhatText(
     }: ${detail}`;
   }
 
+  if (sourceSystem === "git" && payload) {
+    const shortSha = stringValue(payload["short_sha"]) ??
+      stringValue(payload["commit_sha"])?.slice(0, 12);
+    const subject = stringValue(payload["subject"]) ??
+      firstText(row.raw_text) ??
+      "commit captured";
+    const repoRoot = stringValue(payload["repo_root"]);
+    const location = repoRoot ? projectNameFromPath(repoRoot) ?? repoRoot : project;
+    return `git commit${location ? ` in ${location}` : ""}${
+      shortSha ? ` ${shortSha}` : ""
+    }: ${subject}`;
+  }
+
   return firstText(row.raw_text) ?? `${row.adapter} observation from ${row.source_uri}`;
 }
 
@@ -403,6 +426,9 @@ function deriveProject(
 
   const cwd = stringValue(payload?.["cwd"]);
   if (cwd) return projectNameFromPath(cwd);
+
+  const repoRoot = stringValue(payload?.["repo_root"]);
+  if (repoRoot) return projectNameFromPath(repoRoot);
 
   const uriPath = pathFromSourceUri(row.source_uri);
   if (uriPath) return projectNameFromPath(uriPath);

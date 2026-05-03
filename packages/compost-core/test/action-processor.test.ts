@@ -206,6 +206,55 @@ describe("metacognitive/action-processor", () => {
     expect(action.project).toBe("Compost");
   });
 
+  test("git commit observations become commit timeline actions", () => {
+    const commitSha = "6ba90c1a2b3c4d5e6f";
+    const commitId = `git:/Users/zion/Repos/Zylo/Compost:${commitSha}`;
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "compost-adapter-git",
+        source_id: "git:/Users/zion/Repos/Zylo/Compost",
+        source_kind: "host-adapter",
+        source_uri: `git:/Users/zion/Repos/Zylo/Compost@${commitSha}`,
+        idempotency_key: "git-commit-1",
+        payload: JSON.stringify({
+          content: JSON.stringify({
+            kind: "git-commit",
+            commit_id: commitId,
+            commit_sha: commitSha,
+            short_sha: "6ba90c1a2b3c",
+            repo_root: "/Users/zion/Repos/Zylo/Compost",
+            repo_name: "Compost",
+            branch: "main",
+            subject: "feat: capture git commits",
+            committed_at: "2026-05-03T03:00:00.000Z",
+          }),
+          mime_type: "application/json",
+          occurred_at: "2026-05-03T03:00:00.000Z",
+          metadata: { capture: "git", commit_sha: commitSha },
+        }),
+      })
+    );
+
+    const drained = drainOne(db);
+    expect(drained).toBeTruthy();
+
+    const action = db
+      .query("SELECT source_system, source_id, what_text, project FROM action_log")
+      .get() as {
+      source_system: string;
+      source_id: string;
+      what_text: string;
+      project: string;
+    };
+
+    expect(action.source_system).toBe("git");
+    expect(action.source_id).toBe(commitId);
+    expect(action.what_text).toContain("git commit in Compost 6ba90c1a2b3c");
+    expect(action.what_text).toContain("feat: capture git commits");
+    expect(action.project).toBe("Compost");
+  });
+
   test("processObservationActions backfills observations without action rows", () => {
     appendToOutbox(
       db,

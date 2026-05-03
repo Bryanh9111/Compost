@@ -10,6 +10,7 @@ import { scrub } from "../../../compost-hook-shim/src/pii";
 
 const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
 const ZSH_ADAPTER = "compost-adapter-zsh";
+const GIT_ADAPTER = "compost-adapter-git";
 const DEFAULT_TRANSFORM_POLICY = "tp-2026-04";
 
 export interface ZshCaptureInput {
@@ -32,6 +33,24 @@ export interface ZshCaptureBuildResult {
   redactions: number;
 }
 
+export interface GitCaptureInput {
+  repoRoot: string;
+  commitSha: string;
+  subject?: string;
+  branch?: string;
+  ref?: string;
+  authorName?: string;
+  committedAt?: string;
+  capturedAt?: string;
+  strictRedaction?: boolean;
+}
+
+export interface GitCaptureBuildResult {
+  event: OutboxEvent;
+  commitId: string;
+  redactions: number;
+}
+
 interface ZshCaptureOptions {
   command?: string;
   cwd?: string;
@@ -43,6 +62,18 @@ interface ZshCaptureOptions {
   user?: string;
   host?: string;
   sessionId?: string;
+  json?: boolean;
+}
+
+interface GitCaptureOptions {
+  repo?: string;
+  commit?: string;
+  subject?: string;
+  branch?: string;
+  ref?: string;
+  authorName?: string;
+  committedAt?: string;
+  capturedAt?: string;
   json?: boolean;
 }
 
@@ -128,6 +159,67 @@ export function buildZshCaptureEvent(
   };
 }
 
+export function buildGitCaptureEvent(
+  input: GitCaptureInput
+): GitCaptureBuildResult | null {
+  const repoRoot = input.repoRoot.trim().replace(/\/+$/g, "");
+  const commitSha = input.commitSha.trim();
+  if (!repoRoot || !isGitSha(commitSha)) return null;
+
+  const capturedAt =
+    normalizeTimestamp(input.capturedAt) ?? new Date().toISOString();
+  const committedAt = normalizeTimestamp(input.committedAt) ?? capturedAt;
+  const subject = input.subject?.trim() || "(no commit subject)";
+  const redacted = scrub(subject, { strict: input.strictRedaction });
+  const repoName = repoRoot.split("/").filter(Boolean).at(-1) ?? repoRoot;
+  const shortSha = commitSha.slice(0, 12);
+  const commitId = `git:${repoRoot}:${commitSha}`;
+
+  const content = {
+    kind: "git-commit",
+    commit_id: commitId,
+    commit_sha: commitSha,
+    short_sha: shortSha,
+    repo_root: repoRoot,
+    repo_name: repoName,
+    branch: input.branch?.trim() || null,
+    ref: input.ref?.trim() || null,
+    subject: redacted.scrubbed,
+    author_name: input.authorName?.trim() || null,
+    committed_at: committedAt,
+    captured_at: capturedAt,
+    redactions: redacted.redactions,
+  };
+
+  const contentJson = JSON.stringify(content);
+  const sourceId = `git:${repoRoot}`;
+  const idempotencyKey = sha256hex(`${GIT_ADAPTER}:${commitId}:${contentJson}`);
+
+  return {
+    commitId,
+    redactions: redacted.redactions,
+    event: {
+      adapter: GIT_ADAPTER,
+      source_id: sourceId,
+      source_kind: "host-adapter",
+      source_uri: `git:${repoRoot}@${commitSha}`,
+      idempotency_key: idempotencyKey,
+      trust_tier: "first_party",
+      transform_policy: DEFAULT_TRANSFORM_POLICY,
+      payload: JSON.stringify({
+        content: contentJson,
+        mime_type: "application/json",
+        occurred_at: committedAt,
+        metadata: {
+          capture: "git",
+          commit_sha: commitSha,
+          redactions: redacted.redactions,
+        },
+      }),
+    },
+  };
+}
+
 export function registerCapture(program: Command): void {
   const capture = program
     .command("capture")
@@ -185,6 +277,55 @@ export function registerCapture(program: Command): void {
         );
       }
     });
+
+  capture
+    .command("git")
+    .description("Capture a git commit into observe_outbox")
+    .option("--repo <path>", "Repository root")
+    .option("--commit <sha>", "Commit SHA")
+    .option("--subject <subject>", "Commit subject")
+    .option("--branch <branch>", "Branch name")
+    .option("--ref <ref>", "Ref description")
+    .option("--author-name <name>", "Commit author name")
+    .option("--committed-at <iso>", "Commit timestamp")
+    .option("--captured-at <iso>", "Capture timestamp")
+    .option("--json", "Print JSON result")
+    .action((opts: GitCaptureOptions) => {
+      const built = buildGitCaptureEvent({
+        repoRoot: opts.repo ?? process.env["COMPOST_GIT_REPO"] ?? "",
+        commitSha: opts.commit ?? process.env["COMPOST_GIT_COMMIT"] ?? "",
+        subject: opts.subject ?? process.env["COMPOST_GIT_SUBJECT"],
+        branch: opts.branch ?? process.env["COMPOST_GIT_BRANCH"],
+        ref: opts.ref ?? process.env["COMPOST_GIT_REF"],
+        authorName: opts.authorName ?? process.env["COMPOST_GIT_AUTHOR_NAME"],
+        committedAt: opts.committedAt ?? process.env["COMPOST_GIT_COMMITTED_AT"],
+        capturedAt: opts.capturedAt ?? process.env["COMPOST_GIT_CAPTURED_AT"],
+        strictRedaction: process.env["COMPOST_PII_STRICT"] === "true",
+      });
+
+      if (!built) {
+        if (opts.json) process.stdout.write(JSON.stringify({ skipped: true }) + "\n");
+        return;
+      }
+
+      const db = openDb();
+      try {
+        appendToOutbox(db, built.event);
+      } finally {
+        db.close();
+      }
+
+      if (opts.json) {
+        process.stdout.write(
+          JSON.stringify({
+            queued: true,
+            commit_id: built.commitId,
+            idempotency_key: built.event.idempotency_key,
+            redactions: built.redactions,
+          }) + "\n"
+        );
+      }
+    });
 }
 
 function shouldSkipCommand(command: string): boolean {
@@ -205,6 +346,10 @@ function normalizeExitStatus(value: number | string | undefined): number {
   const parsed = typeof value === "number" ? value : Number(value ?? 0);
   if (!Number.isFinite(parsed)) return 0;
   return Math.trunc(parsed);
+}
+
+function isGitSha(value: string): boolean {
+  return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
 function sha256hex(value: string): string {
