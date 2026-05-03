@@ -251,6 +251,7 @@ Review gate: capture coverage > 80% of user's creation-type actions (estimated, 
 - `compost reconcile <date>` / nightly `action-reconcile` daemon scheduler — missing-pointer audit comparing action_log vs Engram/Obsidian/git/durable artifacts — landed in D2-7
 
 ### Phase 4 (Month 3-6) — pattern detection + (b) scheduled batch wisdom
+- `compost patterns <date|window>` — manual read-only deterministic action_log pattern MVP — landed after D2-7. It reports capture spread, work-rhythm hours, dominant projects, project switching, and adjacent source transitions with provisional/medium/strong confidence labels. It does not write `user_patterns`, reasoning chains, wiki pages, or Engram memories, and it is not a daemon scheduler.
 - Sequential pattern mining over action_log (work rhythms, decision habits)
 - Speech style stats over Claude Code / Codex prompts (n-gram, sentence structure, sentiment proxy)
 - (b) Weekly batch wisdom: LLM scans action_log → "this week's pattern digest" (read-only, ephemeral)

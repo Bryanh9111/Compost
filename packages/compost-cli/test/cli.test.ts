@@ -20,6 +20,7 @@ import { registerCover } from "../src/commands/cover";
 import { registerRoute } from "../src/commands/route";
 import { registerDid } from "../src/commands/did";
 import { registerReconcile } from "../src/commands/reconcile";
+import { registerPatterns } from "../src/commands/patterns";
 import type { ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ function buildProgram(): Command {
   registerRoute(program);
   registerDid(program);
   registerReconcile(program);
+  registerPatterns(program);
   return program;
 }
 
@@ -81,6 +83,7 @@ describe("CLI program structure", () => {
     expect(names).toContain("route");
     expect(names).toContain("did");
     expect(names).toContain("reconcile");
+    expect(names).toContain("patterns");
   });
 
   it("cover has metacognitive audit options", () => {
@@ -128,6 +131,19 @@ describe("CLI program structure", () => {
     expect(optionNames).toContain("--source");
     expect(optionNames).toContain("--limit");
     expect(optionNames).toContain("--issue-limit");
+    expect(optionNames).toContain("--now");
+    expect(optionNames).toContain("--json");
+  });
+
+  it("patterns has read-only action pattern options", () => {
+    const program = buildProgram();
+    const patterns = program.commands.find((c) => c.name() === "patterns");
+    expect(patterns).toBeDefined();
+    const optionNames = patterns!.options.map((o) => o.long);
+    expect(optionNames).toContain("--project");
+    expect(optionNames).toContain("--source");
+    expect(optionNames).toContain("--limit");
+    expect(optionNames).toContain("--pattern-limit");
     expect(optionNames).toContain("--now");
     expect(optionNames).toContain("--json");
   });

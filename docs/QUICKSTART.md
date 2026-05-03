@@ -57,7 +57,19 @@ and returns an answer grounded in those facts. If the LLM is down or
 the circuit breaker is open, `ask` falls back to BM25 and clearly
 says so — no silent hallucinations.
 
-## 5. Daemon (recommended for capture + maintenance)
+## 5. First action pattern report
+
+```bash
+compost patterns "this week"
+```
+
+Reads `action_log` and reports deterministic patterns such as capture
+spread, peak action hours, dominant projects, project switching, and adjacent
+source transitions. This is a read-only v4 surface: it does not write
+`user_patterns`, reasoning chains, wiki pages, or Engram memories. Run it
+manually when you want a report; the daemon only captures actions.
+
+## 6. Daemon (recommended for capture + maintenance)
 
 In v4 the daemon is the capture and maintenance process. It runs drain /
 ingest / reflect / freshness / backup / graph-health. The historical
@@ -95,7 +107,7 @@ Without the daemon, `compost add` still works — the outbox is drained
 inside the add command itself, but scheduled drain / ingest / reflect /
 freshness / backup / graph-health maintenance will not run.
 
-## 6. On-demand reasoning and historical verdicts
+## 7. On-demand reasoning and historical verdicts
 
 Background wisdom production is frozen in v4. `compost ask <question>`
 is the supported on-demand synthesis path. The `compost reason` commands
@@ -124,7 +136,7 @@ alias cchains='cd /path/to/Compost && bun packages/compost-cli/src/main.ts reaso
 alias cstats='cd /path/to/Compost && bun packages/compost-cli/src/main.ts reason stats'
 ```
 
-## 7. Health checks
+## 8. Health checks
 
 ```bash
 compost doctor --check-pii          # scan outbox for PII leaks

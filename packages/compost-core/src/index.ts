@@ -70,3 +70,15 @@ export type {
   ActionReconcileReport,
   ActionReconcileSeverity,
 } from "./metacognitive/action-reconciler";
+export {
+  detectActionPatterns,
+  formatActionPatterns,
+} from "./metacognitive/action-patterns";
+export type {
+  ActionPattern,
+  ActionPatternConfidence,
+  ActionPatternEvidence,
+  ActionPatternKind,
+  ActionPatternOptions,
+  ActionPatternReport,
+} from "./metacognitive/action-patterns";

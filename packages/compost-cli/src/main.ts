@@ -22,6 +22,7 @@ import { registerCover } from "./commands/cover";
 import { registerRoute } from "./commands/route";
 import { registerDid } from "./commands/did";
 import { registerReconcile } from "./commands/reconcile";
+import { registerPatterns } from "./commands/patterns";
 import { registerMcp } from "./commands/mcp";
 import { registerReason } from "./commands/reason";
 
@@ -53,6 +54,7 @@ registerCover(program);
 registerRoute(program);
 registerDid(program);
 registerReconcile(program);
+registerPatterns(program);
 registerMcp(program);
 registerReason(program);
 

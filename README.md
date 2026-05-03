@@ -31,6 +31,9 @@ compost query "how does the auth system work"
 # LLM-powered answer (retrieves facts + wiki, synthesizes via local LLM)
 compost ask "what is the observe outbox pattern"
 
+# Manual read-only metacognitive pattern report over action_log
+compost patterns "this week"
+
 # Start the daemon (MCP server + drain loop + reflect + freshness loop)
 compost daemon start
 
@@ -198,7 +201,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - `docs/QUICKSTART.md` — 5-minute hands-on from clone to first query
 - `docs/CONCEPTS.md` — L1-L6 self-evolution, provenance, decay, Compost ↔ Engram bridge
 - `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
-- `docs/ROADMAP.md` — v4 metacognitive baseline: background reasoning/wiki/verdict work is frozen; action-log capture, coverage audit, artifact routing, timeline retrospectives, and missing-pointer reconciliation are live; next investment is deterministic pattern detection over `action_log`
+- `docs/ROADMAP.md` — v4 metacognitive baseline: background reasoning/wiki/verdict work is frozen; action-log capture, coverage audit, artifact routing, timeline retrospectives, missing-pointer reconciliation, and read-only deterministic pattern detection over `action_log` are live
 - `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
 - `docs/phase-5-open-questions.md`, `docs/phase-5-user-model-design.md` — Phase 5 pre-work
 - `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`
