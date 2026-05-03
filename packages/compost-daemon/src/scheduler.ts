@@ -9,6 +9,7 @@ import type { LLMService } from "../../compost-core/src/llm/types";
 import { ingestUrl } from "../../compost-core/src/pipeline/web-ingest";
 import { claimOne, complete, fail } from "../../compost-core/src/queue/lease";
 import { getActivePolicy } from "../../compost-core/src/policies/registry";
+import { reconcileActionPointers } from "../../compost-core/src/metacognitive/action-reconciler";
 import { v7 as uuidv7 } from "uuid";
 import { existsSync } from "fs";
 import { resolve, join } from "path";
@@ -530,6 +531,7 @@ const BACKUP_TIME_WINDOW_HOUR_UTC = 3;
 const BACKUP_GRACE_WINDOW_MS = 60 * 60 * 1000; // fire immediately if within 1h of 03:00 UTC and no backup today
 const GRAPH_HEALTH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const GRAPH_HEALTH_TIME_WINDOW_HOUR_UTC = 4; // one hour after backup; see ARCHITECTURE.md scheduler table
+const ACTION_RECONCILE_TIME_WINDOW_HOUR_UTC = 5; // after backup + graph-health; read-only action pointer audit
 
 export interface BackupSchedulerOpts {
   ledgerPath: string;
@@ -708,6 +710,95 @@ export function startGraphHealthScheduler(db: Database): Scheduler {
     },
     getHealth() {
       return { name: "graph-health", last_tick_at: lastTickAt, error_count: errorCount, running };
+    },
+  };
+}
+
+// =====================================================================
+// Action pointer reconciler scheduler (v4 metacognitive D2-7)
+// =====================================================================
+
+export interface ActionReconcileSchedulerOpts {
+  /**
+   * Test-only override. Production leaves unset so the scheduler runs once
+   * daily at 05:00 UTC, after backup and graph-health windows.
+   */
+  intervalMs?: number;
+  expression?: string;
+  limit?: number;
+  issueLimit?: number;
+}
+
+export function msUntilNextActionReconcileWindow(
+  now: Date = new Date()
+): number {
+  const target = new Date(now);
+  target.setUTCHours(ACTION_RECONCILE_TIME_WINDOW_HOUR_UTC, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+export function startActionReconcileScheduler(
+  db: Database,
+  opts: ActionReconcileSchedulerOpts = {}
+): Scheduler {
+  let running = true;
+  let lastTickAt: string | null = null;
+  let errorCount = 0;
+
+  async function loop() {
+    while (running) {
+      const wait = opts.intervalMs ?? msUntilNextActionReconcileWindow();
+      log.debug(
+        { waitMs: wait },
+        "action-reconcile scheduler: waiting for 05:00 UTC window"
+      );
+      await Bun.sleep(wait);
+      if (!running) break;
+
+      try {
+        const report = reconcileActionPointers(
+          db,
+          opts.expression ?? "yesterday",
+          {
+            limit: opts.limit ?? 5000,
+            issueLimit: opts.issueLimit ?? 200,
+          }
+        );
+        log.info(
+          {
+            expression: report.expression,
+            ok: report.ok,
+            scanned: report.scanned_actions,
+            issues: report.issue_count,
+            by_kind: report.by_kind,
+            by_source: report.by_source,
+          },
+          "action reconcile complete"
+        );
+        lastTickAt = new Date().toISOString();
+      } catch (err) {
+        errorCount++;
+        log.error({ err }, "action reconcile scheduler error");
+      }
+    }
+  }
+
+  void loop();
+
+  return {
+    stop() {
+      running = false;
+    },
+    getHealth() {
+      return {
+        name: "action-reconcile",
+        last_tick_at: lastTickAt,
+        error_count: errorCount,
+        running,
+      };
     },
   };
 }

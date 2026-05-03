@@ -19,6 +19,7 @@ import { registerCapture } from "../src/commands/capture";
 import { registerCover } from "../src/commands/cover";
 import { registerRoute } from "../src/commands/route";
 import { registerDid } from "../src/commands/did";
+import { registerReconcile } from "../src/commands/reconcile";
 import type { ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,7 @@ function buildProgram(): Command {
   registerCover(program);
   registerRoute(program);
   registerDid(program);
+  registerReconcile(program);
   return program;
 }
 
@@ -78,6 +80,7 @@ describe("CLI program structure", () => {
     expect(names).toContain("cover");
     expect(names).toContain("route");
     expect(names).toContain("did");
+    expect(names).toContain("reconcile");
   });
 
   it("cover has metacognitive audit options", () => {
@@ -112,6 +115,19 @@ describe("CLI program structure", () => {
     expect(optionNames).toContain("--project");
     expect(optionNames).toContain("--source");
     expect(optionNames).toContain("--limit");
+    expect(optionNames).toContain("--now");
+    expect(optionNames).toContain("--json");
+  });
+
+  it("reconcile has action pointer audit options", () => {
+    const program = buildProgram();
+    const reconcile = program.commands.find((c) => c.name() === "reconcile");
+    expect(reconcile).toBeDefined();
+    const optionNames = reconcile!.options.map((o) => o.long);
+    expect(optionNames).toContain("--project");
+    expect(optionNames).toContain("--source");
+    expect(optionNames).toContain("--limit");
+    expect(optionNames).toContain("--issue-limit");
     expect(optionNames).toContain("--now");
     expect(optionNames).toContain("--json");
   });

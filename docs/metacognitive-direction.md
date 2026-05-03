@@ -235,6 +235,12 @@ Review gate: 30-day success signals + verification checklist in plan file.
   `bun test` = 737 pass / 0 fail). It groups `action_log` rows by UTC day,
   source system, project, and artifact pointer without using LLM synthesis or
   frozen background reasoning/wiki/verdict paths.
+- D2-7 reconcile slice: `compost reconcile <date>` / `compost reconcile
+  "this week"` CLI + daily 05:00 UTC `action-reconcile` daemon scheduler —
+  landed (`bun run typecheck`, `bun test` = 743 pass / 0 fail). It reports
+  missing Engram, Obsidian, git, and durable artifact pointers from
+  `action_log` without mutating the ledger or reviving background
+  reasoning/wiki/verdict paths.
 
 Review gate: capture coverage > 80% of user's creation-type actions (estimated, not measured).
 
@@ -242,7 +248,7 @@ Review gate: capture coverage > 80% of user's creation-type actions (estimated, 
 - `compost cover <topic>` — coverage audit ("Engram=yes, ROADMAP=yes, Obsidian=no") — landed in D2-4
 - `compost route <question>` — "this answer lives in <vault Y>" — landed in D2-5
 - `compost did <date>` / `compost did "this week"` — action time-window aggregation — landed in D2-6
-- Cross-system reconciler: nightly job comparing action_log vs Engram/Obsidian/git for missing pointers
+- `compost reconcile <date>` / nightly `action-reconcile` daemon scheduler — missing-pointer audit comparing action_log vs Engram/Obsidian/git/durable artifacts — landed in D2-7
 
 ### Phase 4 (Month 3-6) — pattern detection + (b) scheduled batch wisdom
 - Sequential pattern mining over action_log (work rhythms, decision habits)

@@ -5,7 +5,15 @@ import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
 // startReasoningScheduler removed from import 2026-05-02 v4 metacognitive turn — see line 151.
 // To revive: re-add to import + swap the noop reasoningSched back to startReasoningScheduler(db, llmRegistry, vectorStore).
-import { startDrainLoop, startReflectScheduler, startFreshnessLoop, startIngestWorker, startBackupScheduler, startGraphHealthScheduler } from "./scheduler";
+import {
+  startActionReconcileScheduler,
+  startBackupScheduler,
+  startDrainLoop,
+  startFreshnessLoop,
+  startGraphHealthScheduler,
+  startIngestWorker,
+  startReflectScheduler,
+} from "./scheduler";
 import type { Scheduler, SchedulerHealth } from "./scheduler";
 import { OllamaEmbeddingService } from "../../compost-core/src/embedding/ollama";
 import { VectorStore } from "../../compost-core/src/storage/lancedb";
@@ -180,6 +188,7 @@ export async function startDaemon(
     backupDir,
   });
   const graphHealthSched: Scheduler = startGraphHealthScheduler(db);
+  const actionReconcileSched: Scheduler = startActionReconcileScheduler(db);
   const schedulers: RegisteredScheduler[] = [
     { name: "drain", scheduler: drainSched },
     { name: "reflect", scheduler: reflectSched },
@@ -188,6 +197,7 @@ export async function startDaemon(
     { name: "reasoning", scheduler: reasoningSched },
     { name: "backup", scheduler: backupSched },
     { name: "graph-health", scheduler: graphHealthSched },
+    { name: "action-reconcile", scheduler: actionReconcileSched },
   ];
 
   // 6a. Engram bi-directional loop schedulers. HC-1: daemon boots even
@@ -223,6 +233,7 @@ export async function startDaemon(
     reasoningSched.stop();
     backupSched.stop();
     graphHealthSched.stop();
+    actionReconcileSched.stop();
     engramState.flusher?.stop();
     engramState.poller?.stop();
     await engramState.shutdown().catch((err) => {

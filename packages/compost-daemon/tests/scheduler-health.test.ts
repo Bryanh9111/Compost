@@ -5,6 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   startBackupScheduler,
+  startActionReconcileScheduler,
   startDrainLoop,
   startFreshnessLoop,
   startGraphHealthScheduler,
@@ -153,6 +154,14 @@ const specs: SchedulerSpec[] = [
     name: "graph-health",
     startHealthy: ({ db }) => startGraphHealthScheduler(db),
     startThrowing: () => startGraphHealthScheduler(throwingDb),
+    releaseBeforeTick: true,
+  },
+  {
+    name: "action-reconcile",
+    startHealthy: ({ db }) =>
+      startActionReconcileScheduler(db, { intervalMs: 1 }),
+    startThrowing: () =>
+      startActionReconcileScheduler(throwingDb, { intervalMs: 1 }),
     releaseBeforeTick: true,
   },
   {

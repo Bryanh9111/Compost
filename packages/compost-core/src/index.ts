@@ -59,3 +59,14 @@ export type {
   CountSummary,
   DayActionGroup,
 } from "./metacognitive/action-timeline";
+export {
+  formatActionReconcile,
+  reconcileActionPointers,
+} from "./metacognitive/action-reconciler";
+export type {
+  ActionReconcileIssue,
+  ActionReconcileIssueKind,
+  ActionReconcileOptions,
+  ActionReconcileReport,
+  ActionReconcileSeverity,
+} from "./metacognitive/action-reconciler";
