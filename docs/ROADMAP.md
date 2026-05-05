@@ -293,11 +293,21 @@ Wisdom roadmap (sequential, NOT parallel):
 Wisdom-layer features built in Phases 5-7 (`reasoning_chain` table, `synthesizeWiki`, verdict CLI, `quality.bench.ts`, dogfood-7d routine, debate 026 reasoning scheduler, debate 024 verdict calibration) are **frozen as historical trial path** — schemas retained, code retained, but no further investment. Do not delete; the trial itself is data about what direction works for this user. Background production is what's frozen — `compost ask` (the on-demand path) is preserved. See `docs/metacognitive-direction.md` for the full sunset/freeze list with file:line references and the rationale of each freeze.
 
 Success signals for v4 (review at intervals):
-- 30 days: `action_log` schema migrated; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days
+- 30 days: `action_log` schema migrated; cross-repo audit clean OR documented; daemon plist restored; outbox quarantine = 0 sustained 14 days; periodic dual-health check covers Compost doctor output plus Engram process hygiene
 - 90 days: zsh + git + Obsidian capture remain live; `compost cover <topic>` coverage audit works for 3+ test queries; pattern detection emits first behavior digest
 - 180 days: `compost did "this week"` and `compost did "this month"` can answer cross-system retrospectives from `action_log`; user reports "I no longer hand-track my work in Obsidian for retrospect purposes"; zero pivot-back urge
 
 Implementation baseline after this turn: `fda433d` lands the `action_log` schema foundation; `c00db8d` restores root typecheck and the full test suite while preserving the v4 freeze defaults; `d406830` adds the action processor that lifts drained observations into `action_log` for the metacognitive timeline. The D2-3 capture work adds `compost capture zsh` with a local `preexec_functions`/`precmd_functions` hook, `compost capture git` with a global `post-commit` hook, `compost capture obsidian` with a local vault watcher, PII scrubbing before outbox write, and zsh/git/Obsidian normalization in `action_log`. D2-4 adds `compost cover <topic>`, a deterministic action_log/doc/artifact coverage audit that reports present systems and missing pointers without reviving background reasoning/wiki/verdict routines. D2-5 adds `compost route <question>`, a deterministic artifact router that points questions to Obsidian, Engram, git, repo docs, Codex transcripts, local files, or action_log timeline windows. D2-6 adds `compost did <date|this week>`, a deterministic action timeline aggregator that groups `action_log` rows by day, source system, project, and artifact pointers for retrospectives. D2-7 adds `compost reconcile <date|this week>` plus a daily 05:00 UTC `action-reconcile` daemon scheduler, a read-only missing-pointer audit over `action_log` that reports missing Engram, Obsidian, git, or durable artifact pointers without mutating the ledger. The first Phase 4 MVP adds `compost patterns <date|window>`, a manual read-only deterministic action_log report for capture spread, work-rhythm hours, dominant projects, project switching, and adjacent source transitions; it does not write `user_patterns`, reasoning chains, wiki pages, or Engram memories. The 2026-05-05 boundary guard adds a static Compost/Engram drift check and CI workflow while deferring any monorepo migration; see `docs/compost-engram-boundary.md`.
+
+2026-05-05 dual-health maintenance baseline: Compost ledger backup +
+Engram backup were taken before maintenance; existing semantic
+`transform_policy` labels were normalized to registered policy ids, existing
+outbox PII was scrubbed, one completed queue row without a derivation was
+reopened and processed, Compost daemon was restarted cleanly, and stale Engram
+stdio processes were reaped down to the active clients. A core outbox fallback
+now rewrites unregistered `transform_policy` labels to the active registered
+policy while preserving the requested label in payload metadata. This remains
+an ops runbook signal, not a monorepo trigger.
 
 Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550), `23531c7c850b` (post-commit fix baseline). Plan-of-record source: maintainer's local plan file (kept outside this repo). Long-form rationale: `docs/metacognitive-direction.md`.
 

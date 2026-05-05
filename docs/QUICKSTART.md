@@ -145,6 +145,16 @@ compost doctor --check-llm          # probe local LLM + circuit breaker
 bun run check:engram-boundary       # static Compost/Engram boundary drift check
 ```
 
+Healthy local baseline:
+
+- `compost daemon status` shows `drain`, `ingest`, and `freshness` running with
+  `errors=0`. `reasoning [stopped]` is expected in v4.
+- `doctor --check-pii` reports zero rows.
+- `doctor --check-integrity` reports zero issues after active ingest backlog is
+  empty.
+- outbox pending/quarantine/error, unknown `transform_policy`, and stale wiki
+  counts are all zero.
+
 Before manual ledger maintenance, make a SQLite backup:
 
 ```bash
@@ -163,7 +173,9 @@ draining. It is more concerning when outbox quarantine/errors, unknown
 `transform_policy`, stale wiki pages, or completed queue rows without any
 `derivation_run` remain after the backlog settles. Observation writers should
 use registered policy ids such as `tp-2026-04-03`; do not store semantic labels
-like `metadata-and-summary` in `transform_policy`.
+like `metadata-and-summary` in `transform_policy`. The outbox write path falls
+back to the active policy for unregistered labels and records the requested
+label in payload metadata, but callers should still send registered ids.
 
 ## Next steps
 

@@ -83,6 +83,43 @@ describe("ledger/outbox", () => {
     expect(count.cnt).toBe(2);
   });
 
+  test("appendToOutbox falls back when transform_policy is not registered", () => {
+    appendToOutbox(
+      db,
+      makeEvent({
+        transform_policy: "summary",
+        payload: JSON.stringify({
+          content: "hello",
+          mime_type: "text/plain",
+          occurred_at: new Date().toISOString(),
+          metadata: { capture: "manual" },
+        }),
+      })
+    );
+
+    const row = db
+      .query("SELECT transform_policy, payload FROM observe_outbox WHERE seq = 1")
+      .get() as { transform_policy: string; payload: string };
+
+    expect(row.transform_policy).toBe("tp-2026-04-03");
+    const payload = JSON.parse(row.payload) as {
+      metadata: {
+        capture: string;
+        compost_policy_fallback: {
+          requested_transform_policy: string;
+          applied_transform_policy: string;
+        };
+      };
+    };
+    expect(payload.metadata.capture).toBe("manual");
+    expect(
+      payload.metadata.compost_policy_fallback.requested_transform_policy
+    ).toBe("summary");
+    expect(
+      payload.metadata.compost_policy_fallback.applied_transform_policy
+    ).toBe("tp-2026-04-03");
+  });
+
   // --- drainOne ---
 
   test("drainOne returns null when outbox is empty", () => {

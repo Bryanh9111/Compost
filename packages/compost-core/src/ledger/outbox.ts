@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { v7 as uuidv7 } from "uuid";
 import { computeOriginHash } from "./origin";
 import { processObservationAction } from "../metacognitive/action-processor";
+import { getActivePolicy } from "../policies/registry";
 
 /**
  * OutboxEvent — what writers (hook shim, adapters) pass to appendToOutbox.
@@ -37,6 +38,22 @@ const QUARANTINE_THRESHOLD = 5;
  * INSERT OR IGNORE for idempotency (idx_outbox_idempotency UNIQUE).
  */
 export function appendToOutbox(db: Database, event: OutboxEvent): void {
+  const payloadWithContexts = mergeContextsIntoPayload(
+    event.payload,
+    event.contexts
+  );
+  const transformPolicy = resolveOutboxTransformPolicy(
+    db,
+    event.transform_policy
+  );
+  const payload = transformPolicy.wasFallback
+    ? annotateTransformPolicyFallback(
+        payloadWithContexts,
+        event.transform_policy,
+        transformPolicy.policyId
+      )
+    : payloadWithContexts;
+
   db.run(
     `INSERT OR IGNORE INTO observe_outbox (
       adapter, source_id, source_kind, source_uri, idempotency_key,
@@ -49,10 +66,50 @@ export function appendToOutbox(db: Database, event: OutboxEvent): void {
       event.source_uri,
       event.idempotency_key,
       event.trust_tier,
-      event.transform_policy,
-      mergeContextsIntoPayload(event.payload, event.contexts),
+      transformPolicy.policyId,
+      payload,
     ]
   );
+}
+
+function resolveOutboxTransformPolicy(
+  db: Database,
+  requestedPolicyId: string
+): { policyId: string; wasFallback: boolean } {
+  const row = db
+    .query("SELECT 1 FROM policies WHERE policy_id = ?")
+    .get(requestedPolicyId);
+  if (row) return { policyId: requestedPolicyId, wasFallback: false };
+
+  return { policyId: getActivePolicy().id, wasFallback: true };
+}
+
+function annotateTransformPolicyFallback(
+  payload: string,
+  requestedPolicyId: string,
+  appliedPolicyId: string
+): string {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    const metadata =
+      parsed.metadata && typeof parsed.metadata === "object" && !Array.isArray(parsed.metadata)
+        ? (parsed.metadata as Record<string, unknown>)
+        : {};
+
+    return JSON.stringify({
+      ...parsed,
+      metadata: {
+        ...metadata,
+        compost_policy_fallback: {
+          requested_transform_policy: requestedPolicyId,
+          applied_transform_policy: appliedPolicyId,
+          reason: "unregistered transform_policy",
+        },
+      },
+    });
+  } catch {
+    return payload;
+  }
 }
 
 interface OutboxRow {

@@ -74,6 +74,25 @@ bun test packages/compost-engram-adapter/test/engram-e2e-integration.test.ts
 The boundary check is intentionally local and static. The readiness probe and
 e2e test cover the runtime contract.
 
+## Runtime Hygiene
+
+Compost may keep one `engram-server` subprocess alive for its Engram poller.
+That process should have the Compost daemon as its parent. A large number of
+old `engram-server` stdio processes usually means stale MCP clients were not
+reaped; it is a process hygiene issue, not a reason to merge repos.
+
+Useful checks:
+
+```bash
+compost daemon status
+uv --directory ../Engram run engram stats
+ps -axo pid,ppid,comm,args | grep engram-server
+```
+
+After cleaning stale Engram MCP processes, verify both sides again: Compost
+doctor checks should be clean, Engram SQLite `quick_check`/`integrity_check`
+should return `ok`, and a fresh Engram CLI or MCP call should respond.
+
 ## Revisit Triggers
 
 Reconsider a technical monorepo only if at least one of these persists across
