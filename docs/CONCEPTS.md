@@ -23,7 +23,9 @@ Two sibling systems form the full stack:
 The two talk through a **bidirectional core channel** (not opt-in):
 Engram's event stream feeds Compost as a new ingest source; Compost's
 synthesized insights flow back to Engram as new entries. Either side
-keeps working if the other is offline.
+keeps working if the other is offline. The current repo-boundary baseline is
+documented in `docs/compost-engram-boundary.md`: monorepo migration is
+deferred, but integration checks stay active.
 
 ## The four storage layers
 

@@ -203,6 +203,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - `docs/ARCHITECTURE.md` — data flow, storage layers, failure modes
 - `docs/ROADMAP.md` — v4 metacognitive baseline: background reasoning/wiki/verdict work is frozen; action-log capture, coverage audit, artifact routing, timeline retrospectives, missing-pointer reconciliation, and read-only deterministic pattern detection over `action_log` are live
 - `docs/engram-integration-contract.md` — cross-repo contract with Engram (sibling project)
+- `docs/compost-engram-boundary.md` — current no-monorepo baseline, allowed coupling, and boundary checks
 - `docs/phase-5-open-questions.md`, `docs/phase-5-user-model-design.md` — Phase 5 pre-work
 - `examples/01-local-markdown-ingest/`, `examples/02-web-url-ingest/`, `examples/03-mcp-integration/`
 - Full v2 spec: `docs/compost-v2-spec.md`
@@ -211,7 +212,7 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 ## Stats
 
 - **~20K lines** of TypeScript + ~800 lines Python
-- **744 tests**, 0 failures
+- **748 tests**, 0 failures
 - **21 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017, reasoning scheduler state in 0020, action_log in 0021)
 - **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
 - **16 MCP tools** exposed to agents (Phase 0-2 + Phase 6 P0 gap/curiosity/digest/crawl + active fact→gap)

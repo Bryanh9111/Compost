@@ -6,6 +6,7 @@
     "typecheck": "tsc --build",
     "test": "bun test",
     "lint": "biome check .",
+    "check:engram-boundary": "bun scripts/check-engram-boundary.ts",
     "bench": "bun bench/sqlite-reflect.bench.ts; bun bench/sqlite-query.bench.ts; bun bench/lancedb-ann.bench.ts; bun bench/llm-latency.bench.ts"
   },
   "devDependencies": {

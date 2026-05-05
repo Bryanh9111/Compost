@@ -16,6 +16,10 @@ history. Compost can synthesize with `compost ask` when the user asks, but
 v4 freezes background wisdom production that would create a competing
 source of truth.
 
+Compost and Engram intentionally remain separate sibling repos while both
+systems are still evolving. The current boundary baseline and static drift
+check are documented in `docs/compost-engram-boundary.md`.
+
 See `docs/CONCEPTS.md` for the L1-L6 self-evolution model and the
 provenance chain, `docs/QUICKSTART.md` for a 5-minute hands-on.
 

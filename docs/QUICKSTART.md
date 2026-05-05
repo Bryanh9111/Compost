@@ -142,6 +142,7 @@ alias cstats='cd /path/to/Compost && bun packages/compost-cli/src/main.ts reason
 compost doctor --check-pii          # scan outbox for PII leaks
 compost doctor --check-integrity    # FK + fact-links + policy audit
 compost doctor --check-llm          # probe local LLM + circuit breaker
+bun run check:engram-boundary       # static Compost/Engram boundary drift check
 ```
 
 ## Next steps
