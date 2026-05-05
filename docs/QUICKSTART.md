@@ -145,6 +145,26 @@ compost doctor --check-llm          # probe local LLM + circuit breaker
 bun run check:engram-boundary       # static Compost/Engram boundary drift check
 ```
 
+Before manual ledger maintenance, make a SQLite backup:
+
+```bash
+sqlite3 ~/.compost/ledger.db ".backup '$HOME/.compost/backups/$(date +%F-%H%M%S)-before-maintenance.db'"
+```
+
+Interpret `doctor --check-integrity` with the queue state:
+
+```bash
+sqlite3 ~/.compost/ledger.db \
+  "select count(*) from ingest_queue where completed_at is null;"
+```
+
+`orphan_observations` can be expected while a large ingest backlog is actively
+draining. It is more concerning when outbox quarantine/errors, unknown
+`transform_policy`, stale wiki pages, or completed queue rows without any
+`derivation_run` remain after the backlog settles. Observation writers should
+use registered policy ids such as `tp-2026-04-03`; do not store semantic labels
+like `metadata-and-summary` in `transform_policy`.
+
 ## Next steps
 
 - `examples/01-local-markdown-ingest/` — the example this quickstart runs
@@ -158,6 +178,7 @@ bun run check:engram-boundary       # static Compost/Engram boundary drift check
 | Symptom | Most likely cause |
 |---|---|
 | `compost add` hangs | Ollama is not running. `ollama serve &` |
+| `ingest` stops advancing with one fresh `running` derivation | Ollama embedding is busy or hung; check `~/.compost/daemon.log`, `pgrep -af 'ollama|compost_ingest'`, and `compost doctor --check-llm` |
 | `ask` returns BM25-only output | LLM circuit breaker open. `compost doctor --check-llm` |
 | "migration failed" | Stale `~/.compost/ledger.db`. Back it up and re-run `scripts/install.sh` |
 | Nothing in `compost query` after add | Extraction subprocess failed. Check `compost triage` |
