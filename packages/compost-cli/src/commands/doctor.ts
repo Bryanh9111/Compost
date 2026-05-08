@@ -8,6 +8,55 @@ import { PendingWritesQueue } from "../../../compost-engram-adapter/src/pending-
 import { reconcileEngramQueue } from "../../../compost-engram-adapter/src/reconcile";
 
 const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_LLM_PROBE_TIMEOUT_MS = 3_000;
+const DEFAULT_OLLAMA_SERVICE_TIMEOUT_MS = 3_000;
+
+interface ProbeError {
+  name: string;
+  message: string;
+}
+
+export function parsePositiveInteger(
+  raw: string | number | undefined,
+  fallback: number
+): number {
+  if (raw === undefined) return fallback;
+  const parsed = typeof raw === "number" ? raw : Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function isFatalLlmProbeError(
+  error: ProbeError,
+  strict: boolean
+): boolean {
+  return strict || error.name !== "AbortError";
+}
+
+async function fetchJsonWithTimeout(
+  url: string,
+  timeoutMs: number
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function errorInfo(err: unknown): ProbeError {
+  return {
+    name: err instanceof Error ? err.name : "unknown",
+    message: err instanceof Error ? err.message : String(err),
+  };
+}
 
 function openDb(): Database {
   const dir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
@@ -43,6 +92,28 @@ export function registerDoctor(program: Command): void {
     .option(
       "--check-llm",
       "Ping Ollama with a short probe and report latency / model / setup hint"
+    )
+    .option(
+      "--ollama-url <url>",
+      "Ollama base URL for --check-llm",
+      process.env["OLLAMA_BASE_URL"] ?? DEFAULT_OLLAMA_BASE_URL
+    )
+    .option(
+      "--llm-model <model>",
+      "Model for --check-llm generation probe (default: COMPOST_LLM_MODEL or Compost default)"
+    )
+    .option(
+      "--llm-timeout-ms <n>",
+      "Generation probe timeout for --check-llm",
+      (v) => parsePositiveInteger(v, DEFAULT_LLM_PROBE_TIMEOUT_MS),
+      parsePositiveInteger(
+        process.env["COMPOST_DOCTOR_LLM_TIMEOUT_MS"],
+        DEFAULT_LLM_PROBE_TIMEOUT_MS
+      )
+    )
+    .option(
+      "--strict-llm",
+      "For --check-llm, exit non-zero on generation timeout instead of reporting a warning"
     )
     .option(
       "--check-pii",
@@ -340,28 +411,78 @@ export function registerDoctor(program: Command): void {
       }
 
       if (opts.checkLlm) {
-        // Debate 011 Day 4: single-shot Ollama probe with a tight 3s
-        // timeout so `compost doctor --check-llm` can run in a keyboard-
-        // friendly window even when Ollama is hung. Exit code 0 on
-        // success, non-zero on failure with a setup hint.
+        // Keep the service liveness check separate from the model-generation
+        // probe. A cold 30B-class local model often misses a 3s keyboard
+        // window; that is useful operator signal, but not the same as
+        // "Ollama is down".
         const { OllamaLLMService } = await import(
           "../../../compost-core/src/llm/ollama"
         );
-        const llm = new OllamaLLMService();
+        const baseUrl = opts.ollamaUrl;
+        const serviceT0 = performance.now();
+        let modelNames: string[] = [];
+        try {
+          const body = (await fetchJsonWithTimeout(
+            `${baseUrl.replace(/\/$/, "")}/api/tags`,
+            DEFAULT_OLLAMA_SERVICE_TIMEOUT_MS
+          )) as { models?: Array<{ name?: string; model?: string }> };
+          modelNames = (body.models ?? [])
+            .map((m) => m.name ?? m.model)
+            .filter((m): m is string => Boolean(m));
+        } catch (err) {
+          const latencyMs = +(performance.now() - serviceT0).toFixed(1);
+          process.stdout.write(
+            JSON.stringify(
+              {
+                ok: false,
+                ollama: {
+                  ok: false,
+                  base_url: baseUrl,
+                  latency_ms: latencyMs,
+                  error: errorInfo(err),
+                },
+                hint:
+                  "Ollama did not answer /api/tags. Start it with `ollama serve` " +
+                  "or check OLLAMA_BASE_URL / --ollama-url.",
+              },
+              null,
+              2
+            ) + "\n"
+          );
+          process.exit(1);
+        }
+
+        const serviceLatencyMs = +(performance.now() - serviceT0).toFixed(1);
+        const configuredModel = opts.llmModel ?? process.env["COMPOST_LLM_MODEL"];
+        const llm = new OllamaLLMService({
+          baseUrl,
+          ...(configuredModel ? { model: configuredModel } : {}),
+        });
+        const timeoutMs = opts.llmTimeoutMs;
         const t0 = performance.now();
         try {
           const answer = await llm.generate("ping", {
             maxTokens: 8,
-            timeoutMs: 3_000,
+            timeoutMs,
           });
           const latencyMs = +(performance.now() - t0).toFixed(1);
           process.stdout.write(
             JSON.stringify(
               {
                 ok: true,
-                model: llm.model,
-                latency_ms: latencyMs,
-                sample_response: answer.slice(0, 80),
+                ollama: {
+                  ok: true,
+                  base_url: baseUrl,
+                  latency_ms: serviceLatencyMs,
+                  models: modelNames,
+                },
+                generation: {
+                  ok: true,
+                  model: llm.model,
+                  timeout_ms: timeoutMs,
+                  latency_ms: latencyMs,
+                  sample_response: answer.slice(0, 80),
+                },
               },
               null,
               2
@@ -370,24 +491,38 @@ export function registerDoctor(program: Command): void {
           return;
         } catch (err) {
           const latencyMs = +(performance.now() - t0).toFixed(1);
-          const name = err instanceof Error ? err.name : "unknown";
-          const message = err instanceof Error ? err.message : String(err);
+          const error = errorInfo(err);
+          const fatal = isFatalLlmProbeError(error, Boolean(opts.strictLlm));
           process.stdout.write(
             JSON.stringify(
               {
-                ok: false,
-                model: llm.model,
-                latency_ms: latencyMs,
-                error: { name, message },
+                ok: !fatal,
+                ollama: {
+                  ok: true,
+                  base_url: baseUrl,
+                  latency_ms: serviceLatencyMs,
+                  models: modelNames,
+                },
+                generation: {
+                  ok: false,
+                  model: llm.model,
+                  timeout_ms: timeoutMs,
+                  latency_ms: latencyMs,
+                  error,
+                  severity: fatal ? "error" : "warn",
+                  strict: Boolean(opts.strictLlm),
+                },
                 hint:
-                  "Is Ollama running? Try `ollama serve` and confirm " +
-                  "http://localhost:11434 responds, then re-run `compost doctor --check-llm`.",
+                  fatal
+                    ? "Ollama is reachable, but the generation probe failed. Check the model name, increase --llm-timeout-ms, or run without --strict-llm for a liveness-only check."
+                    : "Ollama is reachable, but the generation probe did not finish inside the quick timeout. Large or cold local models can do this. Use --llm-timeout-ms for a deeper probe, --llm-model for a smaller model, or --strict-llm when automation should fail on this.",
               },
               null,
               2
             ) + "\n"
           );
-          process.exit(1);
+          if (fatal) process.exit(1);
+          return;
         }
       }
 
@@ -530,7 +665,7 @@ export function registerDoctor(program: Command): void {
       }
 
       process.stderr.write(
-        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, --check-llm, --check-pii, or --check-integrity\n"
+        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, --check-llm, --check-pii, --check-integrity, or --reconcile-engram\n"
       );
       process.exit(1);
     });

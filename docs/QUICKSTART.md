@@ -141,7 +141,8 @@ alias cstats='cd /path/to/Compost && bun packages/compost-cli/src/main.ts reason
 ```bash
 compost doctor --check-pii          # scan outbox for PII leaks
 compost doctor --check-integrity    # FK + fact-links + policy audit
-compost doctor --check-llm          # probe local LLM + circuit breaker
+compost doctor --check-llm          # confirm Ollama is reachable + run a quick generation probe
+compost doctor --check-llm --strict-llm --llm-timeout-ms 30000  # fail automation on slow/failed generation
 bun run check:engram-boundary       # static Compost/Engram boundary drift check
 ```
 
@@ -152,6 +153,10 @@ Healthy local baseline:
 - `doctor --check-pii` reports zero rows.
 - `doctor --check-integrity` reports zero issues after active ingest backlog is
   empty.
+- `doctor --check-llm` reports `ollama.ok=true`. If `generation.ok=false` with
+  `severity=warn`, Ollama is reachable but the configured model did not finish
+  inside the quick timeout; use `--llm-timeout-ms`, `--llm-model`, or
+  `--strict-llm` depending on whether you want a deeper probe or CI failure.
 - outbox pending/quarantine/error, unknown `transform_policy`, and stale wiki
   counts are all zero.
 
@@ -191,6 +196,6 @@ label in payload metadata, but callers should still send registered ids.
 |---|---|
 | `compost add` hangs | Ollama is not running. `ollama serve &` |
 | `ingest` stops advancing with one fresh `running` derivation | Ollama embedding is busy or hung; check `~/.compost/daemon.log`, `pgrep -af 'ollama|compost_ingest'`, and `compost doctor --check-llm` |
-| `ask` returns BM25-only output | LLM circuit breaker open. `compost doctor --check-llm` |
+| `ask` returns BM25-only output | LLM circuit breaker open or generation is too slow. `compost doctor --check-llm`; if `ollama.ok=true` but `generation.ok=false`, retry with `--llm-timeout-ms 30000` or a smaller `--llm-model` |
 | "migration failed" | Stale `~/.compost/ledger.db`. Back it up and re-run `scripts/install.sh` |
 | Nothing in `compost query` after add | Extraction subprocess failed. Check `compost triage` |

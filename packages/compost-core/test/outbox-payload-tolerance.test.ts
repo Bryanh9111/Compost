@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { appendToOutbox, drainOne } from "../src/ledger/outbox";
 import type { OutboxEvent } from "../src/ledger/outbox";
+import { upsertPolicies } from "../src/policies/registry";
 import { applyMigrations } from "../src/schema/migrator";
 
 const AUTO_WRAPPED_REASON =
@@ -38,6 +39,7 @@ describe("outbox payload tolerance", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "compost-outbox-payload-"));
     db = new Database(join(tmpDir, "ledger.db"));
     applyMigrations(db);
+    upsertPolicies(db);
   });
 
   afterEach(() => {

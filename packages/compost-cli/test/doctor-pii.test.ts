@@ -5,6 +5,10 @@ import { tmpdir } from "os";
 import { Database } from "bun:sqlite";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
+import {
+  isFatalLlmProbeError,
+  parsePositiveInteger,
+} from "../src/commands/doctor";
 
 const CLI_ENTRY = join(__dirname, "..", "src", "main.ts");
 
@@ -209,5 +213,24 @@ describe("doctor argument validation", () => {
     expect(result.stderr).toContain("--check-integrity");
 
     rmSync(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe("doctor --check-llm helpers", () => {
+  test("parses positive integer options with fallback", () => {
+    expect(parsePositiveInteger(undefined, 3000)).toBe(3000);
+    expect(parsePositiveInteger("12000", 3000)).toBe(12000);
+    expect(parsePositiveInteger(4500, 3000)).toBe(4500);
+    expect(parsePositiveInteger("0", 3000)).toBe(3000);
+    expect(parsePositiveInteger("not-a-number", 3000)).toBe(3000);
+  });
+
+  test("treats quick generation timeout as warning unless strict", () => {
+    const timeout = { name: "AbortError", message: "The operation was aborted." };
+    const realError = { name: "Error", message: "model not found" };
+
+    expect(isFatalLlmProbeError(timeout, false)).toBe(false);
+    expect(isFatalLlmProbeError(timeout, true)).toBe(true);
+    expect(isFatalLlmProbeError(realError, false)).toBe(true);
   });
 });

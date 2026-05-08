@@ -274,7 +274,7 @@ time (5 sites; 4 TS + 1 Python):
 | `cognitive/wiki.ts synthesizePage` `llm.generate` (site key `wiki.synthesis`) | L3 wiki page synthesis | timeout / 5xx / ECONNREFUSED | mark wiki page `stale_at = now`, return cached version, surface `stale_wiki` triage signal |
 | `query/ask.ts expandQuery` `llm.generate` (site key `ask.expand`) | Multi-query expansion for retrieval | timeout / 5xx | fall back to original query verbatim, log warning with err.name + message |
 | `query/ask.ts ask` answer-synthesis `llm.generate` (site key `ask.answer`) | Final answer synthesis | timeout / 5xx | return BM25 top-N facts as plain text with `[LLM unavailable]` banner; if `hits.length === 0`, also tries slug-matching question against `wiki_pages.title` / `path` |
-| `compost-daemon/src/main.ts` boot-time `new BreakerRegistry(new OllamaLLMService())` | **Single daemon-wide registry** (Week 4 Day 1 consolidation). Injected into both `startMcpServer(db, registry)` and `startReflectScheduler(db, { llm: registry, dataDir })`, so circuit state for `ask.*` and `wiki.synthesis` lives in one place. | first `generate()` call fails with network error; surfaces via circuit breaker (no ctor-time validation today) | return MCP error with hint; `compost doctor --check-llm` ships a manual single-shot probe (Week 4 Day 4). |
+| `compost-daemon/src/main.ts` boot-time `new BreakerRegistry(new OllamaLLMService())` | **Single daemon-wide registry** (Week 4 Day 1 consolidation). Injected into both `startMcpServer(db, registry)` and `startReflectScheduler(db, { llm: registry, dataDir })`, so circuit state for `ask.*` and `wiki.synthesis` lives in one place. | first `generate()` call fails with network error; surfaces via circuit breaker (no ctor-time validation today) | return MCP error with hint; `compost doctor --check-llm` ships a manual probe that separates Ollama service liveness (`/api/tags`) from bounded model generation. A generation `AbortError` is reported as a warning by default and becomes fatal with `--strict-llm`. |
 | `compost-ingest/.../llm_facts.py` (Python) | LLM-based fact extraction during ingest | already has Python-side retry; **out of scope for P0-6 TS wrapper** | (existing Python retry; surface `stuck_outbox` if queue grows) |
 
 ### CLI surface inventory (Week 4)
@@ -288,7 +288,7 @@ missing-target / runtime failure, exit 0 otherwise. JSON on stdout.
 | `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport` | (none) |
 | `compost triage list` | Read `health_signals` | `--kind` / `--since` / `--include-resolved` / `--limit` |
 | `compost triage resolve <id>` | Mark signal resolved (surface-only; does NOT fix the underlying cause) | `--by <user\|agent>`; exit 1 if id missing or already resolved |
-| `compost doctor --check-llm` | Single-shot Ollama probe (3s timeout); JSON report + setup hint | (none) |
+| `compost doctor --check-llm` | Ollama `/api/tags` liveness probe plus bounded generation probe (default 3s, configurable with `--llm-timeout-ms`; model configurable with `--llm-model` / `COMPOST_LLM_MODEL`) | (none) |
 | `compost doctor --reconcile` | Observations vs facts delta | (none) |
 | `compost doctor --rebuild L1` | Atomic LanceDB rebuild from SQLite chunks | (none) |
 | `compost backup` / `compost restore` | P0-7 backup/restore | see command `--help` |
