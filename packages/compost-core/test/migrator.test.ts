@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 21 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 22 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(21);
+    expect(result.applied).toHaveLength(22);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -47,6 +47,7 @@ describe("migrator", () => {
       "0019_reasoning_chain_verdict",
       "0020_reasoning_scheduler_state",
       "0021_action_log",
+      "0022_engram_context_backfill",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -183,13 +184,52 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(21);
+    expect(before.pending).toHaveLength(22);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(21);
+    expect(after.applied).toHaveLength(22);
     expect(after.pending).toHaveLength(0);
+  });
+
+  test("0022 backfills Engram project contexts for existing observations", () => {
+    applyMigrations(db);
+
+    db.run("DELETE FROM _compost_migrations WHERE name = '0022_engram_context_backfill'");
+    db.run(
+      "INSERT OR IGNORE INTO source VALUES ('engram-stream','engram://memory','sensory',NULL,0.0,'user',datetime('now'),NULL)"
+    );
+    db.run(
+      `INSERT INTO observations
+       (observe_id, source_id, source_uri, occurred_at, captured_at,
+        content_hash, raw_hash, raw_bytes, blob_ref, mime_type, adapter,
+        adapter_sequence, trust_tier, idempotency_key, transform_policy,
+        metadata, origin_hash, method)
+       VALUES
+       ('obs-engram-athena','engram-stream','engram://memory/mem-athena',
+        datetime('now'),datetime('now'),'hash-athena','raw-athena',NULL,NULL,
+        'application/json','engram',1,'user','engram:mem-athena','tp-2026-04',
+        '{"engram_project":"athena","engram_scope":"project"}',NULL,'engram')`
+    );
+    db.run(
+      `INSERT INTO facts(fact_id, subject, predicate, object, observe_id)
+       VALUES ('fact-engram-athena','athena','fact','project context backfill',
+        'obs-engram-athena')`
+    );
+
+    const result = applyMigrations(db);
+    expect(result.applied.map((m) => m.name)).toEqual([
+      "0022_engram_context_backfill",
+    ]);
+    expect(result.errors).toHaveLength(0);
+
+    const context = db
+      .query(
+        "SELECT context_id FROM fact_context WHERE fact_id = 'fact-engram-athena'"
+      )
+      .get() as { context_id: string } | null;
+    expect(context?.context_id).toBe("athena");
   });
 
   test("action_log schema exists after 0021", () => {

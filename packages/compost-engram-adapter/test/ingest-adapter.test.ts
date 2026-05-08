@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
+import { query } from "../../compost-core/src/query/search";
 import {
   ENGRAM_ADAPTER,
   ENGRAM_SOURCE_ID,
@@ -197,6 +198,36 @@ describe("ingestEngramEntry", () => {
     expect(chunk.text_content).toBe("I prefer Go over Python for CLI tools.");
   });
 
+  test("project entries are queryable through project context", async () => {
+    const r = await ingestEngramEntry(db, entry({ project: "athena" }));
+
+    const context = db
+      .query("SELECT id FROM context WHERE id = 'athena'")
+      .get() as { id: string } | null;
+    const factContext = db
+      .query(
+        `SELECT fc.context_id
+         FROM fact_context fc
+         JOIN facts f ON f.fact_id = fc.fact_id
+         WHERE f.observe_id = ?`
+      )
+      .get(r.observe_id) as { context_id: string } | null;
+    const sourceContext = db
+      .query(
+        "SELECT context_id FROM source_context WHERE source_id = ? AND context_id = 'athena'"
+      )
+      .get(ENGRAM_SOURCE_ID) as { context_id: string } | null;
+
+    expect(context?.id).toBe("athena");
+    expect(factContext?.context_id).toBe("athena");
+    expect(sourceContext?.context_id).toBe("athena");
+
+    const result = await query(db, "Go Python CLI tools", {
+      contexts: ["athena"],
+    });
+    expect(result.hits[0]?.fact.subject).toBe("athena");
+  });
+
   test("agent origin → trust_tier=first_party", async () => {
     const r = await ingestEngramEntry(db, entry({ origin: "agent" }));
     const row = db
@@ -219,6 +250,27 @@ describe("ingestEngramEntry", () => {
       .get() as { n: number };
     expect(obsCount.n).toBe(1);
     expect(factCount.n).toBe(1);
+  });
+
+  test("duplicate memory_id backfills missing project context links", async () => {
+    const first = await ingestEngramEntry(db, entry({ project: "athena" }));
+    db.run("DELETE FROM fact_context");
+    db.run("DELETE FROM source_context WHERE context_id = 'athena'");
+    db.run("DELETE FROM context WHERE id = 'athena'");
+
+    const second = await ingestEngramEntry(db, entry({ project: "athena" }));
+    expect(second.inserted).toBe("duplicate");
+    expect(second.observe_id).toBe(first.observe_id);
+
+    const linked = db
+      .query(
+        `SELECT COUNT(*) AS n
+         FROM fact_context fc
+         JOIN facts f ON f.fact_id = fc.fact_id
+         WHERE f.observe_id = ? AND fc.context_id = 'athena'`
+      )
+      .get(first.observe_id) as { n: number };
+    expect(linked.n).toBe(1);
   });
 
   test("metadata JSON round trip carries engram fields", async () => {

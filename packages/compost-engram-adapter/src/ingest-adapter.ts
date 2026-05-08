@@ -107,6 +107,46 @@ export function defaultSpoMapper(entry: EngramStreamEntry): FactTriple[] {
   return [{ subject, predicate, object }];
 }
 
+function contextIdsForEntry(entry: EngramStreamEntry): string[] {
+  const ids = new Set<string>();
+  if (entry.project) ids.add(entry.project);
+  else if (entry.scope === "global" || entry.scope === "meta") ids.add(entry.scope);
+  return Array.from(ids);
+}
+
+function ensureContextLinksForObservation(
+  db: Database,
+  entry: EngramStreamEntry,
+  observeId: string
+): void {
+  const contextIds = contextIdsForEntry(entry);
+  if (contextIds.length === 0) return;
+
+  const factRows = db
+    .query("SELECT fact_id FROM facts WHERE observe_id = ?")
+    .all(observeId) as Array<{ fact_id: string }>;
+
+  for (const contextId of contextIds) {
+    db.run(
+      `INSERT OR IGNORE INTO context (id, display_name)
+       VALUES (?, ?)`,
+      [contextId, contextId]
+    );
+    db.run(
+      `INSERT OR IGNORE INTO source_context (source_id, context_id)
+       VALUES (?, ?)`,
+      [ENGRAM_SOURCE_ID, contextId]
+    );
+    for (const row of factRows) {
+      db.run(
+        `INSERT OR IGNORE INTO fact_context (fact_id, context_id)
+         VALUES (?, ?)`,
+        [row.fact_id, contextId]
+      );
+    }
+  }
+}
+
 /**
  * Direct ingest: write observation + facts + chunks rows for one Engram
  * entry, bypassing outbox + Python extractor. Rationale: Engram payloads
@@ -142,6 +182,10 @@ export async function ingestEngramEntry(
     | undefined;
 
   if (existing) {
+    const tx = db.transaction(() => {
+      ensureContextLinksForObservation(db, entry, existing.observe_id);
+    });
+    tx();
     const factCount = db
       .query("SELECT COUNT(*) AS n FROM facts WHERE observe_id = ?")
       .get(existing.observe_id) as { n: number };
@@ -219,8 +263,9 @@ export async function ingestEngramEntry(
     );
     const nowUnixSec = Math.floor(Date.now() / 1000);
     for (const t of triples) {
+      const factId = uuidv7();
       insertFact.run(
-        uuidv7(),
+        factId,
         t.subject,
         t.predicate,
         t.object,
@@ -229,6 +274,7 @@ export async function ingestEngramEntry(
         nowUnixSec
       );
     }
+    ensureContextLinksForObservation(db, entry, observeId);
 
     const chunkId = uuidv7();
     db.run(
@@ -276,7 +322,7 @@ export async function ingestEngramEntry(
             [chunkId]
           );
         }
-      } catch (e) {
+      } catch (_e) {
         // Swallow — see comment above. Caller log can read embedded_at
         // IS NULL chunks to find pending backfill.
       }

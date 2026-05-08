@@ -80,11 +80,13 @@ export interface LegacyRrfCandidate {
   fact_id: string;
   rrf_score: number;
   semantic_score: number;
+  bm25_score: number;
+  retrieval_score: number;
 }
 
 export function rrfMergeAnnBm25(
   annRanked: Array<{ fact_id: string; score: number }>,
-  bm25Ranked: Array<{ fact_id: string }>
+  bm25Ranked: Array<{ fact_id: string; score?: number }>
 ): LegacyRrfCandidate[] {
   const merged = rrfMerge([
     {
@@ -93,13 +95,18 @@ export function rrfMergeAnnBm25(
     },
     {
       source: "bm25",
-      ranked: bm25Ranked.map((h) => ({ id: h.fact_id })),
+      ranked: bm25Ranked.map((h) => ({ id: h.fact_id, score: h.score })),
     },
   ]);
   return merged.map((m) => ({
     fact_id: m.id,
     rrf_score: m.rrf_score,
     semantic_score: m.source_scores["ann"] ?? 0,
+    bm25_score: m.source_scores["bm25"] ?? 0,
+    retrieval_score: Math.max(
+      m.source_scores["ann"] ?? 0,
+      m.source_scores["bm25"] ?? 0
+    ),
   }));
 }
 

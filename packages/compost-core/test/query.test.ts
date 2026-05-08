@@ -11,8 +11,6 @@ import { ingestFile } from "../src/pipeline/ingest";
 import {
   query,
   type QueryHit,
-  type QueryOptions,
-  type QueryResult,
 } from "../src/query/search";
 
 describe("query/search", () => {
@@ -142,11 +140,67 @@ describe("query/search (BM25-only, no vectorStore)", () => {
     expect(pythonHit).toBeTruthy();
   });
 
-  test("BM25-only has semantic_score=0 in ranking_components", async () => {
+  test("BM25-only contributes lexical retrieval score", async () => {
     const result = await query(db, "TypeScript");
     if (result.hits.length > 0) {
-      expect(result.hits[0].ranking_components.w1_semantic).toBe(0);
+      expect(result.hits[0].ranking_components.retrieval_semantic).toBe(0);
+      expect(result.hits[0].ranking_components.retrieval_bm25).toBeGreaterThan(0);
+      expect(result.hits[0].ranking_components.w1_semantic).toBeGreaterThan(0);
     }
+  });
+
+  test("BM25 query handles hyphenated terms", async () => {
+    db.run(
+      `INSERT INTO facts(fact_id, subject, predicate, object, confidence, importance, observe_id,
+       last_reinforced_at_unix_sec, half_life_seconds)
+       VALUES ('f-hyphen', 'athena', 'guardrail',
+       'A093 found IBKR paper order cancellation is clientId-sensitive for synthetic QQQ orders',
+       0.9, 0.7, 'obs1', ${Math.floor(Date.now() / 1000)}, 2592000)`
+    );
+
+    const result = await query(db, "clientId-sensitive cancellation");
+    expect(result.hits.map((h) => h.fact_id)).toContain("f-hyphen");
+  });
+
+  test("BM25 query treats FTS5 operators as literal tokens", async () => {
+    db.run(
+      `INSERT INTO facts(fact_id, subject, predicate, object, confidence, importance, observe_id,
+       last_reinforced_at_unix_sec, half_life_seconds)
+       VALUES ('f-operator', 'athena', 'guardrail',
+       'A093 cancellation note includes literal OR NEAR NOT operator words',
+       0.9, 0.7, 'obs1', ${Math.floor(Date.now() / 1000)}, 2592000)`
+    );
+
+    const result = await query(db, "OR NEAR NOT cancellation");
+    expect(result.hits.map((h) => h.fact_id)).toContain("f-operator");
+  });
+
+  test("BM25 lexical relevance beats stale access-heavy matches", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.run(
+      `INSERT INTO facts(fact_id, subject, predicate, object, confidence, importance, observe_id,
+       last_reinforced_at_unix_sec, half_life_seconds)
+       VALUES ('f-a092', 'athena', 'fact',
+       'A092 Kalman state canary was merged and pushed to main as a research-only negative result',
+       0.9, 0.5, 'obs1', ${now}, 2592000)`
+    );
+    db.run(
+      `INSERT INTO facts(fact_id, subject, predicate, object, confidence, importance, observe_id,
+       last_reinforced_at_unix_sec, half_life_seconds)
+       VALUES ('f-old-canary', 'athena', 'fact',
+       'A066 tiny paper canary prep completed with state-machine checks and no orders submitted',
+       0.9, 1.0, 'obs1', ${now}, 2592000)`
+    );
+
+    const insertAccess = db.prepare(
+      "INSERT INTO access_log (fact_id, accessed_at_unix_sec, query_id, ranking_profile_id) VALUES (?, ?, ?, ?)"
+    );
+    for (let i = 0; i < 100; i++) {
+      insertAccess.run("f-old-canary", now, `old-${i}`, "rp-phase3-default");
+    }
+
+    const result = await query(db, "A092 Kalman state canary", { budget: 1 });
+    expect(result.hits[0]?.fact_id).toBe("f-a092");
   });
 });
 

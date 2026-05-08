@@ -66,15 +66,15 @@ protection.
 2. Stage-0a: BM25 via FTS5 (SELECT fact_id WHERE MATCH q, ORDER BY rank, LIMIT 200)
 3. Stage-0b: LanceDB ANN (search(q, 200), deduplicate chunks to fact_id)
 4. RRF merge: 1/(k + rank_position) for each source, sum per fact_id
-5. Populate temp table query_candidates with (fact_id, semantic_score)
+5. Populate temp table query_candidates with (fact_id, semantic_score, bm25_score, rrf_score, retrieval_score)
 6. Stage-2: SQLite rerank with multi-factor formula:
-   score = w1*semantic + w2*temporal_decay + w3*access_frequency + w4*importance
+   score = w1*retrieval_score + w2*temporal_decay + w3*access_frequency + w4*importance
 7. Return QueryHit[] with ranking_components + provenance
 8. Append access_log (telemetry)
 9. Sample ranking_audit_log (if debug or env var)
 ```
 
-BM25 works independently when vectorStore is null (graceful degradation).
+`retrieval_score` preserves lexical BM25 relevance even when vectorStore is null, so BM25-only degraded mode still contributes to final ranking.
 
 ### Ask path (LLM synthesis)
 
@@ -101,7 +101,7 @@ BM25 works independently when vectorStore is null (graceful degradation).
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (21 migrations)
+## Database schema (22 migrations)
 
 ### Core tables
 
@@ -138,7 +138,7 @@ wiki_pages.path CASCADE -> wiki_page_observe
 
 ```
 src/
-  schema/          21 SQL migrations + migrator.ts
+  schema/          22 SQL migrations + migrator.ts
   policies/        transform_policy registry (tp-2026-04, tp-2026-04-02, tp-2026-04-03)
   ledger/          outbox.ts (append + drain), noteworthy.ts (5-gate dedup)
   queue/           lease.ts (claim, heartbeat, complete, fail)

@@ -57,19 +57,20 @@ const rrfMerge = rrfMergeAnnBm25;
 /**
  * Prepare a natural language query for FTS5 MATCH.
  * FTS5 defaults to implicit AND; we convert to OR for recall.
- * Strip special FTS5 syntax chars to avoid parse errors.
+ * Keep only tokenizer-like word runs so punctuation in identifiers
+ * (clientId-sensitive, A048/A088, git SHAs) cannot become FTS syntax.
  */
 function prepareFts5Query(q: string): string {
-  // Remove FTS5 special characters that could cause parse errors
-  const cleaned = q.replace(/[":*()^~{}[\]\\]/g, " ").trim();
-  // Split into words, filter empties, join with OR
-  const words = cleaned.split(/\s+/).filter((w) => w.length > 1);
-  if (words.length === 0) return "";
-  if (words.length === 1) return words[0]!;
-  return words.join(" OR ");
+  const words = Array.from(q.matchAll(/[\p{L}\p{N}_]+/gu), (m) => m[0])
+    .filter((w) => w.length > 1);
+  const uniqueWords = Array.from(new Set(words));
+  if (uniqueWords.length === 0) return "";
+  const quotedWords = uniqueWords.map((w) => `"${w}"`);
+  if (quotedWords.length === 1) return quotedWords[0]!;
+  return quotedWords.join(" OR ");
 }
 
-function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_id: string }> {
+function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_id: string; score: number }> {
   const ftsQuery = prepareFts5Query(q);
   if (!ftsQuery) return [];
 
@@ -85,7 +86,10 @@ function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_i
          LIMIT $limit`
       )
       .all({ $q: ftsQuery, $limit: topK }) as Array<{ fact_id: string }>;
-    return rows;
+    return rows.map((row, i) => ({
+      fact_id: row.fact_id,
+      score: 1 / (i + 1),
+    }));
   } catch {
     // FTS5 MATCH can throw on malformed queries
     return [];
@@ -147,11 +151,14 @@ export async function query(
 
   // Stage-2: SQLite rerank via temp table bridge
   db.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS query_candidates (
+    DROP TABLE IF EXISTS query_candidates;
+    CREATE TEMP TABLE query_candidates (
       fact_id TEXT PRIMARY KEY,
-      semantic_score REAL NOT NULL
+      semantic_score REAL NOT NULL,
+      bm25_score REAL NOT NULL,
+      rrf_score REAL NOT NULL,
+      retrieval_score REAL NOT NULL
     );
-    DELETE FROM query_candidates;
   `);
 
   db.exec(`
@@ -162,10 +169,18 @@ export async function query(
   `);
 
   const insertCandidate = db.prepare(
-    "INSERT OR IGNORE INTO query_candidates (fact_id, semantic_score) VALUES (?, ?)"
+    `INSERT OR IGNORE INTO query_candidates
+     (fact_id, semantic_score, bm25_score, rrf_score, retrieval_score)
+     VALUES (?, ?, ?, ?, ?)`
   );
   for (const c of merged) {
-    insertCandidate.run(c.fact_id, c.semantic_score);
+    insertCandidate.run(
+      c.fact_id,
+      c.semantic_score,
+      c.bm25_score,
+      c.rrf_score,
+      c.retrieval_score
+    );
   }
 
   // Context filter
@@ -186,9 +201,9 @@ export async function query(
         f.fact_id, f.subject, f.predicate, f.object, f.confidence,
         f.importance, f.half_life_seconds, f.last_reinforced_at_unix_sec,
         o.source_uri, o.captured_at, o.adapter, o.transform_policy,
-        qc.semantic_score,
+        qc.semantic_score, qc.bm25_score, qc.rrf_score, qc.retrieval_score,
         COALESCE(al.cnt, 0) AS access_count,
-        ($w1_semantic * COALESCE(qc.semantic_score, 0.0)) AS w1_val,
+        ($w1_semantic * COALESCE(qc.retrieval_score, 0.0)) AS w1_val,
         ($w2_temporal * CASE
           WHEN f.half_life_seconds > 0
           THEN POW(0.5, ($as_of - f.last_reinforced_at_unix_sec) * 1.0 / f.half_life_seconds)
@@ -198,7 +213,7 @@ export async function query(
         ($w4_importance * COALESCE(f.importance, 0.0)) AS w4_val,
         (SELECT json_group_array(fc2.context_id) FROM fact_context fc2 WHERE fc2.fact_id = f.fact_id) AS contexts_json,
         (
-          ($w1_semantic * COALESCE(qc.semantic_score, 0.0))
+          ($w1_semantic * COALESCE(qc.retrieval_score, 0.0))
           + ($w2_temporal * CASE
               WHEN f.half_life_seconds > 0
               THEN POW(0.5, ($as_of - f.last_reinforced_at_unix_sec) * 1.0 / f.half_life_seconds)
@@ -267,6 +282,9 @@ export async function query(
       w2_temporal: r.w2_val as number,
       w3_access: r.w3_val as number,
       w4_importance: r.w4_val as number,
+      retrieval_semantic: r.semantic_score as number,
+      retrieval_bm25: r.bm25_score as number,
+      retrieval_rrf: r.rrf_score as number,
     },
     final_score: r.final_score as number,
   }));
