@@ -15,7 +15,7 @@
     "compost-core": "workspace:*",
     "compost-engram-adapter": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "pino": "^9.6.0",
+    "pino": "^10.3.1",
     "uuid": "^14.0.0",
     "zod": "^3.25.0"
   },
