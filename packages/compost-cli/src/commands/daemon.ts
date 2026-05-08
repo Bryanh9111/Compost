@@ -80,6 +80,10 @@ async function sendSocket(cmd: string): Promise<unknown> {
   });
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function registerDaemon(program: Command): void {
   const daemon = program
     .command("daemon")
@@ -99,7 +103,12 @@ export function registerDaemon(program: Command): void {
       );
       const dir = dataDir();
       process.stdout.write(`starting daemon in ${dir}\n`);
-      await startDaemon(dir, opts.withMcp === true, { disabled: false });
+      try {
+        await startDaemon(dir, opts.withMcp === true, { disabled: false });
+      } catch (err) {
+        process.stderr.write(`error: ${errorMessage(err)}\n`);
+        process.exitCode = 1;
+      }
       // startDaemon keeps process alive via signal handlers
     });
 

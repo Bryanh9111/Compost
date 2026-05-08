@@ -383,7 +383,10 @@ async function startControlSocket(
         const cmd = data.toString().trim();
         log.debug({ cmd }, "control socket command");
         if (cmd === "stop") {
-          void stopDaemon().then(() => process.exit(0));
+          _socket.write(JSON.stringify({ ok: true, stopping: true }) + "\n");
+          setTimeout(() => {
+            void stopDaemon().then(() => process.exit(0));
+          }, 10);
         } else if (cmd === "status") {
           const info = {
             pid: process.pid,
