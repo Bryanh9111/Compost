@@ -426,6 +426,17 @@ describe("triage P0-1 scanUnresolvedContradiction", () => {
     expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
   });
 
+  test("does NOT emit for unknown LLM-style predicates by default", () => {
+    insertFact(db, "f1", "service-a", "runs_on", "linux", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f2", "service-a", "runs_on", "macos", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
+  });
+
   test("does NOT emit for generic section-label subjects", () => {
     insertFact(db, "f1", "Description", "capital-of", "france", {
       createdAtSqlExpr: "datetime('now', '-10 days')",

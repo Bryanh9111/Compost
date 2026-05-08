@@ -102,7 +102,9 @@ describe("splitInsight — paragraph strategy", () => {
       expect(c.source_trace.synthesized_at).toBe(NOW);
     }
     // Sequential indices
-    chunks.forEach((c, i) => expect(c.source_trace.chunk_index).toBe(i));
+    for (const [i, c] of chunks.entries()) {
+      expect(c.source_trace.chunk_index).toBe(i);
+    }
   });
 });
 

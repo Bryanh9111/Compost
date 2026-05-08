@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { addLink } from "./fact-links";
 import { recordDecision, TIER_FOR_KIND, CONFIDENCE_FLOORS } from "./audit";
+import {
+  GENERIC_CONTRADICTION_SUBJECTS,
+  SINGLE_VALUE_CONTRADICTION_PREDICATES,
+} from "./contradiction-policy";
 
 /**
  * Reflection report — returned by reflect(). Spec §8.4.
@@ -136,9 +140,19 @@ export function reflect(db: Database): ReflectionReport {
   }
 
   // Step 3: Contradiction detection + resolution
-  // Debate 9 consensus: detect facts with same subject+predicate but different object.
+  // Detect facts with same subject+predicate but different object, but only
+  // for known single-valued predicates. Unknown or extraction predicates are
+  // treated as normal fan-out and must not be destructively arbitrated.
   // Resolution: newer > higher-confidence > multi-source. Loser gets superseded_by.
   try {
+    if (SINGLE_VALUE_CONTRADICTION_PREDICATES.length > 0) {
+      const predicatePlaceholders = SINGLE_VALUE_CONTRADICTION_PREDICATES.map(
+        () => "?"
+      ).join(", ");
+      const genericSubjectPlaceholders = GENERIC_CONTRADICTION_SUBJECTS.map(
+        () => "?"
+      ).join(", ");
+
     // Find conflicting fact pairs (same subject + predicate, different object, both active)
     const conflicts = db
       .query(
@@ -153,6 +167,9 @@ export function reflect(db: Database): ReflectionReport {
            AND f1.object != f2.object
          WHERE f1.archived_at IS NULL AND f2.archived_at IS NULL
            AND f1.superseded_by IS NULL AND f2.superseded_by IS NULL
+           AND lower(trim(f1.predicate)) IN (${predicatePlaceholders})
+           AND lower(trim(f1.subject)) NOT IN (${genericSubjectPlaceholders})
+           AND lower(trim(f1.subject)) NOT GLOB 'image [0-9]*'
            AND (
              f1.confidence > f2.confidence
              OR (f1.confidence = f2.confidence AND f1.created_at > f2.created_at)
@@ -160,7 +177,10 @@ export function reflect(db: Database): ReflectionReport {
            )
          LIMIT 100`
       )
-      .all() as Array<{
+      .all(
+        ...SINGLE_VALUE_CONTRADICTION_PREDICATES,
+        ...GENERIC_CONTRADICTION_SUBJECTS
+      ) as Array<{
       winner_id: string;
       loser_id: string;
       subject: string;
@@ -299,6 +319,7 @@ export function reflect(db: Database): ReflectionReport {
         report.contradictionsResolved = losersResolved;
       });
       resolveTx();
+    }
     }
   } catch (err) {
     report.errors.push({

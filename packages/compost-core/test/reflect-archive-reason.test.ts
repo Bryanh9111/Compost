@@ -93,8 +93,8 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   test("Step 3 contradiction loser gets archive_reason='contradicted' + replaced_by_fact_id", () => {
     // Two facts with same (subject, predicate), different object
     // Winner picked by higher confidence
-    insertFact(db, "winner", "earth", "is", "round", { confidence: 0.95 });
-    insertFact(db, "loser", "earth", "is", "flat", { confidence: 0.3 });
+    insertFact(db, "winner", "paris", "capital-of", "france", { confidence: 0.95 });
+    insertFact(db, "loser", "paris", "capital-of", "england", { confidence: 0.3 });
 
     const report = reflect(db);
     expect(report.contradictionsResolved).toBeGreaterThanOrEqual(1);
@@ -133,8 +133,8 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   });
 
   test("contradicted loser is removed from active queries (no longer triggers re-resolution)", () => {
-    insertFact(db, "winner", "x", "is", "y", { confidence: 0.9 });
-    insertFact(db, "loser", "x", "is", "z", { confidence: 0.5 });
+    insertFact(db, "winner", "paris", "capital-of", "france", { confidence: 0.9 });
+    insertFact(db, "loser", "paris", "capital-of", "england", { confidence: 0.5 });
 
     const r1 = reflect(db);
     expect(r1.contradictionsResolved).toBe(1);
@@ -142,6 +142,54 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
     // Second reflect must NOT re-resolve the same conflict (loser is archived)
     const r2 = reflect(db);
     expect(r2.contradictionsResolved).toBe(0);
+  });
+
+  test("does NOT archive multi-valued extraction predicates", () => {
+    insertFact(db, "d1", "repo-a", "describes", "a CLI tool", { confidence: 0.9 });
+    insertFact(db, "d2", "repo-a", "describes", "an MCP server", {
+      confidence: 0.8,
+    });
+    insertFact(db, "h1", "repo-b", "has_architecture", "SQLite storage", {
+      confidence: 0.9,
+    });
+    insertFact(db, "h2", "repo-b", "has_architecture", "Bun CLI", {
+      confidence: 0.8,
+    });
+
+    const report = reflect(db);
+    expect(report.contradictionsResolved).toBe(0);
+
+    const active = db
+      .query(
+        "SELECT COUNT(*) AS c FROM facts WHERE fact_id IN ('d1','d2','h1','h2') AND archived_at IS NULL"
+      )
+      .get() as { c: number };
+    expect(active.c).toBe(4);
+
+    const audits = db
+      .query("SELECT COUNT(*) AS c FROM decision_audit WHERE kind = 'contradiction_arbitration'")
+      .get() as { c: number };
+    expect(audits.c).toBe(0);
+
+    const links = db
+      .query("SELECT COUNT(*) AS c FROM fact_links WHERE kind = 'contradicts'")
+      .get() as { c: number };
+    expect(links.c).toBe(0);
+  });
+
+  test("does NOT archive unknown LLM-style predicates by default", () => {
+    insertFact(db, "r1", "service-a", "runs_on", "linux", { confidence: 0.9 });
+    insertFact(db, "r2", "service-a", "runs_on", "macos", { confidence: 0.8 });
+
+    const report = reflect(db);
+    expect(report.contradictionsResolved).toBe(0);
+
+    const active = db
+      .query(
+        "SELECT COUNT(*) AS c FROM facts WHERE fact_id IN ('r1','r2') AND archived_at IS NULL"
+      )
+      .get() as { c: number };
+    expect(active.c).toBe(2);
   });
 
   test("manual-archived fact already has archive_reason='manual' preserved (no overwrite)", () => {
@@ -197,9 +245,9 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   test("3-way conflict: each loser points to single strongest winner (deterministic)", () => {
     // Same (subject, predicate), three different objects with descending confidence.
     // Strongest is 'a' (0.95), then 'b' (0.7), then 'c' (0.4).
-    insertFact(db, "a", "earth", "is", "round", { confidence: 0.95 });
-    insertFact(db, "b", "earth", "is", "ellipsoid", { confidence: 0.7 });
-    insertFact(db, "c", "earth", "is", "flat", { confidence: 0.4 });
+    insertFact(db, "a", "paris", "capital-of", "france", { confidence: 0.95 });
+    insertFact(db, "b", "paris", "capital-of", "england", { confidence: 0.7 });
+    insertFact(db, "c", "paris", "capital-of", "spain", { confidence: 0.4 });
 
     const report = reflect(db);
     // Both b and c should be archived as losers, exactly once each.
@@ -234,12 +282,12 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   });
 
   test("two unrelated arbitrations get distinct conflict_group ids", () => {
-    // Cluster 1: earth.is.round vs earth.is.flat
-    insertFact(db, "earth-w", "earth", "is", "round", { confidence: 0.9 });
-    insertFact(db, "earth-l", "earth", "is", "flat", { confidence: 0.4 });
-    // Cluster 2: sky.is.blue vs sky.is.green
-    insertFact(db, "sky-w", "sky", "is", "blue", { confidence: 0.9 });
-    insertFact(db, "sky-l", "sky", "is", "green", { confidence: 0.4 });
+    // Cluster 1: paris.capital-of.france vs paris.capital-of.england
+    insertFact(db, "earth-w", "paris", "capital-of", "france", { confidence: 0.9 });
+    insertFact(db, "earth-l", "paris", "capital-of", "england", { confidence: 0.4 });
+    // Cluster 2: berlin.capital-of.germany vs berlin.capital-of.austria
+    insertFact(db, "sky-w", "berlin", "capital-of", "germany", { confidence: 0.9 });
+    insertFact(db, "sky-l", "berlin", "capital-of", "austria", { confidence: 0.4 });
 
     reflect(db);
 
@@ -256,9 +304,9 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
 
   test("3-way conflict: report.contradictionsResolved counts losers, not raw pairs", () => {
     // 3 objects -> SQL returns 3 pairs (a>b, a>c, b>c) but only 2 losers
-    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
-    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
-    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+    insertFact(db, "a", "paris", "capital-of", "france", { confidence: 0.9 });
+    insertFact(db, "b", "paris", "capital-of", "england", { confidence: 0.7 });
+    insertFact(db, "c", "paris", "capital-of", "spain", { confidence: 0.4 });
     const report = reflect(db);
     expect(report.contradictionsResolved).toBe(2);
   });
@@ -266,8 +314,8 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   // ---- Debate 005 fix #1: contradiction creates fact_links edges ----
 
   test("contradiction resolution writes 'contradicts' edges to fact_links", () => {
-    insertFact(db, "winner", "paris", "is-in", "france", { confidence: 0.95 });
-    insertFact(db, "loser", "paris", "is-in", "germany", { confidence: 0.3 });
+    insertFact(db, "winner", "paris", "capital-of", "france", { confidence: 0.95 });
+    insertFact(db, "loser", "paris", "capital-of", "england", { confidence: 0.3 });
 
     reflect(db);
 
@@ -283,9 +331,9 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   });
 
   test("3-way conflict creates one 'contradicts' edge per loser (not per SQL pair)", () => {
-    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
-    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
-    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+    insertFact(db, "a", "paris", "capital-of", "france", { confidence: 0.9 });
+    insertFact(db, "b", "paris", "capital-of", "england", { confidence: 0.7 });
+    insertFact(db, "c", "paris", "capital-of", "spain", { confidence: 0.4 });
 
     reflect(db);
 
@@ -304,8 +352,8 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
   // ---- P0-2 Week 3: reflect writes contradiction_arbitration audit ----
 
   test("reflect step 3 writes one contradiction_arbitration audit row per cluster", () => {
-    insertFact(db, "winner", "earth", "is", "round", { confidence: 0.95 });
-    insertFact(db, "loser", "earth", "is", "flat", { confidence: 0.3 });
+    insertFact(db, "winner", "paris", "capital-of", "france", { confidence: 0.95 });
+    insertFact(db, "loser", "paris", "capital-of", "england", { confidence: 0.3 });
 
     reflect(db);
 
@@ -329,14 +377,14 @@ describe("reflect archive_reason writes (P0-4, Phase 4 Batch D)", () => {
     expect(ev.kind).toBe("contradiction_arbitration");
     expect(ev.winner_id).toBe("winner");
     expect(ev.loser_ids).toEqual(["loser"]);
-    expect(ev.subject).toBe("earth");
-    expect(ev.predicate).toBe("is");
+    expect(ev.subject).toBe("paris");
+    expect(ev.predicate).toBe("capital-of");
   });
 
   test("reflect step 3: 3-way cluster records one audit row with plural loser_ids", () => {
-    insertFact(db, "a", "x", "p", "v1", { confidence: 0.9 });
-    insertFact(db, "b", "x", "p", "v2", { confidence: 0.7 });
-    insertFact(db, "c", "x", "p", "v3", { confidence: 0.4 });
+    insertFact(db, "a", "paris", "capital-of", "france", { confidence: 0.9 });
+    insertFact(db, "b", "paris", "capital-of", "england", { confidence: 0.7 });
+    insertFact(db, "c", "paris", "capital-of", "spain", { confidence: 0.4 });
 
     reflect(db);
 

@@ -149,6 +149,22 @@ describe("startDaemon", () => {
       ).toBe(true);
     }
   });
+
+  it("rejects a second start without removing the active control socket", async () => {
+    tmpDir = makeTmpDir();
+    const dataDir = join(tmpDir, "compost-double-start");
+
+    await startDaemon(dataDir, false);
+
+    await expect(startDaemon(dataDir, false)).rejects.toThrow(
+      "already appears to be running"
+    );
+
+    const status = await sendSocket(join(dataDir, "daemon.sock"), "status") as {
+      pid?: unknown;
+    };
+    expect(status.pid).toBe(process.pid);
+  });
 });
 
 // ---------------------------------------------------------------------------

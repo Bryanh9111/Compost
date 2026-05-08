@@ -113,9 +113,9 @@ describe("EngramWriter", () => {
     expect(roots.size).toBe(1);
     expect(result.outcomes.every((o) => o.status === "written")).toBe(true);
     // All chunk contents within cap
-    client.rememberCalls.forEach((c) =>
-      expect(c.content.length).toBeLessThanOrEqual(MAX_CONTENT_CHARS)
-    );
+    for (const c of client.rememberCalls) {
+      expect(c.content.length).toBeLessThanOrEqual(MAX_CONTENT_CHARS);
+    }
   });
 
   test("remember failure → enqueues to pending, status=pending", async () => {

@@ -1,6 +1,13 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  readFileSync,
+} from "fs";
 import { join } from "path";
+import { createConnection } from "net";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import { upsertPolicies } from "../../compost-core/src/policies/registry";
 // startReasoningScheduler removed from import 2026-05-02 v4 metacognitive turn — see line 151.
@@ -86,13 +93,15 @@ let _handle: DaemonHandle | null = null;
  *
  * @param dataDir - directory for ledger.db, daemon.pid, daemon.sock.
  *                  Defaults to ~/.compost. Pass a temp dir for tests.
- * @param withMcp  - whether to start the MCP stdio server. Default true.
+ * @param withMcp  - whether to start the MCP stdio server. Default false.
+ *                  Background daemons should not bind stdio; use `compost mcp`
+ *                  for agent-spawned MCP sessions.
  *                  Pass false in tests that don't need MCP.
  * @param engramOpts - optional Engram integration config. See DaemonEngramOpts.
  */
 export async function startDaemon(
   dataDir: string = DEFAULT_DATA_DIR,
-  withMcp = true,
+  withMcp = false,
   engramOpts: DaemonEngramOpts = {}
 ): Promise<DaemonHandle> {
   // 1. Ensure data directory (chmod 700)
@@ -100,6 +109,10 @@ export async function startDaemon(
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     log.info({ dataDir }, "created data directory");
   }
+
+  const pidPath = join(dataDir, "daemon.pid");
+  const sockPath = join(dataDir, "daemon.sock");
+  await assertDaemonNotAlreadyRunning(pidPath, sockPath);
 
   // 2. Open SQLite
   const dbPath = join(dataDir, "ledger.db");
@@ -119,7 +132,6 @@ export async function startDaemon(
   log.info("policies upserted");
 
   // 4. Write PID file
-  const pidPath = join(dataDir, "daemon.pid");
   writeFileSync(pidPath, String(process.pid), "utf-8");
 
   // 5. Initialize embedding + vector store
@@ -189,6 +201,7 @@ export async function startDaemon(
   });
   const graphHealthSched: Scheduler = startGraphHealthScheduler(db);
   const actionReconcileSched: Scheduler = startActionReconcileScheduler(db);
+  const keepAlive = setInterval(() => {}, 60 * 60 * 1000);
   const schedulers: RegisteredScheduler[] = [
     { name: "drain", scheduler: drainSched },
     { name: "reflect", scheduler: reflectSched },
@@ -208,7 +221,6 @@ export async function startDaemon(
   });
 
   // 7. Unix socket control server (stop/status/reload)
-  const sockPath = join(dataDir, "daemon.sock");
   const socketServer = await startControlSocket(sockPath, db, schedulers);
 
   // 8. MCP stdio server (skip in test environments that pass withMcp=false)
@@ -234,6 +246,7 @@ export async function startDaemon(
     backupSched.stop();
     graphHealthSched.stop();
     actionReconcileSched.stop();
+    clearInterval(keepAlive);
     engramState.flusher?.stop();
     engramState.poller?.stop();
     await engramState.shutdown().catch((err) => {
@@ -279,14 +292,89 @@ interface SocketServer {
   stop(): void;
 }
 
+async function assertDaemonNotAlreadyRunning(
+  pidPath: string,
+  sockPath: string
+): Promise<void> {
+  if (existsSync(sockPath)) {
+    const socketState = await probeControlSocket(sockPath);
+    if (socketState === "active") {
+      throw new Error(
+        `Compost daemon already appears to be running; control socket is active at ${sockPath}`
+      );
+    }
+    tryUnlink(sockPath);
+  }
+
+  if (!existsSync(pidPath)) return;
+
+  const rawPid = readFileSync(pidPath, "utf-8").trim();
+  const pid = Number.parseInt(rawPid, 10);
+  if (Number.isFinite(pid) && pid > 0 && pid !== process.pid && isPidAlive(pid)) {
+    throw new Error(
+      `Compost daemon pid file points to live pid ${pid}, but no usable control socket exists at ${sockPath}; stop that process before starting another daemon`
+    );
+  }
+  tryUnlink(pidPath);
+}
+
+function probeControlSocket(path: string): Promise<"active" | "stale"> {
+  return new Promise((resolve, reject) => {
+    const sock = createConnection(path);
+    let settled = false;
+    const finish = (err: Error | null, state?: "active" | "stale") => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      if (err) {
+        reject(err);
+      } else {
+        resolve(state ?? "stale");
+      }
+    };
+
+    sock.setTimeout(1000, () => {
+      finish(
+        new Error(`Timed out probing existing Compost control socket at ${path}`)
+      );
+    });
+    sock.once("connect", () => finish(null, "active"));
+    sock.once("error", (err) => {
+      const code =
+        typeof err === "object" && err !== null && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : "";
+      if (code === "ENOENT" || code === "ECONNREFUSED") {
+        finish(null, "stale");
+        return;
+      }
+      finish(
+        new Error(
+          `Could not probe existing Compost control socket at ${path}: ${code || err.message}`
+        )
+      );
+    });
+  });
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : "";
+    return code !== "ESRCH";
+  }
+}
+
 async function startControlSocket(
   sockPath: string,
   db: Database,
   schedulers: RegisteredScheduler[] = []
 ): Promise<SocketServer> {
-  // Remove stale socket
-  tryUnlink(sockPath);
-
   let active = true;
   const server = Bun.listen<undefined>({
     unix: sockPath,
@@ -529,7 +617,8 @@ function splitEnvArgs(raw: string | undefined): string[] | undefined {
 // ---------------------------------------------------------------------------
 if (import.meta.main) {
   const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+  const withMcp = process.env["COMPOST_DAEMON_WITH_MCP"] === "true";
   log.info({ dataDir }, "compost-daemon starting");
-  await startDaemon(dataDir, true, { disabled: false });
+  await startDaemon(dataDir, withMcp, { disabled: false });
   log.info("compost-daemon ready");
 }

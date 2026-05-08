@@ -167,6 +167,10 @@ describe("CLI program structure", () => {
     expect(sub).toContain("stop");
     expect(sub).toContain("status");
     expect(sub).toContain("reload");
+
+    const start = daemon!.commands.find((c) => c.name() === "start");
+    expect(start).toBeDefined();
+    expect(start!.options.map((o) => o.long)).toContain("--with-mcp");
   });
 
   it("formats daemon status with scheduler health", () => {

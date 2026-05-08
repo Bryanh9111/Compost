@@ -34,7 +34,8 @@ compost ask "what is the observe outbox pattern"
 # Manual read-only metacognitive pattern report over action_log
 compost patterns "this week"
 
-# Start the daemon (MCP server + drain loop + reflect + freshness loop)
+# Start the daemon (drain loop + reflect + freshness loop).
+# MCP clients should use `compost mcp`; `daemon start --with-mcp` is foreground-only.
 compost daemon start
 
 # Health check

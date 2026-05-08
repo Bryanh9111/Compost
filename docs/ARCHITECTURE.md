@@ -95,7 +95,8 @@ BM25 works independently when vectorStore is null (graceful degradation).
 2. Sensory hard-GC: DELETE observations WHERE source.kind='sensory' AND captured_at < -7d
    (FK CASCADE deletes facts, chunks, queue entries, captured_items)
 3. Semantic soft-tombstone: SET archived_at WHERE importance*decay < 0.001 AND NOT pinned
-4. Contradiction arbitration: same subject+predicate, different object
+4. Contradiction arbitration: same subject+predicate, different object,
+   restricted to explicit single-valued predicates
    -> confidence > recency tiebreak, loser gets superseded_by
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
@@ -231,7 +232,7 @@ the sub-reason (heuristic vs user-driven).
 
 | decision_audit.kind | confidence tier | floor | Rationale |
 |---|---|---|---|
-| `contradiction_arbitration` | instance | 0.85 | Explicit winner selected from same (subject, predicate) pair |
+| `contradiction_arbitration` | instance | 0.85 | Explicit winner selected from a known single-valued same (subject, predicate) pair |
 | `wiki_rebuild` | instance | 0.85 | Multi-fact synthesis; no single authoritative input |
 | `fact_excretion` (reason = `duplicate` or `low_access`) | exploration | 0.75 | Heuristic (decay / similarity) |
 | `fact_excretion` (reason = `manual`) | kernel | 0.90 | User-driven; highest trust |
@@ -285,7 +286,7 @@ missing-target / runtime failure, exit 0 otherwise. JSON on stdout.
 | Command | Purpose | Key options |
 |---|---|---|
 | `compost audit list` | Read `decision_audit` trail (P0-2) | `--kind` / `--since` / `--target` / `--decided-by` / `--limit` |
-| `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport`; unresolved-contradiction scan ignores known multi-valued extraction predicates and generic section-label subjects | (none) |
+| `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport`; unresolved-contradiction scan only considers known single-valued predicates and ignores generic section-label subjects | (none) |
 | `compost triage list` | Read `health_signals` | `--kind` / `--since` / `--include-resolved` / `--limit` |
 | `compost triage resolve <id>` | Mark signal resolved (surface-only; does NOT fix the underlying cause) | `--by <user\|agent>`; exit 1 if id missing or already resolved |
 | `compost doctor --check-llm` | Ollama `/api/tags` liveness probe plus bounded generation probe (default 3s, configurable with `--llm-timeout-ms`; model configurable with `--llm-model` / `COMPOST_LLM_MODEL`) | (none) |

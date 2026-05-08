@@ -88,14 +88,18 @@ export function registerDaemon(program: Command): void {
   daemon
     .command("start")
     .description("Start the daemon")
-    .action(async () => {
+    .option(
+      "--with-mcp",
+      "also start the embedded stdio MCP server (foreground-only; prefer `compost mcp` for MCP clients)"
+    )
+    .action(async (opts) => {
       // Lazy import so CLI startup stays fast when daemon not needed
       const { startDaemon } = await import(
         "../../../compost-daemon/src/main"
       );
       const dir = dataDir();
       process.stdout.write(`starting daemon in ${dir}\n`);
-      await startDaemon(dir, true, { disabled: false });
+      await startDaemon(dir, opts.withMcp === true, { disabled: false });
       // startDaemon keeps process alive via signal handlers
     });
 

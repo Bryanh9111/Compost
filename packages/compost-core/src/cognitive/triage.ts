@@ -1,4 +1,9 @@
 import type { Database } from "bun:sqlite";
+import {
+  GENERIC_CONTRADICTION_SUBJECTS,
+  SINGLE_VALUE_CONTRADICTION_PREDICATES,
+  isContradictionCandidate,
+} from "./contradiction-policy";
 
 /**
  * Triage signal kinds — must mirror the CHECK constraint in migration 0010
@@ -60,71 +65,11 @@ export interface TriageOptions {
 
 const DEFAULT_MAX_PER_KIND = 100;
 
-const KNOWN_MULTI_VALUE_CONTRADICTION_PREDICATES = new Set([
-  "addresses_issue",
-  "affects_performance",
-  "configures",
-  "contains",
-  "defines",
-  "demonstrates",
-  "depends_on",
-  "deprecates",
-  "describes",
-  "exposes_api",
-  "has_architecture",
-  "implements",
-  "includes",
-  "integrates_with",
-  "mentions",
-  "requires",
-  "requires_setup",
-  "secures",
-  "stores_data",
-  "supports",
-  "tests",
-  "uses",
-]);
-
-const GENERIC_CONTRADICTION_SUBJECTS = new Set([
-  "background",
-  "content",
-  "description",
-  "images",
-  "local entry points",
-  "milestone overview",
-  "milestone 总览",
-  "notes",
-  "repositories",
-  "source content",
-  "visual summary",
-  "video",
-  "video frame summary",
-  "下一步",
-  "背景",
-]);
-
-function isGenericContradictionSubject(subject: string): boolean {
-  const normalized = subject.trim().toLowerCase();
-  return (
-    GENERIC_CONTRADICTION_SUBJECTS.has(normalized) ||
-    /^image\s+\d+$/.test(normalized)
-  );
-}
-
-function isKnownMultiValueContradictionPredicate(predicate: string): boolean {
-  return KNOWN_MULTI_VALUE_CONTRADICTION_PREDICATES.has(
-    predicate.trim().toLowerCase()
-  );
-}
-
 export function isUnresolvedContradictionCandidate(
   subject: string,
   predicate: string
 ): boolean {
-  return (
-    !isGenericContradictionSubject(subject) &&
-    !isKnownMultiValueContradictionPredicate(predicate)
-  );
+  return isContradictionCandidate(subject, predicate);
 }
 
 /**
@@ -262,6 +207,15 @@ export function scanUnresolvedContradiction(
   days: number,
   maxPerKind: number
 ): number {
+  if (SINGLE_VALUE_CONTRADICTION_PREDICATES.length === 0) return 0;
+
+  const predicatePlaceholders = SINGLE_VALUE_CONTRADICTION_PREDICATES.map(
+    () => "?"
+  ).join(", ");
+  const genericSubjectPlaceholders = GENERIC_CONTRADICTION_SUBJECTS.map(
+    () => "?"
+  ).join(", ");
+
   const rows = db
     .query(
       `SELECT subject, predicate,
@@ -271,12 +225,20 @@ export function scanUnresolvedContradiction(
        WHERE archived_at IS NULL
          AND superseded_by IS NULL
          AND created_at < datetime('now', '-' || ? || ' days')
+         AND lower(trim(predicate)) IN (${predicatePlaceholders})
+         AND lower(trim(subject)) NOT IN (${genericSubjectPlaceholders})
+         AND lower(trim(subject)) NOT GLOB 'image [0-9]*'
        GROUP BY subject, predicate
        HAVING active_objects >= 2
        ORDER BY oldest_created_at ASC
        LIMIT ?`
     )
-    .all(days, maxPerKind) as Array<{
+    .all(
+      days,
+      ...SINGLE_VALUE_CONTRADICTION_PREDICATES,
+      ...GENERIC_CONTRADICTION_SUBJECTS,
+      maxPerKind
+    ) as Array<{
     subject: string;
     predicate: string;
     active_objects: number;

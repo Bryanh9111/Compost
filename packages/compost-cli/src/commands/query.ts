@@ -31,7 +31,7 @@ export function registerQuery(program: Command): void {
 
       const embSvc = new OllamaEmbeddingService();
       const lanceDir = join(dataDir, "lancedb");
-      let vectorStore;
+      let vectorStore: InstanceType<typeof VectorStore> | undefined;
       try {
         vectorStore = new VectorStore(lanceDir, embSvc);
         await vectorStore.connect();

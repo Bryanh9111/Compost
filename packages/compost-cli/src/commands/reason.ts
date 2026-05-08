@@ -120,7 +120,7 @@ export function registerReason(program: Command): void {
         process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR,
         "lancedb"
       );
-      let vectorStore;
+      let vectorStore: InstanceType<typeof VectorStore> | undefined;
       try {
         vectorStore = new VectorStore(lanceDir, embSvc);
         await vectorStore.connect();
