@@ -60,6 +60,73 @@ export interface TriageOptions {
 
 const DEFAULT_MAX_PER_KIND = 100;
 
+const KNOWN_MULTI_VALUE_CONTRADICTION_PREDICATES = new Set([
+  "addresses_issue",
+  "affects_performance",
+  "configures",
+  "contains",
+  "defines",
+  "demonstrates",
+  "depends_on",
+  "deprecates",
+  "describes",
+  "exposes_api",
+  "has_architecture",
+  "implements",
+  "includes",
+  "integrates_with",
+  "mentions",
+  "requires",
+  "requires_setup",
+  "secures",
+  "stores_data",
+  "supports",
+  "tests",
+  "uses",
+]);
+
+const GENERIC_CONTRADICTION_SUBJECTS = new Set([
+  "background",
+  "content",
+  "description",
+  "images",
+  "local entry points",
+  "milestone overview",
+  "milestone 总览",
+  "notes",
+  "repositories",
+  "source content",
+  "visual summary",
+  "video",
+  "video frame summary",
+  "下一步",
+  "背景",
+]);
+
+function isGenericContradictionSubject(subject: string): boolean {
+  const normalized = subject.trim().toLowerCase();
+  return (
+    GENERIC_CONTRADICTION_SUBJECTS.has(normalized) ||
+    /^image\s+\d+$/.test(normalized)
+  );
+}
+
+function isKnownMultiValueContradictionPredicate(predicate: string): boolean {
+  return KNOWN_MULTI_VALUE_CONTRADICTION_PREDICATES.has(
+    predicate.trim().toLowerCase()
+  );
+}
+
+export function isUnresolvedContradictionCandidate(
+  subject: string,
+  predicate: string
+): boolean {
+  return (
+    !isGenericContradictionSubject(subject) &&
+    !isKnownMultiValueContradictionPredicate(predicate)
+  );
+}
+
 /**
  * Upsert-style signal insert: skips if an **unresolved** signal with the same
  * (kind, target_ref) already exists. Idempotent across repeated triage runs
@@ -182,6 +249,11 @@ export function scanStaleFact(
  * trip no detection. The value this scanner provides is catching
  * contradictions **before** reflect cycles (or when reflect is stuck).
  *
+ * This scanner only surfaces plausible single-valued claims. The LLM/Markdown
+ * extraction predicates such as `describes`, `has_architecture`, and
+ * `exposes_api` are intentionally multi-valued, so multiple objects there are
+ * normal evidence fan-out rather than contradictions.
+ *
  * Surface rule: one signal per `(subject, predicate)` pair. `target_ref` is
  * `contradiction:<subject>/<predicate>` so repeated scans dedupe via upsert.
  */
@@ -213,6 +285,9 @@ export function scanUnresolvedContradiction(
 
   let inserted = 0;
   for (const row of rows) {
+    if (!isUnresolvedContradictionCandidate(row.subject, row.predicate)) {
+      continue;
+    }
     const targetRef = `contradiction:${row.subject}/${row.predicate}`;
     const msg = `${row.active_objects} active objects for (${row.subject}, ${row.predicate}); unresolved since ${row.oldest_created_at}`;
     if (upsertSignal(db, "unresolved_contradiction", "warn", msg, targetRef)) {

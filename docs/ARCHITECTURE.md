@@ -285,7 +285,7 @@ missing-target / runtime failure, exit 0 otherwise. JSON on stdout.
 | Command | Purpose | Key options |
 |---|---|---|
 | `compost audit list` | Read `decision_audit` trail (P0-2) | `--kind` / `--since` / `--target` / `--decided-by` / `--limit` |
-| `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport` | (none) |
+| `compost triage scan` | Run a triage pass: 5 scanners + aggregate, prints `TriageReport`; unresolved-contradiction scan ignores known multi-valued extraction predicates and generic section-label subjects | (none) |
 | `compost triage list` | Read `health_signals` | `--kind` / `--since` / `--include-resolved` / `--limit` |
 | `compost triage resolve <id>` | Mark signal resolved (surface-only; does NOT fix the underlying cause) | `--by <user\|agent>`; exit 1 if id missing or already resolved |
 | `compost doctor --check-llm` | Ollama `/api/tags` liveness probe plus bounded generation probe (default 3s, configurable with `--llm-timeout-ms`; model configurable with `--llm-model` / `COMPOST_LLM_MODEL`) | (none) |

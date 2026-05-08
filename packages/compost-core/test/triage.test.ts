@@ -408,6 +408,40 @@ describe("triage P0-1 scanUnresolvedContradiction", () => {
     });
     expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
   });
+
+  test("does NOT emit for known multi-valued extraction predicates", () => {
+    insertFact(db, "f1", "repo-a", "describes", "a CLI tool", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f2", "repo-a", "describes", "an MCP server", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f3", "repo-b", "has_architecture", "SQLite storage", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f4", "repo-b", "has_architecture", "Bun CLI", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
+  });
+
+  test("does NOT emit for generic section-label subjects", () => {
+    insertFact(db, "f1", "Description", "capital-of", "france", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f2", "Description", "capital-of", "england", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f3", "Image 1", "capital-of", "germany", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+    insertFact(db, "f4", "Image 1", "capital-of", "austria", {
+      createdAtSqlExpr: "datetime('now', '-10 days')",
+    });
+
+    expect(scanUnresolvedContradiction(db, 7, 100)).toBe(0);
+  });
 });
 
 describe("triage P0-1 scanOrphanDelta", () => {
