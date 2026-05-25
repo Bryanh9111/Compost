@@ -43,12 +43,18 @@ export function registerTriage(program: Command): void {
   cmd
     .command("scan")
     .description(
-      "Run a triage pass: scan the 6 signal kinds (5 scanners + 1 drain-hook producer), insert new rows, report counts"
+      "Run a triage pass: scan active signal kinds, insert new rows, report counts"
     )
-    .action(() => {
+    .option(
+      "--include-frozen-wiki",
+      "also scan stale wiki signals even though v4 freezes background wiki synthesis"
+    )
+    .action((opts) => {
       const db = openDb();
       try {
-        const report = triage(db);
+        const report = triage(db, {
+          includeFrozenWikiSignals: opts.includeFrozenWiki ? true : undefined,
+        });
         process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       } finally {
         db.close();
@@ -64,6 +70,10 @@ export function registerTriage(program: Command): void {
     )
     .option("--since <iso>", "only rows with created_at >= this ISO timestamp")
     .option("--include-resolved", "include already-resolved rows (default: only unresolved)")
+    .option(
+      "--include-frozen-wiki",
+      "include stale_wiki rows from the frozen background-wiki path in unfiltered output"
+    )
     .option("--limit <n>", "max rows (default 100)", "100")
     .action((opts) => {
       if (opts.kind && !VALID_KINDS.has(opts.kind as SignalKind)) {
@@ -84,6 +94,8 @@ export function registerTriage(program: Command): void {
           kind: opts.kind as SignalKind | undefined,
           sinceIso: opts.since,
           includeResolved: opts.includeResolved ?? false,
+          hideFrozenWikiSignals:
+            !opts.includeFrozenWiki && opts.kind === undefined,
           limit,
         });
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");

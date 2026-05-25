@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
 import {
   triage,
+  listSignals,
   resolveSignal,
   scanStuckOutbox,
   scanStaleWiki,
@@ -537,13 +538,61 @@ describe("triage P0-1 aggregate + resolveSignal", () => {
     insertOutboxRow(db, 2, "datetime('now', '-48 hours')");
     insertWikiPage(db, "paris.md", "paris", "datetime('now')", "datetime('now')");
 
-    const report = triage(db);
+    const report = triage(db, { includeFrozenWikiSignals: true });
     expect(report.byKind.stuck_outbox).toBe(2);
     expect(report.byKind.stale_wiki).toBe(1);
     expect(report.byKind.stale_fact).toBe(0);
     expect(report.unresolvedTotal).toBe(3);
     expect(report.signals).toHaveLength(3);
     expect(report.computedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test("triage() skips stale_wiki by default while background wiki is frozen", () => {
+    insertWikiPage(db, "paris.md", "paris", "datetime('now')", "datetime('now')");
+
+    const report = triage(db);
+
+    expect(report.byKind.stale_wiki).toBe(0);
+    expect(report.unresolvedTotal).toBe(0);
+  });
+
+  test("triage() includes stale_wiki when wiki synthesis is explicitly enabled", () => {
+    const original = process.env["WIKI_SYNTHESIS_ENABLED"];
+    process.env["WIKI_SYNTHESIS_ENABLED"] = "true";
+    try {
+      insertWikiPage(db, "paris.md", "paris", "datetime('now')", "datetime('now')");
+
+      const report = triage(db);
+
+      expect(report.byKind.stale_wiki).toBe(1);
+      expect(report.unresolvedTotal).toBe(1);
+    } finally {
+      if (original === undefined) {
+        delete process.env["WIKI_SYNTHESIS_ENABLED"];
+      } else {
+        process.env["WIKI_SYNTHESIS_ENABLED"] = original;
+      }
+    }
+  });
+
+  test("listSignals can hide frozen stale_wiki noise in default views", () => {
+    insertWikiPage(db, "paris.md", "paris", "datetime('now')", "datetime('now')");
+    triage(db, { includeFrozenWikiSignals: true });
+
+    const visible = listSignals(db, { limit: 10 });
+    const hidden = listSignals(db, {
+      hideFrozenWikiSignals: true,
+      limit: 10,
+    });
+    const explicit = listSignals(db, {
+      kind: "stale_wiki",
+      hideFrozenWikiSignals: false,
+      limit: 10,
+    });
+
+    expect(visible.some((s) => s.kind === "stale_wiki")).toBe(true);
+    expect(hidden.some((s) => s.kind === "stale_wiki")).toBe(false);
+    expect(explicit).toHaveLength(1);
   });
 
   test("resolveSignal flips a row to resolved; subsequent triage re-emits for still-stuck target", () => {

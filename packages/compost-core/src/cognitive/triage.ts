@@ -60,10 +60,19 @@ export interface TriageOptions {
    */
   orphanDeltaThreshold?: number; // default 5 (unused today)
   staleWikiDays?: number;        // default 30
+  /**
+   * v4 freezes background wiki synthesis by default. Stale wiki signals are
+   * useful only when that legacy path is explicitly enabled/revived.
+   */
+  includeFrozenWikiSignals?: boolean;
   maxPerKind?: number;           // default 100 (contract cap)
 }
 
 const DEFAULT_MAX_PER_KIND = 100;
+
+function wikiSynthesisSignalsEnabled(): boolean {
+  return process.env["WIKI_SYNTHESIS_ENABLED"] === "true";
+}
 
 export function isUnresolvedContradictionCandidate(
   subject: string,
@@ -308,9 +317,10 @@ export function scanOrphanDelta(
 }
 
 /**
- * `stale_wiki`: pages whose last synthesis failed (`stale_at` set by wiki.ts
- * P0-6 fallback) OR whose last synthesis is older than `days`. Both paths
- * emit a single signal per page (upsert dedupes).
+ * `stale_wiki`: legacy background-wiki signal. In v4, background wiki
+ * synthesis is frozen by default, so triage() only calls this scanner when
+ * explicitly enabled. The scanner itself stays available for historical data
+ * and for future revival via WIKI_SYNTHESIS_ENABLED=true.
  */
 export function scanStaleWiki(
   db: Database,
@@ -375,21 +385,22 @@ export function triage(db: Database, opts: TriageOptions = {}): TriageReport {
   scanUnresolvedContradiction(db, contradictionAgeDays, maxPerKind);
   scanStuckOutbox(db, stuckOutboxHours, maxPerKind);
   scanOrphanDelta(db, orphanAccessDays, maxPerKind);
-  scanStaleWiki(db, staleWikiDays, maxPerKind);
+  const includeWikiSignals =
+    opts.includeFrozenWikiSignals ?? wikiSynthesisSignalsEnabled();
+  if (includeWikiSignals) {
+    scanStaleWiki(db, staleWikiDays, maxPerKind);
+  }
   // correction_candidate: no scanner -- written by correction-detector directly.
 
-  // Aggregate: read ALL unresolved signals (including ones written by
+  // Aggregate: read unresolved signals (including ones written by
   // correction-detector outside triage()) so the report reflects the full
-  // surface, not just what this run inserted.
-  const signals = db
-    .query(
-      `SELECT id, kind, severity, message, target_ref, created_at,
-              resolved_at, resolved_by
-       FROM health_signals
-       WHERE resolved_at IS NULL
-       ORDER BY created_at DESC`
-    )
-    .all() as HealthSignal[];
+  // active surface, not just what this run inserted. Frozen stale_wiki rows
+  // remain queryable through listSignals({kind:"stale_wiki"}), but v4 default
+  // triage reports suppress them while background wiki synthesis is off.
+  const signals = listSignals(db, {
+    hideFrozenWikiSignals: !includeWikiSignals,
+    limit: 10_000,
+  });
 
   const byKind: Record<SignalKind, number> = {
     stale_fact: 0,
@@ -415,6 +426,7 @@ export interface ListSignalsFilter {
   kind?: SignalKind;
   sinceIso?: string;
   includeResolved?: boolean; // default false (show unresolved only)
+  hideFrozenWikiSignals?: boolean;
   limit?: number; // default 100; CLI caps at 10_000
 }
 
@@ -434,6 +446,7 @@ export function listSignals(
     ? filter.sinceIso.replace("T", " ").slice(0, 19)
     : null;
   const includeResolved = filter.includeResolved ?? false;
+  const hideFrozenWikiSignals = filter.hideFrozenWikiSignals ?? false;
 
   const rows = db
     .query(
@@ -443,13 +456,15 @@ export function listSignals(
        WHERE (?1 IS NULL OR kind = ?1)
          AND (?2 IS NULL OR created_at >= ?2)
          AND (?3 = 1 OR resolved_at IS NULL)
+         AND (?4 = 0 OR kind != 'stale_wiki')
        ORDER BY created_at DESC
-       LIMIT ?4`
+       LIMIT ?5`
     )
     .all(
       filter.kind ?? null,
       since,
       includeResolved ? 1 : 0,
+      hideFrozenWikiSignals ? 1 : 0,
       limit
     ) as HealthSignal[];
   return rows;

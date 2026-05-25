@@ -252,6 +252,11 @@ Review gate: capture coverage > 80% of user's creation-type actions (estimated, 
 
 ### Phase 4 (Month 3-6) — pattern detection + (b) scheduled batch wisdom
 - `compost patterns <date|window>` — manual read-only deterministic action_log pattern MVP — landed after D2-7. It reports capture spread, work-rhythm hours, dominant projects, project switching, and adjacent source transitions with provisional/medium/strong confidence labels. It does not write `user_patterns`, reasoning chains, wiki pages, or Engram memories, and it is not a daemon scheduler.
+- `compost triage` under v4 — default scans/views suppress `stale_wiki`
+  noise from the frozen background-wiki path. Historical wiki signals remain
+  queryable with `triage list --kind stale_wiki`; future wiki revival can opt
+  into scanning with `WIKI_SYNTHESIS_ENABLED=true` or
+  `triage scan --include-frozen-wiki`.
 - Sequential pattern mining over action_log (work rhythms, decision habits)
 - Speech style stats over Claude Code / Codex prompts (n-gram, sentence structure, sentiment proxy)
 - (b) Weekly batch wisdom: LLM scans action_log → "this week's pattern digest" (read-only, ephemeral)
