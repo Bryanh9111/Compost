@@ -594,9 +594,19 @@ export function registerDoctor(program: Command): void {
         try {
           const orphanObs = db
             .query(
-              `SELECT COUNT(*) AS c FROM observations o
+              `WITH processed_observations AS (
+                 SELECT observe_id FROM derivation_run
+                 UNION
+                 SELECT source_observe_id AS observe_id
+                 FROM action_log
+                 WHERE source_observe_id IS NOT NULL
+               )
+               SELECT COUNT(*) AS c
+               FROM observations o
                WHERE NOT EXISTS (
-                 SELECT 1 FROM derivation_run dr WHERE dr.observe_id = o.observe_id
+                 SELECT 1
+                 FROM processed_observations p
+                 WHERE p.observe_id = o.observe_id
                )`
             )
             .get() as { c: number };

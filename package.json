@@ -18,7 +18,10 @@
     "@lancedb/lancedb": "^0.27.2"
   },
   "overrides": {
+    "ajv": "8.20.0",
     "express-rate-limit": "8.5.1",
+    "fast-uri": "3.1.2",
+    "qs": "6.15.2",
     "hono": "4.12.18"
   }
 }

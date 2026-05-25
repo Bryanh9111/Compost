@@ -183,6 +183,39 @@ describe("doctor --check-integrity", () => {
     expect(report.hint).toContain("Integrity issues detected");
   });
 
+  test("does not flag action_log-only observations as orphaned", async () => {
+    const db = setupDb(dataDir);
+    db.run(
+      `INSERT INTO source (id, uri, kind, trust_tier)
+       VALUES ('action-src', 'obsidian://note', 'host-adapter', 'first_party')`
+    );
+    db.run(
+      `INSERT INTO observations
+        (observe_id, source_id, source_uri, occurred_at, captured_at,
+         content_hash, raw_hash, mime_type, adapter, adapter_sequence,
+         trust_tier, idempotency_key, transform_policy)
+       VALUES ('obs-action-1', 'action-src', 'obsidian://note',
+               datetime('now'), datetime('now'),
+               'hash-action-1', 'raw-action-1', 'application/json',
+               'compost-adapter-obsidian', 1,
+               'first_party', 'idem-action-1', 'tp-2026-04')`
+    );
+    db.run(
+      `INSERT INTO action_log
+        (action_id, source_system, source_id, source_observe_id, who,
+         what_text, project)
+       VALUES ('action-1', 'obsidian', 'obsidian:test', 'obs-action-1',
+               'user', 'Obsidian note changed', 'Constellation')`
+    );
+    db.close();
+
+    const result = await runCli(["doctor", "--check-integrity"], dataDir);
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.orphan_observations).toBe(0);
+    expect(report.total_issues).toBe(0);
+  });
+
   test("detects unknown transform_policy in observe_outbox", async () => {
     const db = setupDb(dataDir);
     db.run(

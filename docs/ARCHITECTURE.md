@@ -101,7 +101,7 @@ protection.
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (22 migrations)
+## Database schema (23 migrations)
 
 ### Core tables
 
@@ -138,7 +138,7 @@ wiki_pages.path CASCADE -> wiki_page_observe
 
 ```
 src/
-  schema/          22 SQL migrations + migrator.ts
+  schema/          23 SQL migrations + migrator.ts
   policies/        transform_policy registry (tp-2026-04, tp-2026-04-02, tp-2026-04-03)
   ledger/          outbox.ts (append + drain), noteworthy.ts (5-gate dedup)
   queue/           lease.ts (claim, heartbeat, complete, fail)
