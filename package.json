@@ -15,7 +15,7 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.27.2"
+    "@lancedb/lancedb": "^0.33.0"
   },
   "overrides": {
     "ajv": "8.20.0",
