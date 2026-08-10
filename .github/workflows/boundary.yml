@@ -18,6 +18,9 @@ on:
       - "scripts/check-engram-boundary.ts"
       - ".github/workflows/boundary.yml"
 
+permissions:
+  contents: read
+
 jobs:
   engram-boundary:
     name: Compost/Engram boundary

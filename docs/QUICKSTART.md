@@ -151,8 +151,8 @@ Healthy local baseline:
 - `compost daemon status` shows `drain`, `ingest`, and `freshness` running with
   `errors=0`. `reasoning [stopped]` is expected in v4.
 - `doctor --check-pii` reports zero rows.
-- `doctor --check-integrity` reports zero issues after active ingest backlog is
-  empty.
+- `doctor --check-integrity` reports zero issues. Active work is reported
+  separately as `pending_ingest_observations` and is not counted as an orphan.
 - `doctor --check-llm` reports `ollama.ok=true`. If `generation.ok=false` with
   `severity=warn`, Ollama is reachable but the configured model did not finish
   inside the quick timeout; use `--llm-timeout-ms`, `--llm-model`, or
@@ -173,10 +173,12 @@ sqlite3 ~/.compost/ledger.db \
   "select count(*) from ingest_queue where completed_at is null;"
 ```
 
-`orphan_observations` can be expected while a large ingest backlog is actively
-draining. It is more concerning when outbox quarantine/errors, unknown
-`transform_policy`, stale wiki pages, or completed queue rows without any
-`derivation_run` remain after the backlog settles. Observation writers should
+`pending_ingest_observations` is informational while a backlog drains.
+`orphan_observations` now excludes those active queue rows and means an
+observation has no derivation/action and no pending ingest work. It is more
+concerning when outbox quarantine/errors, unknown `transform_policy`, stale wiki
+pages, or completed queue rows without any `derivation_run` remain after the
+backlog settles. Observation writers should
 use registered policy ids such as `tp-2026-04-03`; do not store semantic labels
 like `metadata-and-summary` in `transform_policy`. The outbox write path falls
 back to the active policy for unregistered labels and records the requested

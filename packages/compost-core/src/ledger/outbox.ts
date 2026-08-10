@@ -200,12 +200,11 @@ export function drainOne(db: Database): DrainResult | null {
     const rawHash = computeHash(pending.payload);
     const now = new Date().toISOString().replace("T", " ").replace("Z", "");
 
-    let contexts: string[] = [];
-    if (Array.isArray(parsedPayload.contexts)) {
-      contexts = parsedPayload.contexts.filter(
-        (context): context is string => typeof context === "string"
-      );
-    }
+    const contexts = normalizeContextIds(parsedPayload.contexts);
+    const observationMetadata = metadataWithContexts(
+      parsedPayload.metadata,
+      contexts
+    );
 
     const tx = db.transaction(() => {
       // STEP 2: Auto-register source if missing
@@ -220,8 +219,14 @@ export function drainOne(db: Database): DrainResult | null {
         ]
       );
 
-      // STEP 3: Auto-link source_context
+      // STEP 3: Auto-register contexts, then link source_context. Context ids
+      // are supplied by adapters, so the core drain path owns this invariant.
       for (const contextId of contexts) {
+        db.run(
+          `INSERT OR IGNORE INTO context (id, display_name)
+           VALUES (?, ?)`,
+          [contextId, displayNameForContext(contextId)]
+        );
         db.run(
           `INSERT OR IGNORE INTO source_context (source_id, context_id)
            VALUES (?, ?)`,
@@ -263,8 +268,8 @@ export function drainOne(db: Database): DrainResult | null {
           pending.trust_tier,
           pending.idempotency_key,
           pending.transform_policy,
-          parsedPayload.metadata
-            ? JSON.stringify(parsedPayload.metadata)
+          observationMetadata
+            ? JSON.stringify(observationMetadata)
             : null,
           originHash,
           pending.adapter,
@@ -324,6 +329,39 @@ export function drainOne(db: Database): DrainResult | null {
   }
 }
 
+function normalizeContextIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return [
+    ...new Set(
+      value
+        .filter((context): context is string => typeof context === "string")
+        .map((context) => context.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function metadataWithContexts(
+  metadata: unknown,
+  contexts: string[]
+): unknown {
+  if (contexts.length === 0) return metadata;
+  if (typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)) {
+    return { ...(metadata as Record<string, unknown>), contexts };
+  }
+  if (metadata == null) return { contexts };
+  return { original_metadata: metadata, contexts };
+}
+
+function displayNameForContext(contextId: string): string {
+  return contextId
+    .split(/[-/]/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function draftObservationFromPending(
   pending: OutboxRow
 ): DraftObservationPayload {
@@ -351,7 +389,7 @@ function draftObservationFromPending(
     return autoWrappedPayload(pending.payload, pending.appended_at, parsed);
   }
 
-  const hasMetadata = Object.prototype.hasOwnProperty.call(parsed, "metadata");
+  const hasMetadata = Object.hasOwn(parsed, "metadata");
   const mimeType =
     typeof parsed["mime_type"] === "string"
       ? parsed["mime_type"]
@@ -398,7 +436,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasOwnContent(value: Record<string, unknown>): boolean {
-  return Object.prototype.hasOwnProperty.call(value, "content");
+  return Object.hasOwn(value, "content");
 }
 
 /**
@@ -482,7 +520,11 @@ function mergeContextsIntoPayload(
     obj.contexts = contexts;
     return JSON.stringify(obj);
   } catch {
-    return payload;
+    return JSON.stringify({
+      content: payload,
+      contexts,
+      metadata: AUTO_WRAPPED_METADATA,
+    });
   }
 }
 

@@ -49,6 +49,10 @@ function checksum(content: string): string {
 }
 
 export function applyMigrations(db: Database): ApplyResult {
+  // All CLI, MCP, and daemon processes share ledger.db. A concurrent short
+  // writer must delay startup briefly instead of turning a valid migration
+  // into a fatal `database is locked` error.
+  db.exec("PRAGMA busy_timeout=5000");
   ensureTrackingTable(db);
 
   const applied: MigrationRecord[] = [];

@@ -121,7 +121,7 @@ export function registerDoctor(program: Command): void {
     )
     .option(
       "--check-integrity",
-      "Audit schema integrity: orphan observations, dangling fact_links, stale wiki_pages, unknown transform_policy"
+      "Audit schema integrity: quarantined outbox, orphan observations, dangling fact_links, stale wiki_pages, unknown transform_policy"
     )
     .option(
       "--reconcile-engram",
@@ -586,7 +586,9 @@ export function registerDoctor(program: Command): void {
       if (opts.checkIntegrity) {
         // Phase 4 P1 / debate 017: one-shot schema integrity audit. Reports
         // findings as JSON (no fixes applied). Categories:
-        //   orphan_observations: observations with no derivation_run (extraction never happened)
+        //   quarantined_outbox: durable observations blocked from drain
+        //   orphan_observations: observations with no derivation/action and no active queue row
+        //   pending_ingest_observations: in-flight queue state (informational, not an issue)
         //   dangling_fact_links: fact_links whose src/dst fact no longer exists
         //   stale_wiki_pages: wiki_pages marked stale_at but never resynthesized
         //   unknown_transform_policies: observations/outbox rows referencing policy ids not in policies table
@@ -607,7 +609,27 @@ export function registerDoctor(program: Command): void {
                  SELECT 1
                  FROM processed_observations p
                  WHERE p.observe_id = o.observe_id
+               )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM ingest_queue iq
+                   WHERE iq.observe_id = o.observe_id
+                     AND iq.completed_at IS NULL
                )`
+            )
+            .get() as { c: number };
+
+          const pendingIngestObs = db
+            .query(
+              `SELECT COUNT(DISTINCT observe_id) AS c
+               FROM ingest_queue
+               WHERE completed_at IS NULL`
+            )
+            .get() as { c: number };
+
+          const quarantinedOutbox = db
+            .query(
+              `SELECT COUNT(*) AS c FROM observe_outbox
+               WHERE drain_quarantined_at IS NOT NULL`
             )
             .get() as { c: number };
 
@@ -642,6 +664,7 @@ export function registerDoctor(program: Command): void {
             .get() as { c: number };
 
           const totalIssues =
+            quarantinedOutbox.c +
             orphanObs.c +
             danglingLinks.c +
             staleWikiCount.c +
@@ -651,7 +674,9 @@ export function registerDoctor(program: Command): void {
           process.stdout.write(
             JSON.stringify(
               {
+                quarantined_outbox: quarantinedOutbox.c,
                 orphan_observations: orphanObs.c,
+                pending_ingest_observations: pendingIngestObs.c,
                 dangling_fact_links: danglingLinks.c,
                 stale_wiki_pages: staleWikiCount.c,
                 unknown_transform_policies: {
@@ -660,8 +685,10 @@ export function registerDoctor(program: Command): void {
                 },
                 total_issues: totalIssues,
                 hint:
-                  totalIssues > 0
-                    ? "Integrity issues detected. Review via `docs/dogfood-notes.md` workflow; no automatic fix applied."
+                  quarantinedOutbox.c > 0
+                    ? "Integrity issues detected, including quarantined outbox rows. Review drain_error before using `compost doctor --drain-retry`; no automatic fix applied."
+                    : totalIssues > 0
+                      ? "Integrity issues detected. Review via `docs/dogfood-notes.md` workflow; no automatic fix applied."
                     : "Schema integrity checks passed.",
               },
               null,

@@ -70,7 +70,7 @@ def _parse_facts_json(raw: str) -> list[dict[str, Any]]:
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
 
     try:

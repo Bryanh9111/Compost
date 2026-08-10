@@ -9,12 +9,12 @@ describe("capture zsh", () => {
   test("builds a zsh outbox event with redacted command content", () => {
     const built = buildZshCaptureEvent({
       command: "export API_TOKEN=supersecret && bun test",
-      cwd: "/Users/zion/Repos/Zylo/Compost",
+      cwd: "/workspace/Repos/Zylo/Compost",
       exitStatus: 0,
       startedAt: "2026-05-03T02:00:00.000Z",
       endedAt: "2026-05-03T02:00:02.000Z",
       shellPid: "4242",
-      user: "zion",
+      user: "example",
       host: "mac",
     });
 
@@ -33,7 +33,7 @@ describe("capture zsh", () => {
 
     expect(content.command).toContain("API_TOKEN=[REDACTED]");
     expect(content.command).not.toContain("supersecret");
-    expect(content.cwd).toBe("/Users/zion/Repos/Zylo/Compost");
+    expect(content.cwd).toBe("/workspace/Repos/Zylo/Compost");
     expect(content.exit_status).toBe(0);
   });
 
@@ -51,11 +51,11 @@ describe("capture zsh", () => {
 describe("capture git", () => {
   test("builds a git outbox event with commit metadata", () => {
     const built = buildGitCaptureEvent({
-      repoRoot: "/Users/zion/Repos/Zylo/Compost",
+      repoRoot: "/workspace/Repos/Zylo/Compost",
       commitSha: "6ba90c1a2b3c4d5e6f",
       subject: "feat: capture git TOKEN=secret",
       branch: "main",
-      authorName: "Henghao Zhou",
+      authorName: "Example Author",
       committedAt: "2026-05-03T03:00:00.000Z",
       capturedAt: "2026-05-03T03:00:01.000Z",
     });
@@ -94,7 +94,7 @@ describe("capture git", () => {
     ).toBeNull();
     expect(
       buildGitCaptureEvent({
-        repoRoot: "/Users/zion/Repos/Zylo/Compost",
+        repoRoot: "/workspace/Repos/Zylo/Compost",
         commitSha: "not-a-sha",
       })
     ).toBeNull();

@@ -18,9 +18,9 @@ import {
 function makeEvent(overrides: Partial<OutboxEvent> = {}): OutboxEvent {
   return {
     adapter: "compost-adapter-codex",
-    source_id: "codex:session-1:/Users/zion/Repos/Zylo/Compost",
+    source_id: "codex:session-1:/workspace/Repos/Zylo/Compost",
     source_kind: "local-dir",
-    source_uri: "codex:///Users/zion/Repos/Zylo/Compost",
+    source_uri: "codex:///workspace/Repos/Zylo/Compost",
     idempotency_key: `idem-${Date.now()}-${Math.random()}`,
     trust_tier: "first_party",
     transform_policy: "tp-2026-04",
@@ -40,7 +40,7 @@ function codexTurnContent(): string {
     event: "turn-ended",
     session_id: "019deb01-a140-70d1-940a-b29051026171",
     session_file:
-      "/Users/zion/.codex/sessions/2026/05/02/rollout-2026-05-02T19-24-05-019deb01-a140-70d1-940a-b29051026171.jsonl",
+      "/workspace/.codex/sessions/2026/05/02/rollout-2026-05-02T19-24-05-019deb01-a140-70d1-940a-b29051026171.jsonl",
     bytes: { from: 100, to: 240 },
     assistant_messages: [
       "D2-2 action processor landed and action_log started accumulating.",
@@ -75,7 +75,7 @@ describe("metacognitive/action-processor", () => {
           metadata: {
             source: "codex-notify",
             session_file:
-              "/Users/zion/.codex/sessions/2026/05/02/rollout.jsonl",
+              "/workspace/.codex/sessions/2026/05/02/rollout.jsonl",
           },
         }),
       })
@@ -102,7 +102,7 @@ describe("metacognitive/action-processor", () => {
       unknown
     >;
     expect(locations["codex_session_file"]).toBe(
-      "/Users/zion/.codex/sessions/2026/05/02/rollout-2026-05-02T19-24-05-019deb01-a140-70d1-940a-b29051026171.jsonl"
+      "/workspace/.codex/sessions/2026/05/02/rollout-2026-05-02T19-24-05-019deb01-a140-70d1-940a-b29051026171.jsonl"
     );
   });
 
@@ -160,22 +160,105 @@ describe("metacognitive/action-processor", () => {
     expect(action.what_text).toContain("Compost background relies on daemon");
   });
 
+  test("explicit payload project wins over a GitHub pull request URI", () => {
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "codex",
+        source_id: "zyloapp-pr-52",
+        source_kind: "host-adapter",
+        source_uri: "https://github.com/Bryanh9111/ZyloApp/pull/52",
+        idempotency_key: "zyloapp-pr-52",
+        payload: JSON.stringify({
+          content: JSON.stringify({
+            action: "merged",
+            project: "ZyloApp",
+            pull_request: 52,
+          }),
+          mime_type: "application/json",
+          occurred_at: "2026-08-09T02:44:26.000Z",
+        }),
+      })
+    );
+
+    expect(drainOne(db)).toBeTruthy();
+
+    const action = db
+      .query("SELECT project, next_query_hint FROM action_log")
+      .get() as { project: string; next_query_hint: string };
+    expect(action.project).toBe("ZyloApp");
+    expect(action.next_query_hint).toStartWith("ZyloApp:");
+  });
+
+  test("GitHub URLs fall back to the repository name", () => {
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "codex",
+        source_id: "zyloapp-pr-41",
+        source_kind: "web",
+        source_uri: "https://github.com/Bryanh9111/ZyloApp/pull/41",
+        idempotency_key: "zyloapp-pr-41",
+        payload: "Merged pull request 41.",
+      })
+    );
+
+    expect(drainOne(db)).toBeTruthy();
+
+    const action = db.query("SELECT project FROM action_log").get() as {
+      project: string;
+    };
+    expect(action.project).toBe("ZyloApp");
+  });
+
+  test("routing contexts beat a filename fallback when project is omitted", () => {
+    appendToOutbox(
+      db,
+      makeEvent({
+        adapter: "codex",
+        source_id: "perchery-video-pilot",
+        source_kind: "local-file",
+        source_uri: "video/episodes/perchery-avatar-pilot.md",
+        idempotency_key: "perchery-video-pilot",
+        payload: "Recorded the presenter pilot result.",
+        contexts: ["video", "perchery", "content-production"],
+      })
+    );
+
+    const drained = drainOne(db);
+    expect(drained).toBeTruthy();
+
+    const row = db
+      .query(
+        `SELECT a.project, o.metadata
+         FROM action_log a
+         JOIN observations o ON o.observe_id = a.source_observe_id`
+      )
+      .get() as { project: string; metadata: string };
+    expect(row.project).toBe("perchery");
+    expect(JSON.parse(row.metadata).contexts).toEqual([
+      "video",
+      "perchery",
+      "content-production",
+    ]);
+  });
+
   test("zsh command observations become command timeline actions", () => {
     const commandId = "zsh:mac:4242:2026-05-03T02:00:00.000Z:abc123";
     appendToOutbox(
       db,
       makeEvent({
         adapter: "compost-adapter-zsh",
-        source_id: "zsh:zion@mac:4242",
+        source_id: "zsh:example@mac:4242",
         source_kind: "host-adapter",
-        source_uri: "zsh://mac/Users/zion/Repos/Zylo/Compost",
+        source_uri: "zsh://mac/workspace/Repos/Zylo/Compost",
         idempotency_key: "zsh-command-1",
         payload: JSON.stringify({
           content: JSON.stringify({
             kind: "zsh-command",
             command_id: commandId,
             command: "git status --short",
-            cwd: "/Users/zion/Repos/Zylo/Compost",
+            cwd: "/workspace/Repos/Zylo/Compost",
             exit_status: 0,
             started_at: "2026-05-03T02:00:00.000Z",
             ended_at: "2026-05-03T02:00:01.000Z",
@@ -208,14 +291,14 @@ describe("metacognitive/action-processor", () => {
 
   test("git commit observations become commit timeline actions", () => {
     const commitSha = "6ba90c1a2b3c4d5e6f";
-    const commitId = `git:/Users/zion/Repos/Zylo/Compost:${commitSha}`;
+    const commitId = `git:/workspace/Repos/Zylo/Compost:${commitSha}`;
     appendToOutbox(
       db,
       makeEvent({
         adapter: "compost-adapter-git",
-        source_id: "git:/Users/zion/Repos/Zylo/Compost",
+        source_id: "git:/workspace/Repos/Zylo/Compost",
         source_kind: "host-adapter",
-        source_uri: `git:/Users/zion/Repos/Zylo/Compost@${commitSha}`,
+        source_uri: `git:/workspace/Repos/Zylo/Compost@${commitSha}`,
         idempotency_key: "git-commit-1",
         payload: JSON.stringify({
           content: JSON.stringify({
@@ -223,7 +306,7 @@ describe("metacognitive/action-processor", () => {
             commit_id: commitId,
             commit_sha: commitSha,
             short_sha: "6ba90c1a2b3c",
-            repo_root: "/Users/zion/Repos/Zylo/Compost",
+            repo_root: "/workspace/Repos/Zylo/Compost",
             repo_name: "Compost",
             branch: "main",
             subject: "feat: capture git commits",
@@ -357,8 +440,8 @@ describe("metacognitive/action-processor", () => {
   });
 
   test("repeated local-file captures are separate timeline actions", () => {
-    const sourceId = "/Users/zion/Vaults/Constellation/XHS Knowledge/post.md";
-    const sourceUri = "file:///Users/zion/Vaults/Constellation/XHS Knowledge/post.md";
+    const sourceId = "/workspace/Vaults/Constellation/XHS Knowledge/post.md";
+    const sourceUri = "file:///workspace/Vaults/Constellation/XHS Knowledge/post.md";
     appendToOutbox(
       db,
       makeEvent({

@@ -125,8 +125,8 @@ These are **observable signals**, not feelings. If at any review point the signa
 ### 30 days (target: 2026-06-02)
 - [x] `action_log` schema design accepted and migrated (`0021_action_log.sql`, commit `fda433d`)
 - [ ] PF-1 cross-repo dependency audit clean OR documented for any callers found
-- [ ] Daemon plist restored (Deliverable 6); next macOS reboot does NOT silent-fail capture stack
-- [ ] Outbox quarantine count = 0 sustained for 14 consecutive days (verifies Deliverable 3 codex fix)
+- [x] Daemon plist restored (Deliverable 6); launchd `com.zion.compost-daemon` verified live again on 2026-08-10
+- [ ] Outbox quarantine count = 0 sustained for 14 consecutive days (counter reset to zero on 2026-08-10 after 92 FK-quarantined rows were recovered; earliest completion 2026-08-24)
 - [ ] No regression: `compost ask "<test query>"` still returns LLM synthesis
 
 ### 90 days (target: 2026-08-02)

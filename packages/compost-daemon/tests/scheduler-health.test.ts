@@ -14,7 +14,7 @@ import {
   startReflectScheduler,
   type Scheduler,
 } from "../src/scheduler";
-import { collectSchedulerHealth } from "../src/main";
+import { collectOutboxHealth, collectSchedulerHealth } from "../src/main";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
 import {
   getActivePolicy,
@@ -272,6 +272,27 @@ describe("scheduler health", () => {
         running: false,
       },
     ]);
+  });
+
+  test("outbox health reports pending and quarantined rows separately", () => {
+    const db = makeDb();
+    openDbs.push(db);
+    db.run(
+      `INSERT INTO observe_outbox
+       (adapter, source_id, source_kind, source_uri, idempotency_key,
+        trust_tier, transform_policy, payload)
+       VALUES ('test', 'pending', 'host-adapter', 'test://pending', 'pending',
+               'first_party', 'tp-2026-04', '{}')`
+    );
+    db.run(
+      `INSERT INTO observe_outbox
+       (adapter, source_id, source_kind, source_uri, idempotency_key,
+        trust_tier, transform_policy, payload, drain_quarantined_at)
+       VALUES ('test', 'quarantined', 'host-adapter', 'test://quarantined',
+               'quarantined', 'first_party', 'tp-2026-04', '{}', datetime('now'))`
+    );
+
+    expect(collectOutboxHealth(db)).toEqual({ pending: 1, quarantined: 1 });
   });
 
   test("ingest: completes stale queue row when matching derivation already succeeded", async () => {

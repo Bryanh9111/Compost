@@ -309,6 +309,19 @@ now rewrites unregistered `transform_policy` labels to the active registered
 policy while preserving the requested label in payload metadata. This remains
 an ops runbook signal, not a monorepo trigger.
 
+2026-08-10 dual-health hardening baseline: migrations `0024` and `0025`
+repair action project labels only from explicit payload/GitHub repository or
+non-generic routing-context evidence; future drains persist ordered contexts in
+observation metadata. `drainOne` now auto-registers arbitrary adapter contexts,
+and 92 historical FK-quarantined rows were released and drained to
+`pending=0/quarantined=0`. Daemon status surfaces quarantine as degraded;
+`doctor --check-integrity` counts it and separates in-flight
+`pending_ingest_observations` from true orphans. The shared migrator now waits
+for transient writers, and the live action repair was changed from a correlated
+O(n²) update to a joined update (0.47s on the pre-change ledger backup).
+Dependency overrides and MCP SDK bounds were refreshed; `bun audit` returned no
+vulnerabilities. The 14-day zero-quarantine success window starts on this date.
+
 Engram pinned decisions sealing this turn (written 2026-05-02): `88c0de87fea8` (v4 metacognitive turn lock), `a8a292013323` (anti-drift verification procedure), `df525f281ec4` (supersede note for v3 identity 72df4feab550), `23531c7c850b` (post-commit fix baseline). Plan-of-record source: maintainer's local plan file (kept outside this repo). Long-form rationale: `docs/metacognitive-direction.md`.
 
 ### Self-evolution levels

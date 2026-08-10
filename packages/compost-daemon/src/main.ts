@@ -391,6 +391,7 @@ async function startControlSocket(
           const info = {
             pid: process.pid,
             uptime: process.uptime(),
+            outbox: collectOutboxHealth(db),
             schedulers: collectSchedulerHealth(schedulers),
           };
           _socket.write(JSON.stringify(info) + "\n");
@@ -426,6 +427,25 @@ async function startControlSocket(
         server.stop(true);
       }
     },
+  };
+}
+
+export function collectOutboxHealth(db: Database): {
+  pending: number;
+  quarantined: number;
+} {
+  const row = db
+    .query(
+      `SELECT
+         SUM(CASE WHEN drained_at IS NULL AND drain_quarantined_at IS NULL THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN drain_quarantined_at IS NOT NULL THEN 1 ELSE 0 END) AS quarantined
+       FROM observe_outbox`
+    )
+    .get() as { pending: number | null; quarantined: number | null };
+
+  return {
+    pending: row.pending ?? 0,
+    quarantined: row.quarantined ?? 0,
   };
 }
 

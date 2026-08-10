@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.20.0",
     "lxml>=6.1.0",
+    "lxml-html-clean>=0.4.5",
     "trafilatura>=1.12.0",
 ]
 

@@ -149,8 +149,10 @@ describe("doctor --check-integrity", () => {
     expect(result.exitCode).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.orphan_observations).toBe(0);
+    expect(report.pending_ingest_observations).toBe(0);
     expect(report.dangling_fact_links).toBe(0);
     expect(report.stale_wiki_pages).toBe(0);
+    expect(report.quarantined_outbox).toBe(0);
     expect(report.unknown_transform_policies.in_observe_outbox).toBe(0);
     expect(report.unknown_transform_policies.in_observations).toBe(0);
     expect(report.total_issues).toBe(0);
@@ -216,6 +218,35 @@ describe("doctor --check-integrity", () => {
     expect(report.total_issues).toBe(0);
   });
 
+  test("reports in-flight ingest separately instead of as an orphan", async () => {
+    const db = setupDb(dataDir);
+    db.run(
+      `INSERT INTO source (id, uri, kind, trust_tier)
+       VALUES ('pending-src', 'test://pending', 'local-file', 'first_party')`
+    );
+    db.run(
+      `INSERT INTO observations
+        (observe_id, source_id, source_uri, occurred_at, captured_at,
+         content_hash, raw_hash, mime_type, adapter, adapter_sequence,
+         trust_tier, idempotency_key, transform_policy)
+       VALUES ('obs-pending-1', 'pending-src', 'test://pending',
+               datetime('now'), datetime('now'),
+               'hash-pending', 'raw-pending', 'text/plain', 'test-adapter', 1,
+               'first_party', 'idem-pending', 'tp-2026-04')`
+    );
+    db.run(
+      `INSERT INTO ingest_queue (observe_id, source_kind, priority)
+       VALUES ('obs-pending-1', 'local-file', 1)`
+    );
+    db.close();
+
+    const result = await runCli(["doctor", "--check-integrity"], dataDir);
+    const report = JSON.parse(result.stdout);
+    expect(report.orphan_observations).toBe(0);
+    expect(report.pending_ingest_observations).toBe(1);
+    expect(report.total_issues).toBe(0);
+  });
+
   test("detects unknown transform_policy in observe_outbox", async () => {
     const db = setupDb(dataDir);
     db.run(
@@ -231,6 +262,26 @@ describe("doctor --check-integrity", () => {
     const report = JSON.parse(result.stdout);
     expect(report.unknown_transform_policies.in_observe_outbox).toBe(1);
     expect(report.total_issues).toBeGreaterThanOrEqual(1);
+  });
+
+  test("detects quarantined outbox rows", async () => {
+    const db = setupDb(dataDir);
+    db.run(
+      `INSERT INTO observe_outbox
+        (adapter, source_id, source_kind, source_uri, idempotency_key,
+         trust_tier, transform_policy, payload, drain_attempts,
+         drain_error, drain_quarantined_at)
+       VALUES ('test', 's1', 'host-adapter', 'test://s1', 'k1',
+               'first_party', 'tp-2026-04', '{}', 6,
+               'FOREIGN KEY constraint failed', datetime('now'))`
+    );
+    db.close();
+
+    const result = await runCli(["doctor", "--check-integrity"], dataDir);
+    const report = JSON.parse(result.stdout);
+    expect(report.quarantined_outbox).toBe(1);
+    expect(report.total_issues).toBe(1);
+    expect(report.hint).toContain("quarantined outbox");
   });
 });
 

@@ -101,7 +101,7 @@ protection.
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (23 migrations)
+## Database schema (25 migrations)
 
 ### Core tables
 

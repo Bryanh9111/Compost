@@ -22,6 +22,10 @@ interface SchedulerHealth {
 interface DaemonStatus {
   pid: number;
   uptime: number;
+  outbox?: {
+    pending: number;
+    quarantined: number;
+  };
   schedulers?: SchedulerHealth[];
 }
 
@@ -38,6 +42,12 @@ export function formatDaemonStatus(value: unknown): string {
 
   const uptimeSeconds = Math.round(value.uptime);
   const lines = [`pid: ${value.pid}  uptime: ${uptimeSeconds}s`];
+  if (value.outbox) {
+    const state = value.outbox.quarantined > 0 ? " [degraded]" : "";
+    lines.push(
+      `outbox: pending=${value.outbox.pending} quarantined=${value.outbox.quarantined}${state}`
+    );
+  }
   if (Array.isArray(value.schedulers)) {
     const nameWidth = Math.max(9, ...value.schedulers.map((s) => s.name.length));
     lines.push("schedulers:");

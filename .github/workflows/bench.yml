@@ -21,6 +21,9 @@ on:
       - 'bench/**'
       - '.github/workflows/bench.yml'
 
+permissions:
+  contents: read
+
 jobs:
   bench:
     name: Layered performance bench

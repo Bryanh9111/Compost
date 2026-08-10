@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { Command } from "@commander-js/extra-typings";
@@ -177,6 +177,7 @@ describe("CLI program structure", () => {
     const output = formatDaemonStatus({
       pid: 12345,
       uptime: 100.2,
+      outbox: { pending: 3, quarantined: 2 },
       schedulers: [
         {
           name: "ingest",
@@ -194,6 +195,7 @@ describe("CLI program structure", () => {
     });
 
     expect(output).toContain("pid: 12345  uptime: 100s");
+    expect(output).toContain("outbox: pending=3 quarantined=2 [degraded]");
     expect(output).toContain("schedulers:");
     expect(output).toContain("ingest");
     expect(output).toContain("[running]");

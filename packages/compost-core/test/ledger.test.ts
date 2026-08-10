@@ -162,14 +162,20 @@ describe("ledger/outbox", () => {
     expect(queue.source_kind).toBe("local-file");
   });
 
-  test("drainOne auto-registers source_context links", () => {
-    // First create context entries
-    db.run("INSERT INTO context (id, display_name) VALUES ('work', 'Work')");
-    db.run("INSERT INTO context (id, display_name) VALUES ('project-x', 'Project X')");
-
+  test("drainOne auto-registers contexts and source_context links", () => {
     const event = makeEvent({ contexts: ["work", "project-x"] });
     appendToOutbox(db, event);
-    drainOne(db);
+    const result = drainOne(db);
+
+    expect(result).toBeTruthy();
+
+    const contexts = db
+      .query("SELECT id, display_name FROM context WHERE id IN ('work', 'project-x') ORDER BY id")
+      .all() as { id: string; display_name: string }[];
+    expect(contexts).toEqual([
+      { id: "project-x", display_name: "Project X" },
+      { id: "work", display_name: "Work" },
+    ]);
 
     const links = db
       .query("SELECT context_id FROM source_context WHERE source_id = ? ORDER BY context_id")

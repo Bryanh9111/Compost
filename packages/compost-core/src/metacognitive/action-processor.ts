@@ -455,6 +455,10 @@ function deriveProject(
   const engramProject = stringValue(metadata?.["engram_project"]);
   if (engramProject) return engramProject;
 
+  const explicitProject =
+    stringValue(payload?.["project"]) ?? stringValue(metadata?.["project"]);
+  if (explicitProject) return explicitProject;
+
   const cwd = stringValue(payload?.["cwd"]);
   if (cwd) return projectNameFromPath(cwd);
 
@@ -464,10 +468,52 @@ function deriveProject(
   const vaultRoot = stringValue(payload?.["vault_root"]);
   if (vaultRoot) return projectNameFromPath(vaultRoot);
 
+  const githubProject = projectNameFromGitHubUri(row.source_uri);
+  if (githubProject) return githubProject;
+
+  const contextProject = projectNameFromContexts(
+    payload?.["contexts"] ?? metadata?.["contexts"]
+  );
+  if (contextProject) return contextProject;
+
   const uriPath = pathFromSourceUri(row.source_uri);
   if (uriPath) return projectNameFromPath(uriPath);
 
   return projectNameFromPath(row.source_uri);
+}
+
+const GENERIC_CONTEXT_IDS = new Set([
+  "claude-code",
+  "codex",
+  "content-production",
+  "cross-agent-memory",
+  "global",
+  "meta",
+  "video",
+  "work",
+]);
+
+function projectNameFromContexts(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const contexts = value
+    .map(stringValue)
+    .filter((context): context is string => context !== null);
+  return (
+    contexts.find((context) => !GENERIC_CONTEXT_IDS.has(context.toLowerCase())) ??
+    contexts[0] ??
+    null
+  );
+}
+
+function projectNameFromGitHubUri(sourceUri: string): string | null {
+  try {
+    const url = new URL(sourceUri);
+    if (url.hostname.toLowerCase() !== "github.com") return null;
+    const parts = url.pathname.split("/").filter(Boolean);
+    return parts[1] ? decodeURIComponent(parts[1]).replace(/\.git$/i, "") : null;
+  } catch {
+    return null;
+  }
 }
 
 function deriveNextQueryHint(project: string | null, whatText: string): string | null {

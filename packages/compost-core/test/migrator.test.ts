@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 23 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 25 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(23);
+    expect(result.applied).toHaveLength(25);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -49,6 +49,8 @@ describe("migrator", () => {
       "0021_action_log",
       "0022_engram_context_backfill",
       "0023_integrity_observation_indexes",
+      "0024_action_project_repair",
+      "0025_action_context_project_repair",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -123,6 +125,15 @@ describe("migrator", () => {
     expect(fk.foreign_keys).toBe(1);
   });
 
+  test("migration entrypoint waits for transient concurrent writers", () => {
+    applyMigrations(db);
+
+    const timeout = db.query("PRAGMA busy_timeout").get() as {
+      timeout: number;
+    };
+    expect(timeout.timeout).toBeGreaterThanOrEqual(5000);
+  });
+
   test("ranking_profile seed data exists", () => {
     applyMigrations(db);
 
@@ -185,12 +196,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(23);
+    expect(before.pending).toHaveLength(25);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(23);
+    expect(after.applied).toHaveLength(25);
     expect(after.pending).toHaveLength(0);
   });
 
@@ -231,6 +242,92 @@ describe("migrator", () => {
       )
       .get() as { context_id: string } | null;
     expect(context?.context_id).toBe("athena");
+  });
+
+  test("0024 repairs action projects from payloads and GitHub URLs", () => {
+    applyMigrations(db);
+    db.run("DELETE FROM _compost_migrations WHERE name = '0024_action_project_repair'");
+    db.run(
+      "INSERT INTO source VALUES ('github-source','https://github.com/Bryanh9111/ZyloApp/pull/52','web',NULL,0.0,'web',datetime('now'),NULL)"
+    );
+    db.run(
+      `INSERT INTO observations
+       (observe_id, source_id, source_uri, occurred_at, captured_at,
+        content_hash, raw_hash, raw_bytes, mime_type, adapter,
+        adapter_sequence, trust_tier, idempotency_key, transform_policy)
+       VALUES
+       ('obs-payload-project','github-source','https://github.com/Bryanh9111/ZyloApp/pull/52',
+        datetime('now'),datetime('now'),'hash-project','raw-project',
+        '{"action":"merged","project":"ZyloApp"}','application/json','codex',1,
+        'web','project-idem','tp-2026-04')`
+    );
+    db.run(
+      `INSERT INTO action_log
+       (action_id, source_system, source_id, source_observe_id, who,
+        what_text, project, next_query_hint)
+       VALUES ('action-project','codex','zyloapp-pr-52','obs-payload-project',
+               'codex','Merged PR 52','52','52: Merged PR 52')`
+    );
+
+    const result = applyMigrations(db);
+    expect(result.applied.map((m) => m.name)).toEqual([
+      "0024_action_project_repair",
+    ]);
+    expect(result.errors).toEqual([]);
+
+    const action = db
+      .query("SELECT project, next_query_hint FROM action_log WHERE action_id = 'action-project'")
+      .get() as { project: string; next_query_hint: string };
+    expect(action.project).toBe("ZyloApp");
+    expect(action.next_query_hint).toBe("ZyloApp: Merged PR 52");
+  });
+
+  test("0025 repairs malformed action projects from source contexts", () => {
+    applyMigrations(db);
+    db.run(
+      "DELETE FROM _compost_migrations WHERE name = '0025_action_context_project_repair'"
+    );
+    db.run(
+      "INSERT INTO source VALUES ('job-source','https://example.test/jobs/4296836009','web',NULL,0.0,'web',datetime('now'),NULL)"
+    );
+    db.run(
+      "INSERT INTO context (id, display_name) VALUES ('interview2026', 'Interview 2026')"
+    );
+    db.run(
+      "INSERT INTO source_context (source_id, context_id) VALUES ('job-source', 'interview2026')"
+    );
+    db.run(
+      `INSERT INTO observations
+       (observe_id, source_id, source_uri, occurred_at, captured_at,
+        content_hash, raw_hash, raw_bytes, mime_type, adapter,
+        adapter_sequence, trust_tier, idempotency_key, transform_policy)
+       VALUES
+       ('obs-context-project','job-source','https://example.test/jobs/4296836009',
+        datetime('now'),datetime('now'),'hash-context','raw-context',
+        'job review','text/plain','codex',1,'web','context-idem','tp-2026-04')`
+    );
+    db.run(
+      `INSERT INTO action_log
+       (action_id, source_system, source_id, source_observe_id, who,
+        what_text, project, next_query_hint)
+       VALUES ('action-context','codex','job-4296836009','obs-context-project',
+               'codex','Reviewed job evidence','4296836009',
+               '4296836009: Reviewed job evidence')`
+    );
+
+    const result = applyMigrations(db);
+    expect(result.applied.map((m) => m.name)).toEqual([
+      "0025_action_context_project_repair",
+    ]);
+    expect(result.errors).toHaveLength(0);
+
+    const action = db
+      .query(
+        "SELECT project, next_query_hint FROM action_log WHERE action_id = 'action-context'"
+      )
+      .get() as { project: string; next_query_hint: string };
+    expect(action.project).toBe("interview2026");
+    expect(action.next_query_hint).toStartWith("interview2026:");
   });
 
   test("action_log schema exists after 0021", () => {
