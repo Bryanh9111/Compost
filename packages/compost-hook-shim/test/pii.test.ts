@@ -244,3 +244,20 @@ describe("pii.scrubEnvelope", () => {
     expect(result.redactions).toBe(0);
   });
 });
+
+describe("persistent envelope privacy", () => {
+  test("scrubs content, nested JSON, metadata and payload without breaking structure", () => {
+    const secret = "syntheticAuditSecret12345";
+    const envelope = { content: JSON.stringify({password: secret, note: `API_KEY=${secret}`}),
+      metadata: {nested: [{client_secret: secret}]}, payload: {summary: `PASSWORD=${secret}`} };
+    const result = scrubEnvelope(envelope);
+    expect(JSON.stringify(result.envelope)).not.toContain(secret);
+    expect(JSON.parse(result.envelope.content).password).toContain('REDACTED');
+    expect(result.envelope.metadata.nested).toHaveLength(1);
+    expect(scrubEnvelope(result.envelope).redactions).toBe(0);
+  });
+  test("recognizes prefixed tokens and JSON password strings", () => {
+    expect(scrub(`sk-proj-${'A'.repeat(70)}`).scrubbed).toBe('[REDACTED_TOKEN]');
+    expect(scrub('{"password":"syntheticAuditSecret12345"}').scrubbed).not.toContain('syntheticAuditSecret12345');
+  });
+});

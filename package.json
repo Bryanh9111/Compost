@@ -1,13 +1,16 @@
 {
   "name": "compost",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "typecheck": "tsc --build",
     "test": "bun test",
     "lint": "biome check .",
     "check:engram-boundary": "bun scripts/check-engram-boundary.ts",
-    "bench": "bun bench/sqlite-reflect.bench.ts; bun bench/sqlite-query.bench.ts; bun bench/lancedb-ann.bench.ts; bun bench/llm-latency.bench.ts"
+    "bench": "bun bench/sqlite-reflect.bench.ts; bun bench/sqlite-query.bench.ts; bun bench/lancedb-ann.bench.ts; bun bench/llm-latency.bench.ts",
+    "test:coverage": "bun scripts/test-coverage.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
@@ -20,8 +23,8 @@
   "overrides": {
     "ajv": "8.20.0",
     "express-rate-limit": "8.5.1",
-    "fast-uri": "3.1.5",
-    "qs": "6.15.2",
+    "fast-uri": "3.1.6",
+    "qs": "6.16.0",
     "hono": "4.13.1",
     "ip-address": "10.4.0",
     "@hono/node-server": "2.1.0",

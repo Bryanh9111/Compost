@@ -25,22 +25,23 @@ export class OllamaEmbeddingService implements EmbeddingService {
     this.batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
   }
 
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  async embed(texts: string[], signal?:AbortSignal): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
 
     const results: Float32Array[] = [];
 
     for (let i = 0; i < texts.length; i += this.batchSize) {
       const batch = texts.slice(i, i + this.batchSize);
-      const batchResults = await this.embedBatch(batch);
+      const batchResults = await this.embedBatch(batch,signal);
       results.push(...batchResults);
     }
 
     return results;
   }
 
-  private async embedBatch(texts: string[]): Promise<Float32Array[]> {
+  private async embedBatch(texts: string[], signal?:AbortSignal): Promise<Float32Array[]> {
     return withOllamaLock(`compost:embed:${this.model}`, async () => {
+      signal?.throwIfAborted();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -49,7 +50,7 @@ export class OllamaEmbeddingService implements EmbeddingService {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model: this.model, input: texts }),
-          signal: controller.signal,
+          signal: signal ? AbortSignal.any([signal,controller.signal]) : controller.signal,
         });
 
         if (!res.ok) {
@@ -78,6 +79,6 @@ export class OllamaEmbeddingService implements EmbeddingService {
       } finally {
         clearTimeout(timer);
       }
-    });
+    },signal);
   }
 }

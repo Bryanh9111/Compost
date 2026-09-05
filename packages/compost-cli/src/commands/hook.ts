@@ -4,6 +4,7 @@
  * Reads JSON from stdin, computes sha256 idempotency_key, appends to outbox.
  * Must be fast (<30ms target). No daemon required - direct DB write.
  */
+import { scrubEnvelope } from "../../../compost-hook-shim/src/pii";
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
@@ -50,7 +51,7 @@ export function registerHook(program: Command): void {
 
       const adapter = "claude-code";
       const sourceId = `${adapter}:${event}`;
-      const content = JSON.stringify(parsed);
+      const content = JSON.stringify(scrubEnvelope(parsed).envelope);
       const idempotencyKey = sha256hex(`${adapter}:${sourceId}:${content}`);
       const now = new Date().toISOString();
 

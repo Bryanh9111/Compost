@@ -9,7 +9,6 @@ import {
   heartbeat,
   complete,
   fail,
-  type ClaimResult,
 } from "../src/queue/lease";
 
 function seedTestData(db: Database, count: number = 1): string[] {

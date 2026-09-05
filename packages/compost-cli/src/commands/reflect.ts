@@ -26,6 +26,7 @@ export function registerReflect(program: Command): void {
       try {
         const report = reflect(db);
         process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+        if (report.errors.length) process.exitCode = 1;
       } finally {
         db.close();
       }

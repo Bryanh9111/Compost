@@ -32,7 +32,7 @@ function luhnCheck(digits: string): boolean {
     const ch = nums[i];
     if (ch === undefined) continue;
     let n = parseInt(ch, 10);
-    if (isNaN(n)) return false;
+    if (Number.isNaN(n)) return false;
     if (alt) {
       n *= 2;
       if (n > 9) n -= 9;
@@ -78,7 +78,7 @@ export function scrub(input: string, opts: ScrubOpts = {}): ScrubResult {
   //    the generic sk- pattern swallowing sk-ant-.
   const tokenPatterns: RegExp[] = [
     /sk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
-    /sk-[A-Za-z0-9]{20,}/g, // OpenAI (general)
+    /sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g, // OpenAI (general)
     /github_pat_[A-Za-z0-9_]{80,}/g, // GitHub fine-grained PAT
     /ghp_[A-Za-z0-9]{36,}/g, // GitHub classic PAT
     /AKIA[0-9A-Z]{16}/g, // AWS access key
@@ -91,6 +91,16 @@ export function scrub(input: string, opts: ScrubOpts = {}): ScrubResult {
       return REDACTED_TOKEN;
     });
   }
+
+  // Structured JSON fields also occur inside serialized tool arguments.
+  out = out.replace(
+    /("[A-Z_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)"\s*:\s*)("(?:\\.|[^"\\])*")/gi,
+    (match, prefix, value) => {
+      if (String(value).includes("REDACTED")) return match;
+      count++;
+      return `${prefix}"${REDACTED_GENERIC}"`;
+    }
+  );
 
   // 4. Credit card numbers (Luhn-validated, 13-19 digits with optional spaces/hyphens).
   out = out.replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => {
@@ -156,20 +166,33 @@ export function scrubEnvelope<T extends Envelope>(
   envelope: T,
   opts: ScrubOpts = {}
 ): ScrubEnvelopeResult<T> {
-  const payloadStr = JSON.stringify(envelope.payload ?? {});
-  const { scrubbed, redactions } = scrub(payloadStr, opts);
-
-  let scrubbedPayload: Record<string, unknown>;
-  try {
-    scrubbedPayload = JSON.parse(scrubbed);
-  } catch {
-    // Redaction broke JSON structure (rare; happens if a secret contained
-    // unescaped braces). Fall back to wrapping the full redacted string.
-    scrubbedPayload = { _redacted_raw: scrubbed };
+  let redactions = 0;
+  const sensitiveKey = /^(?:[A-Z_]*)(?:SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)$/i;
+  function visit(value: unknown, key = ""): unknown {
+    if (typeof value === "string") {
+      if (sensitiveKey.test(key) && value && !value.includes("REDACTED")) {
+        redactions++;
+        return REDACTED_GENERIC;
+      }
+      // Tool inputs/content may themselves be serialized JSON. Traverse them
+      // before text rules so quoting and sibling provenance survive redaction.
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (parsed !== null && typeof parsed === "object") {
+          const before = redactions;
+          const cleaned = visit(parsed);
+          return redactions === before ? value : JSON.stringify(cleaned);
+        }
+      } catch { /* ordinary prose */ }
+      const result = scrub(value, opts);
+      redactions += result.redactions;
+      return result.scrubbed;
+    }
+    if (Array.isArray(value)) return value.map((item) => visit(item));
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, visit(v, k)]));
+    }
+    return value;
   }
-
-  return {
-    envelope: { ...envelope, payload: scrubbedPayload },
-    redactions,
-  };
+  return { envelope: visit(envelope) as T, redactions };
 }

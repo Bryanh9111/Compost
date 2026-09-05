@@ -3,32 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-/**
- * Week 4 Day 5 — `compost audit` CLI argument validation.
- *
- * CLI validation paths call process.exit(2) which kills the test runner
- * when invoked in-process, so we spawn the CLI as a subprocess. Covers
- * debate 010 merge-blocker "audit list CLI test" backlog item.
- */
-
-const CLI_MAIN = join(import.meta.dir, "..", "src", "main.ts");
-
-async function runCli(
-  args: string[],
-  dataDir: string
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", CLI_MAIN, ...args], {
-    env: { ...process.env, COMPOST_DATA_DIR: dataDir },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
-}
+import { runCli } from "./run-cli";
 
 describe("compost audit CLI argument validation", () => {
   let dataDir: string;

@@ -29,21 +29,7 @@ export function registerDrain(program: Command): void {
 
       try {
         while (true) {
-          // If adapter filter specified, peek to check before draining
-          if (opts.adapter) {
-            const peek = db
-              .query(
-                `SELECT seq FROM observe_outbox
-                 WHERE drained_at IS NULL AND drain_quarantined_at IS NULL
-                   AND adapter = ?
-                 ORDER BY seq LIMIT 1`
-              )
-              .get(opts.adapter) as { seq: number } | null;
-
-            if (!peek) break;
-          }
-
-          const result = drainOne(db);
+          const result = drainOne(db, opts.adapter);
           if (!result) break;
           drained++;
         }
@@ -54,5 +40,6 @@ export function registerDrain(program: Command): void {
       }
 
       process.stdout.write(JSON.stringify({ drained, failed }) + "\n");
+      if (failed) process.exitCode = 1;
     });
 }

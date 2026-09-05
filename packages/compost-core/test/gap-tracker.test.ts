@@ -109,10 +109,10 @@ describe("listGaps", () => {
 
   test("default sort: open first, then by ask_count desc, then last_asked desc", () => {
     const a = logGap(db, "question a");
-    const b = logGap(db, "question b");
+    const _b = logGap(db, "question b");
     logGap(db, "question b"); // bump b to ask_count=2
     resolveGap(db, a.problem_id); // a resolved, ask_count still 1
-    const c = logGap(db, "question c");
+    const _c = logGap(db, "question c");
 
     const all = listGaps(db);
     expect(all.map((g) => g.question)).toEqual([

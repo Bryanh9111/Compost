@@ -1,3 +1,4 @@
+import {checkStorageIntegrity} from "../../../compost-core/src/persistence/integrity";
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
@@ -340,7 +341,7 @@ export function registerDoctor(program: Command): void {
 
           const embSvc = new OllamaEmbeddingService();
           const lanceDir = join(dataDir, "lancedb");
-          const tempLanceDir = join(dataDir, "lancedb-rebuild-tmp");
+          const tempLanceDir = join(dataDir, `lancedb-rebuild-${Date.now()}-${process.pid}`);
 
           // Build new index in temp location (atomic rebuild)
           const tempStore = new VectorStore(tempLanceDir, embSvc);
@@ -350,10 +351,12 @@ export function registerDoctor(program: Command): void {
           const chunks = db
             .query(
               `SELECT c.chunk_id, c.observe_id, c.text_content,
-                      f.fact_id
+                      (SELECT f.fact_id FROM facts f
+                       WHERE f.observe_id = c.observe_id AND f.archived_at IS NULL
+                         AND f.superseded_by IS NULL
+                       ORDER BY f.created_at, f.fact_id LIMIT 1) AS fact_id
                FROM chunks c
-               LEFT JOIN facts f ON f.observe_id = c.observe_id
-               ORDER BY c.created_at`
+               ORDER BY c.created_at, c.chunk_id`
             )
             .all() as Array<{
               chunk_id: string;
@@ -391,15 +394,21 @@ export function registerDoctor(program: Command): void {
 
           await tempStore.close();
 
-          // Atomic swap: remove old, rename temp to live
-          const { rmSync: rm, renameSync } = await import("fs");
-          try { rm(lanceDir, { recursive: true, force: true }); } catch {}
-          renameSync(tempLanceDir, lanceDir);
+          // Preserve the previous index and restore it if the replacement fails.
+          const { renameSync } = await import("fs");
+          const previousIndex = `${tempLanceDir}-previous`;
+          const hadIndex = existsSync(lanceDir);
+          if (hadIndex) renameSync(lanceDir, previousIndex);
+          try { renameSync(tempLanceDir, lanceDir); }
+          catch (error) {
+            if (hadIndex) renameSync(previousIndex, lanceDir);
+            throw error;
+          }
 
-          // Update chunks.embedded_at
-          db.run(
-            "UPDATE chunks SET embedded_at = datetime('now') WHERE embedded_at IS NULL"
-          );
+          // Mark only the chunks actually embedded by this rebuild. Other
+          // writers may have inserted new chunks while embedding was in flight.
+          const markEmbedded = db.prepare("UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?");
+          db.transaction(() => { for (const chunk of chunks) markEmbedded.run(chunk.chunk_id); })();
 
           process.stdout.write(
             JSON.stringify({ ok: true, rebuilt: embedded }) + "\n"
@@ -577,6 +586,7 @@ export function registerDoctor(program: Command): void {
               2
             ) + "\n"
           );
+          if (rowsWithPii > 0) process.exitCode = 1;
           return;
         } finally {
           db.close();
@@ -663,7 +673,9 @@ export function registerDoctor(program: Command): void {
             )
             .get() as { c: number };
 
+          const storage = checkStorageIntegrity(db);
           const totalIssues =
+            storage.database_errors.length + storage.foreign_key_violations.length + storage.fts_errors.length +
             quarantinedOutbox.c +
             orphanObs.c +
             danglingLinks.c +
@@ -674,6 +686,7 @@ export function registerDoctor(program: Command): void {
           process.stdout.write(
             JSON.stringify(
               {
+                ...storage,
                 quarantined_outbox: quarantinedOutbox.c,
                 orphan_observations: orphanObs.c,
                 pending_ingest_observations: pendingIngestObs.c,
@@ -695,6 +708,7 @@ export function registerDoctor(program: Command): void {
               2
             ) + "\n"
           );
+          if (totalIssues > 0) process.exitCode = 1;
           return;
         } finally {
           db.close();

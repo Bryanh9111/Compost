@@ -1,3 +1,5 @@
+import { VectorStore } from "../../../compost-core/src/storage/lancedb";
+import { OllamaEmbeddingService } from "../../../compost-core/src/embedding/ollama";
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
@@ -44,7 +46,11 @@ export function registerMcp(program: Command): void {
 
       const llmRegistry = new BreakerRegistry(new OllamaLLMService());
 
-      const mcpHandle = await startMcpServer(db, llmRegistry);
+      const vectors = new VectorStore(join(dataDir, "lancedb"), new OllamaEmbeddingService());
+      let vectorStore: VectorStore | undefined;
+      try { await vectors.connect(); vectorStore = vectors; }
+      catch { await vectors.close(); }
+      const mcpHandle = await startMcpServer(db, llmRegistry, vectorStore);
 
       // Graceful shutdown. MCP clients close stdin when they disconnect;
       // SIGINT/SIGTERM catches terminal kills. Either path stops the
@@ -53,6 +59,7 @@ export function registerMcp(program: Command): void {
         process.stderr.write(`compost mcp: shutting down (${signal})\n`);
         try {
           await mcpHandle.stop();
+          await vectorStore?.close();
         } catch (err) {
           process.stderr.write(
             `compost mcp: transport stop failed: ${err instanceof Error ? err.message : String(err)}\n`

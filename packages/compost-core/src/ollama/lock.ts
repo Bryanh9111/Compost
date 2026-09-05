@@ -1,4 +1,5 @@
 import { homedir } from "os";
+import {setTimeout as delay} from "node:timers/promises";
 import { dirname, join } from "path";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
@@ -26,10 +27,6 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function isStale(lockDir: string, staleMs: number): Promise<boolean> {
   try {
     const raw = await readFile(join(lockDir, "owner.json"), "utf8");
@@ -41,7 +38,7 @@ async function isStale(lockDir: string, staleMs: number): Promise<boolean> {
   }
 }
 
-async function acquire(lockDir: string, label: string): Promise<() => Promise<void>> {
+async function acquire(lockDir: string, label: string, signal?:AbortSignal): Promise<() => Promise<void>> {
   const staleMs = numberFromEnv("ZYLO_OLLAMA_LOCK_STALE_MS", DEFAULT_STALE_MS);
   const waitMs = numberFromEnv("ZYLO_OLLAMA_LOCK_WAIT_MS", DEFAULT_WAIT_MS);
   const deadline = Date.now() + waitMs;
@@ -50,6 +47,7 @@ async function acquire(lockDir: string, label: string): Promise<() => Promise<vo
   await mkdir(dirname(lockDir), { recursive: true });
 
   while (true) {
+    signal?.throwIfAborted();
     try {
       await mkdir(lockDir);
       await writeFile(
@@ -82,18 +80,20 @@ async function acquire(lockDir: string, label: string): Promise<() => Promise<vo
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for Ollama lock: ${lockDir}`);
       }
-      await sleep(RETRY_MS);
+      await delay(RETRY_MS,undefined,{signal});
     }
   }
 }
 
 export async function withOllamaLock<T>(
   label: string,
-  fn: () => Promise<T>
+  fn: () => Promise<T>,
+  signal?:AbortSignal
 ): Promise<T> {
   const lockDir = process.env.ZYLO_OLLAMA_LOCK_DIR ?? DEFAULT_LOCK_DIR;
-  const release = await acquire(lockDir, label);
+  const release = await acquire(lockDir, label, signal);
   try {
+    signal?.throwIfAborted();
     return await fn();
   } finally {
     await release();

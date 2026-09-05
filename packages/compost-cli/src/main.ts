@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import {registerIndexes} from "./commands/indexes";
+import {registerMaintenance} from "./commands/maintenance";
 import { Command } from "@commander-js/extra-typings";
 import { registerDaemon } from "./commands/daemon";
 import { registerAdd } from "./commands/add";
@@ -26,9 +28,10 @@ import { registerPatterns } from "./commands/patterns";
 import { registerMcp } from "./commands/mcp";
 import { registerReason } from "./commands/reason";
 
+export function createProgram() {
 const program = new Command()
   .name("compost")
-  .description("Compost — personal knowledge base CLI")
+  .description("Compost — action ledger, coverage and artifact routing")
   .version("0.1.0");
 
 registerDaemon(program);
@@ -36,6 +39,8 @@ registerAdd(program);
 registerQuery(program);
 registerAsk(program);
 registerDoctor(program);
+registerMaintenance(program);
+registerIndexes(program);
 registerHook(program);
 registerReflect(program);
 registerDrain(program);
@@ -58,4 +63,7 @@ registerPatterns(program);
 registerMcp(program);
 registerReason(program);
 
-program.parse(process.argv);
+return program;
+}
+
+if (import.meta.main) await createProgram().parseAsync(process.argv);

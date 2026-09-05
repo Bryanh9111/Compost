@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
-import { reflect, type ReflectionReport } from "../src/cognitive/reflect";
+import { reflect, } from "../src/cognitive/reflect";
 
 function insertSource(db: Database, id: string, kind: string): void {
   db.run(

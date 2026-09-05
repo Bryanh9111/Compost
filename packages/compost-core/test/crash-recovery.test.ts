@@ -11,7 +11,7 @@ import {
   type OutboxEvent,
 } from "../src/ledger/outbox";
 import { reflect } from "../src/cognitive/reflect";
-import { claimOne, complete, fail } from "../src/queue/lease";
+import { claimOne, complete, } from "../src/queue/lease";
 
 function makeEvent(overrides?: Partial<OutboxEvent>): OutboxEvent {
   return {

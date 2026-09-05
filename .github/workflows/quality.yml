@@ -1,0 +1,22 @@
+name: quality
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: bun install --frozen-lockfile
+      - run: uv sync --project packages/compost-ingest --extra dev
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run check:engram-boundary
+      - run: bun run test:coverage
+      - run: uv run --project packages/compost-ingest pytest packages/compost-ingest/tests -q
+      - run: uv run --project packages/compost-ingest ruff check packages/compost-ingest

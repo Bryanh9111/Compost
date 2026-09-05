@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 25 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 27 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(25);
+    expect(result.applied).toHaveLength(27);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -51,6 +51,8 @@ describe("migrator", () => {
       "0023_integrity_observation_indexes",
       "0024_action_project_repair",
       "0025_action_context_project_repair",
+      "0026_maintenance_audit",
+      "0027_search_indexes",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -68,7 +70,7 @@ describe("migrator", () => {
 
     const tables = db
       .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_compost_migrations' AND name NOT LIKE 'facts_fts_%' ORDER BY name"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_compost_migrations' AND name NOT LIKE 'facts_fts_%' AND name NOT LIKE 'actions_fts_%' AND name NOT LIKE 'action_log_cjk_%' AND name NOT LIKE 'facts_cjk_%' ORDER BY name"
       )
       .all() as { name: string }[];
 
@@ -76,6 +78,8 @@ describe("migrator", () => {
     expect(tableNames).toEqual([
       "access_log",
       "action_log",              // 0021 v4 Phase 2 metacognitive action surface
+      "action_log_cjk",
+      "actions_fts",
       "captured_item",
       "chunks",
       "context",
@@ -87,10 +91,12 @@ describe("migrator", () => {
       "fact_context",
       "fact_links",               // 0011 P0-0
       "facts",
+      "facts_cjk",
       "facts_fts",
       "graph_health_snapshot",    // 0010 P0-3 (rebuilt in 0011 with DEFAULTs)
       "health_signals",           // 0010 P0-1
       "ingest_queue",
+      "maintenance_audit",
       "observations",
       "observe_outbox",
       "open_problems",            // 0016 Phase 6 P0 gap tracker
@@ -99,6 +105,7 @@ describe("migrator", () => {
       "ranking_profile",
       "reasoning_chains",         // 0018 Phase 7 L5 (debate 025)
       "reasoning_scheduler_state",// 0020 Phase 7 L5 hybrid scheduler (debate 026)
+      "search_index_state",
       "source",
       "source_context",
       "user_pattern_events",      // 0015 user model schema
@@ -196,12 +203,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(25);
+    expect(before.pending).toHaveLength(27);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(25);
+    expect(after.applied).toHaveLength(27);
     expect(after.pending).toHaveLength(0);
   });
 

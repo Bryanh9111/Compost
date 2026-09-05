@@ -34,12 +34,11 @@
  *   1  — at least one required signal missing
  *   2  — probe itself failed (unexpected error)
  *
- * Note: this script cannot call MCP directly. It verifies schema via
- * the on-disk SQLite DB and reports the expected MCP tool manifest. An
- * agent session must cross-check tool availability via ToolSearch /
- * equivalent MCP introspection.
+ * MCP readiness is verified by a read-only stdio handshake and tools/list.
  */
-import { existsSync, readFileSync } from "fs";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { existsSync, } from "fs";
 import { join, resolve } from "path";
 import { Database } from "bun:sqlite";
 import { homedir } from "os";
@@ -57,13 +56,14 @@ interface Check {
 // reuses the existing `mcp__engram__remember` with `origin='compost'`;
 // Engram's `_map_insight_sources` auto-fills the insight-sources table.
 const REQUIRED_MCP_TOOLS = [
-  "mcp__engram__stream_for_compost",
-  "mcp__engram__invalidate_compost_fact",
+  "stream_for_compost",
+  "states_for_compost",
+  "invalidate_compost_fact",
 ];
 
 // The write path reuses an existing tool. Verified via its schema description
 // (must mention `compost` in the origin vocabulary).
-const REUSED_WRITE_TOOL = "mcp__engram__remember";
+const REUSED_WRITE_TOOL = "remember";
 
 const REQUIRED_ENGRAM_FILES = [
   "tests/test_api_surface_coverage.py",
@@ -254,38 +254,49 @@ function checkEngramRepo(repoPath: string | undefined): Check[] {
   return checks;
 }
 
-function checkMcpTools(): Check[] {
-  // Compost has no direct MCP introspection. This probe emits the expected
-  // tool manifest and requires an agent session (Claude Code's ToolSearch or
-  // equivalent MCP introspection) to cross-verify tool availability. We mark
-  // each as unverifiable-from-here with status=fail so the gate remains
-  // conservative — the agent must explicitly confirm.
-  const checks: Check[] = REQUIRED_MCP_TOOLS.map((tool) => ({
-    id: `mcp:${tool}`,
-    label: `MCP tool declared: ${tool}`,
-    pass: false,
-    detail:
-      "probe cannot call MCP directly — agent session must verify via ToolSearch",
-    required: true,
-  }));
-  // Reused write tool: describe but don't gate (its existence is assumed —
-  // it's the baseline Engram tool).
-  checks.push({
-    id: `mcp:${REUSED_WRITE_TOOL}-compost-origin`,
-    label: `${REUSED_WRITE_TOOL} accepts origin='compost'`,
-    pass: false,
-    detail:
-      "probe cannot call MCP directly — agent must inspect tool schema to confirm 'compost' is in Origins vocabulary",
-    required: true,
-  });
+export async function checkMcpTools(command = "engram-server"): Promise<Check[]> {
+  const client = new Client({ name: "compost-readiness", version: "0.1.0" });
+  const transport = new StdioClientTransport({ command, stderr: "pipe" });
+  const checks: Check[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const manifest = await Promise.race([
+      (async () => {
+        await client.connect(transport);
+        return await client.listTools();
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("MCP handshake exceeded 10 seconds")), 10_000);
+      }),
+    ]);
+    for (const name of REQUIRED_MCP_TOOLS) {
+      const tool = manifest.tools.find((t) => t.name === name);
+      const pass = !!tool && (name !== "stream_for_compost" || !!tool.inputSchema.properties?.["after_id"]);
+      checks.push({ id: `mcp:${name}`, label: `MCP tool: ${name}`, pass,
+        detail: pass ? "verified via tools/list" : "tool or pagination contract missing", required: true });
+    }
+    const remember = manifest.tools.find((t) => t.name === REUSED_WRITE_TOOL);
+    const supportsOrigin = !!remember?.inputSchema.properties?.["origin"] &&
+      JSON.stringify(remember).includes("compost");
+    checks.push({ id: "mcp:remember-compost-origin", label: "remember supports Compost origin",
+      pass: supportsOrigin, detail: supportsOrigin ? "verified in tool schema/description" : "origin contract missing", required: true });
+  } catch (error) {
+    checks.push({ id: "mcp:connection", label: "Engram MCP connection", pass: false,
+      detail: error instanceof Error ? error.message : String(error), required: true });
+  } finally {
+    if (timer) clearTimeout(timer);
+    await client.close();
+    await transport.close();
+  }
   return checks;
 }
 
-function main(): never {
+async function main(): Promise<void> {
   const { values } = parseArgs({
     args: Bun.argv.slice(2),
     options: {
       "engram-repo": { type: "string" },
+      "engram-server-bin": { type: "string", default: "engram-server" },
       json: { type: "boolean", default: false },
     },
     allowPositionals: false,
@@ -295,7 +306,7 @@ function main(): never {
     checkEngramCli(),
     ...checkEngramDb(),
     ...checkEngramRepo(values["engram-repo"]),
-    ...checkMcpTools(),
+    ...await checkMcpTools(values["engram-server-bin"]),
   ];
 
   const requiredMissing = checks.filter((c) => c.required && !c.pass);
@@ -315,7 +326,7 @@ function main(): never {
       )
     );
   } else {
-    console.log("Phase 5 Engram readiness probe");
+    console.log("Compost / Engram readiness probe");
     console.log("=".repeat(48));
     for (const c of checks) {
       const icon = c.pass ? "✓" : c.required ? "✗" : "·";
@@ -326,7 +337,7 @@ function main(): never {
     console.log("=".repeat(48));
     console.log(
       status === "ready"
-        ? "STATUS: READY — Phase 5 adapter coding can begin."
+        ? "STATUS: READY — integration contracts verified."
         : `STATUS: BLOCKED — ${requiredMissing.length} required signal(s) missing.`
     );
   }
@@ -335,8 +346,8 @@ function main(): never {
   process.exit(status === "ready" ? 0 : 1);
 }
 
-try {
-  main();
+if (import.meta.main) try {
+  await main();
 } catch (e) {
   console.error(`probe failed: ${e instanceof Error ? e.message : String(e)}`);
   process.exit(2);

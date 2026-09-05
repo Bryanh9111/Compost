@@ -1,3 +1,4 @@
+import type { VectorStore } from "../../compost-core/src/storage/lancedb";
 import type { Database } from "bun:sqlite";
 import { appendToOutbox } from "../../compost-core/src/ledger/outbox";
 import type { OutboxEvent } from "../../compost-core/src/ledger/outbox";
@@ -85,7 +86,8 @@ export interface McpHandle {
  */
 export async function startMcpServer(
   db: Database,
-  llmRegistry: BreakerRegistry
+  llmRegistry: BreakerRegistry,
+  vectorStore?: VectorStore
 ): Promise<McpHandle> {
   // Dynamic import so missing SDK doesn't crash unrelated tests
   const { McpServer } = await import(
@@ -186,7 +188,7 @@ export async function startMcpServer(
           as_of_unix_sec: input.as_of_unix_sec,
           debug_ranking: input.debug_ranking,
         };
-        const result = await query(db, input.q, opts);
+        const result = await query(db, input.q, opts, vectorStore);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };
@@ -219,6 +221,7 @@ export async function startMcpServer(
         const report = reflect(db);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(report) }],
+          ...(report.errors.length ? { isError: true } : {}),
         };
       } catch (err) {
         log.error({ err }, "compost.reflect error");
@@ -261,7 +264,7 @@ export async function startMcpServer(
           ranking_profile_id: input.ranking_profile_id,
           contexts: input.contexts,
           as_of_unix_sec: input.as_of_unix_sec,
-        });
+        }, vectorStore);
 
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import type { MCPCallResult } from "./writer";
@@ -25,13 +25,23 @@ export type EngramStreamEntry = z.infer<typeof engramStreamEntrySchema>;
 
 export interface StreamForCompostArgs {
   since?: string | null;
+  after_id?: string | null;
   kinds?: string[];
   project?: string | null;
   include_compost?: boolean;
   limit?: number;
 }
 
+export const engramStateSchema = z.object({
+  memory_id: z.string().min(1),
+  status: z.enum(["active", "resolved", "suspect", "obsolete", "missing"]),
+  expires_at: z.string().nullable(),
+  searchable: z.boolean(),
+});
+export type EngramMemoryState = z.infer<typeof engramStateSchema>;
+
 export interface EngramStreamClient {
+  statesForCompost?(memoryIds: string[]): Promise<MCPCallResult<EngramMemoryState[]>>;
   streamForCompost(
     args: StreamForCompostArgs
   ): Promise<MCPCallResult<EngramStreamEntry[]>>;
@@ -114,7 +124,9 @@ export class StreamPuller {
 
   saveCursor(cursor: StreamCursor): void {
     mkdirSync(dirname(this.cursorPath), { recursive: true });
-    writeFileSync(this.cursorPath, JSON.stringify(cursor, null, 2), "utf-8");
+    const temp = `${this.cursorPath}.${process.pid}.tmp`;
+    writeFileSync(temp, JSON.stringify(cursor, null, 2), { mode: 0o600 });
+    renameSync(temp, this.cursorPath);
   }
 
   /**
@@ -134,6 +146,7 @@ export class StreamPuller {
       limit,
       include_compost: false,
     };
+    if (cursor.since && cursor.last_memory_id) args.after_id = cursor.last_memory_id;
     if (this.defaultKinds !== undefined) args.kinds = this.defaultKinds;
     if (this.defaultProject !== undefined) args.project = this.defaultProject;
 
@@ -217,18 +230,19 @@ export class StreamPuller {
     prior: StreamCursor,
     entries: EngramStreamEntry[]
   ): StreamCursor {
-    if (entries.length === 0) return prior;
-    let maxUpdatedAt = prior.since ?? "";
-    let lastMemoryId = prior.last_memory_id;
-    for (const e of entries) {
-      if (e.updated_at > maxUpdatedAt) {
-        maxUpdatedAt = e.updated_at;
-        lastMemoryId = e.memory_id;
+    let next = prior;
+    const instant = (value: string): bigint => {
+      const ms = Date.parse(value);
+      if (!Number.isFinite(ms)) throw new Error("invalid stream timestamp");
+      const fraction = value.match(/\.(\d+)/)?.[1] ?? "";
+      return BigInt(ms) * 1000n + BigInt(fraction.padEnd(6, "0").slice(3, 6));
+    };
+    for (const entry of entries) {
+      const delta = next.since ? instant(entry.updated_at) - instant(next.since) : 1n;
+      if (delta > 0n || (delta === 0n && entry.memory_id > (next.last_memory_id ?? ""))) {
+        next = {since: entry.updated_at, last_memory_id: entry.memory_id};
       }
     }
-    return {
-      since: maxUpdatedAt || null,
-      last_memory_id: lastMemoryId,
-    };
+    return next;
   }
 }

@@ -10,26 +10,7 @@ import {
   parsePositiveInteger,
 } from "../src/commands/doctor";
 
-const CLI_ENTRY = join(__dirname, "..", "src", "main.ts");
-
-interface CliResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runCli(args: string[], dataDir: string): Promise<CliResult> {
-  const proc = Bun.spawn({
-    cmd: ["bun", CLI_ENTRY, ...args],
-    env: { ...process.env, COMPOST_DATA_DIR: dataDir },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const exitCode = await proc.exited;
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  return { exitCode, stdout, stderr };
-}
+import { runCli } from "./run-cli";
 
 function setupDb(dataDir: string): Database {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -99,7 +80,7 @@ describe("doctor --check-pii", () => {
     db.close();
 
     const result = await runCli(["doctor", "--check-pii"], dataDir);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     const report = JSON.parse(result.stdout);
     expect(report.rows_scanned).toBe(2);
     expect(report.rows_with_pii).toBe(1);
@@ -178,7 +159,7 @@ describe("doctor --check-integrity", () => {
     db.close();
 
     const result = await runCli(["doctor", "--check-integrity"], dataDir);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     const report = JSON.parse(result.stdout);
     expect(report.orphan_observations).toBe(1);
     expect(report.total_issues).toBeGreaterThanOrEqual(1);
@@ -317,4 +298,14 @@ describe("doctor --check-llm helpers", () => {
     expect(isFatalLlmProbeError(timeout, true)).toBe(true);
     expect(isFatalLlmProbeError(realError, false)).toBe(true);
   });
+});
+
+test('doctor reports dangling access FK and exits nonzero', async()=>{
+ const dataDir=mkdtempSync(join(tmpdir(),'doctor-fk-'));
+ try{
+  const db=setupDb(dataDir);db.exec('PRAGMA foreign_keys=OFF');
+  db.run("INSERT INTO access_log(fact_id,accessed_at_unix_sec,query_id,ranking_profile_id) VALUES ('missing',0,'q','rp-phase3-default')");db.close();
+  const result=await runCli(['doctor','--check-integrity'],dataDir);
+  expect(result.exitCode).toBe(1);expect(JSON.parse(result.stdout).foreign_key_violations).toHaveLength(1);
+ }finally{rmSync(dataDir,{recursive:true,force:true});}
 });

@@ -4,6 +4,7 @@ import {
   type EngramStreamClient,
   StreamPuller,
 } from "../../compost-engram-adapter/src/stream-puller";
+import { reconcileUpstreamStates } from "../../compost-engram-adapter/src/lifecycle";
 import {
   ensureEngramSource,
   ingestEngramEntry,
@@ -64,55 +65,6 @@ export function startEngramPoller(
 ): Scheduler {
   let running = true;
 
-  // One-time source row seed. Safe to call on every startup — idempotent.
-  ensureEngramSource(db);
-
-  const pullerOpts: {
-    kinds?: string[];
-    project?: string | null;
-    cursorPath?: string;
-  } = {};
-  if (opts.kinds !== undefined) pullerOpts.kinds = opts.kinds;
-  if (opts.project !== undefined) pullerOpts.project = opts.project;
-  if (opts.cursorPath !== undefined) pullerOpts.cursorPath = opts.cursorPath;
-
-  const puller = new StreamPuller(opts.client, pullerOpts);
-
-  const ingestOpts: IngestOptions = {};
-  if (opts.embeddingService) ingestOpts.embeddingService = opts.embeddingService;
-  if (opts.vectorStore) ingestOpts.vectorStore = opts.vectorStore;
-
-  async function pollOnce(): Promise<PollStats> {
-    const stats: PollStats = {
-      batches: 0,
-      entries_seen: 0,
-      entries_new: 0,
-      entries_duplicate: 0,
-      errors: [],
-    };
-
-    const pullStats = await puller.pullAll(async (batch) => {
-      stats.entries_seen += batch.length;
-      for (const entry of batch) {
-        try {
-          const r = await ingestEngramEntry(db, entry, ingestOpts);
-          if (r.inserted === "new") stats.entries_new++;
-          else stats.entries_duplicate++;
-        } catch (e) {
-          stats.errors.push(
-            `ingest ${entry.memory_id}: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          );
-        }
-      }
-    });
-
-    stats.batches = pullStats.batches;
-    stats.errors.push(...pullStats.errors);
-    return stats;
-  }
-
   async function loop() {
     const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     let first = opts.runImmediately ?? true;
@@ -123,7 +75,7 @@ export function startEngramPoller(
       first = false;
 
       try {
-        const stats = await pollOnce();
+        const stats = await runEngramPullOnce(db, opts);
         log.info({ stats }, "engram poll complete");
       } catch (err) {
         log.error({ err }, "engram poll error (continuing)");
@@ -181,6 +133,8 @@ export async function runEngramPullOnce(
     errors: [],
   };
 
+  stats.errors.push(...await reconcileUpstreamStates(db, opts.client));
+
   const pullStats = await puller.pullAll(async (batch) => {
     stats.entries_seen += batch.length;
     for (const entry of batch) {
@@ -194,6 +148,7 @@ export async function runEngramPullOnce(
             e instanceof Error ? e.message : String(e)
           }`
         );
+        throw e;
       }
     }
   });

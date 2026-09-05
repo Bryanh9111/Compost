@@ -10,7 +10,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
 import { upsertPolicies, getActivePolicy } from "../src/policies/registry";
-import { ingestFile, type IngestResult } from "../src/pipeline/ingest";
+import { ingestFile, } from "../src/pipeline/ingest";
 
 const FIXTURE_MD = `# Test Document
 
@@ -119,7 +119,7 @@ describe("pipeline/ingest (end-to-end)", () => {
 
     // Second ingest of same file: outbox INSERT OR IGNORE deduplicates,
     // drain finds nothing pending, returns gracefully
-    const r2 = await ingestFile(db, fixtureFile, dataDir);
+    const _r2 = await ingestFile(db, fixtureFile, dataDir);
     // r2.ok may be false (drain null) or true (no-op) - either is correct behavior
 
     // Key invariant: still exactly one observation

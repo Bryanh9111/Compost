@@ -76,7 +76,7 @@ e2e test cover the runtime contract.
 
 ## Runtime Hygiene
 
-Compost may keep one `engram-server` subprocess alive for its Engram poller.
+Compost may keep one `engram-server` subprocess alive for its Engram write flusher. The read poller invokes the Engram CLI per batch.
 That process should have the Compost daemon as its parent. A large number of
 old `engram-server` stdio processes usually means stale MCP clients were not
 reaped; it is a process hygiene issue, not a reason to merge repos.
@@ -107,3 +107,26 @@ multiple iterations:
 
 If those triggers fire, the next step is an ADR for a strict package monorepo
 with standalone build/test jobs for both sides.
+
+## Pagination and lifecycle reconciliation (2026-09-05)
+
+The nine-field content projection is unchanged. `stream_for_compost` and
+`export-stream` accept optional `after_id` / `--after-id` with `since`, forming
+a `(created_at, memory_id)` cursor with microsecond precision. Existing callers
+using only `since` retain strict timestamp semantics. The consumer persists a
+cursor only after every entry in the batch is ingested successfully; replays
+reuse stable `engram://memory/<id>` action identities. Actions survive sensory
+GC; reingestion relinks a detached observation pointer.
+
+`states_for_compost(memory_ids)` / `export-states --ids ...` return only lifecycle
+metadata for at most 1,000 IDs: memory_id, status, expires_at and searchable.
+Before each pull, the adapter checks cached active facts and archives entries
+that are obsolete, missing or expired upstream. This does not erase history or
+copy durable knowledge ownership. Missing/incomplete/error responses retain the
+cache and produce a degraded diagnostic. Core queries never depend on Engram
+availability; invalidation is eventually consistent at the next successful poll.
+
+A readiness probe now performs an actual read-only MCP handshake/tools/list,
+checks these contracts and closes its subprocess. After a non-editable `uv tool`
+installation, source changes require reinstalling the tool and reconnecting MCP
+clients; a repo test alone does not verify the installed runtime.

@@ -12,7 +12,7 @@ export interface EmbeddingService {
    * Generate embeddings for a batch of texts.
    * Returns one Float32Array per input text, each of length `dim`.
    */
-  embed(texts: string[]): Promise<Float32Array[]>;
+  embed(texts: string[], signal?:AbortSignal): Promise<Float32Array[]>;
 }
 
 export interface EmbeddingServiceConfig {

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -78,6 +79,7 @@ export function backup(db: Database, backupDir: string): BackupResult {
   }
 
   // Atomic swap. Same-day backups overwrite (idempotent within a day).
+  chmodSync(tmpPath, 0o600);
   renameSync(tmpPath, targetPath);
 
   const stat = statSync(targetPath);

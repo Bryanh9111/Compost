@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import {lexicalCandidates} from "./lexical";
 import { v7 as uuidv7 } from "uuid";
 import type { VectorStore } from "../storage/lancedb";
 import { loadRankingProfile } from "../ranking/profile";
@@ -8,6 +9,7 @@ import { loadRankingProfile } from "../ranking/profile";
  */
 export interface QueryOptions {
   budget?: number; // max results, default 20
+  semantic_timeout_ms?: number; // default 1500; 0 requests lexical only
   ranking_profile_id?: string; // default 'rp-phase3-default'
   contexts?: string[]; // context filter
   as_of_unix_sec?: number; // decay reference time
@@ -54,46 +56,24 @@ const rrfMerge = rrfMergeAnnBm25;
 // BM25 via FTS5
 // ---------------------------------------------------------------------------
 
-/**
- * Prepare a natural language query for FTS5 MATCH.
- * FTS5 defaults to implicit AND; we convert to OR for recall.
- * Keep only tokenizer-like word runs so punctuation in identifiers
- * (clientId-sensitive, A048/A088, git SHAs) cannot become FTS syntax.
- */
-function prepareFts5Query(q: string): string {
-  const words = Array.from(q.matchAll(/[\p{L}\p{N}_]+/gu), (m) => m[0])
-    .filter((w) => w.length > 1);
-  const uniqueWords = Array.from(new Set(words));
-  if (uniqueWords.length === 0) return "";
-  const quotedWords = uniqueWords.map((w) => `"${w}"`);
-  if (quotedWords.length === 1) return quotedWords[0]!;
-  return quotedWords.join(" OR ");
+function bm25Search(db:Database,q:string,contexts:string[]=[]):Array<{fact_id:string;score:number}> {
+  const where=["s.archived_at IS NULL"];
+  if(contexts.length)where.push(`EXISTS (SELECT 1 FROM fact_context fc WHERE fc.fact_id=s.fact_id AND fc.context_id IN (${contexts.map(()=>'?').join(',')}))`);
+  const rows=lexicalCandidates(db,'facts',q,{where:where.join(' AND '),params:contexts});
+  const lookup=db.query('SELECT fact_id FROM facts WHERE rowid=?');
+  return rows.map((row,i)=>({fact_id:(lookup.get(row.rowid) as {fact_id:string}).fact_id,score:1/(i+1)}));
 }
 
-function bm25Search(db: Database, q: string, topK: number = 200): Array<{ fact_id: string; score: number }> {
-  const ftsQuery = prepareFts5Query(q);
-  if (!ftsQuery) return [];
-
-  try {
-    // FTS5 rank() returns negative values; ORDER BY rank ASC = best first
-    const rows = db
-      .prepare(
-        `SELECT f.fact_id
-         FROM facts_fts fts
-         JOIN facts f ON f.rowid = fts.rowid
-         WHERE facts_fts MATCH $q AND f.archived_at IS NULL
-         ORDER BY rank
-         LIMIT $limit`
-      )
-      .all({ $q: ftsQuery, $limit: topK }) as Array<{ fact_id: string }>;
-    return rows.map((row, i) => ({
-      fact_id: row.fact_id,
-      score: 1 / (i + 1),
-    }));
-  } catch {
-    // FTS5 MATCH can throw on malformed queries
-    return [];
-  }
+async function boundedSemanticSearch(store:VectorStore,q:string,timeoutMs:number){
+  if(timeoutMs<=0)return [];
+  const controller=new AbortController();
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{
+    return await Promise.race([
+      store.search(q,200,controller.signal).catch(()=>[]),
+      new Promise<never[]>((resolve)=>{timer=setTimeout(()=>{controller.abort();resolve([]);},timeoutMs);}),
+    ]);
+  }finally{if(timer!==undefined)clearTimeout(timer);}
 }
 
 /**
@@ -122,12 +102,14 @@ export async function query(
   const profile = loadRankingProfile(db, profileId);
 
   // Stage-0a: BM25 candidates (always available)
-  const bm25Hits = bm25Search(db, q, 200);
+  const bm25Hits = bm25Search(db, q, opts.contexts);
 
   // Stage-0b: ANN candidates (optional)
   let annHits: Array<{ fact_id: string; score: number }> = [];
   if (vectorStore) {
-    const rawHits = await vectorStore.search(q, 200);
+    const requested=opts.semantic_timeout_ms ?? Number(process.env.COMPOST_SEMANTIC_TIMEOUT_MS ?? 1500);
+    const timeout=Number.isFinite(requested) ? Math.max(0,Math.min(requested,60000)) : 1500;
+    const rawHits = await boundedSemanticSearch(vectorStore,q,timeout);
     // Deduplicate chunks to fact_id level (take max score per fact)
     const factScores = new Map<string, number>();
     for (const h of rawHits) {

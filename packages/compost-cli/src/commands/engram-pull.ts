@@ -1,111 +1,75 @@
 import { Command } from "@commander-js/extra-typings";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, copyFileSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
+import { backup } from "../../../compost-core/src/persistence/backup";
 import { runEngramPullOnce } from "../../../compost-daemon/src/engram-poller";
 import { CliEngramStreamClient } from "../../../compost-engram-adapter/src/cli-stream-client";
-
-const DEFAULT_DATA_DIR = join(process.env["HOME"] ?? "/tmp", ".compost");
-
-function openDb(): Database {
-  const dir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const db = new Database(join(dir, "ledger.db"), { create: true });
-  db.exec("PRAGMA journal_mode=WAL");
-  db.exec("PRAGMA foreign_keys=ON");
-  applyMigrations(db);
-  return db;
-}
+import { StreamPuller, type StreamCursor } from "../../../compost-engram-adapter/src/stream-puller";
+import { VectorStore } from "../../../compost-core/src/storage/lancedb";
+import { OllamaEmbeddingService } from "../../../compost-core/src/embedding/ollama";
 
 export function registerEngramPull(program: Command): void {
-  program
-    .command("engram-pull")
-    .description(
-      "Manually pull Engram memories into Compost's ledger (Phase 5 Session 6 slice 1)"
-    )
+  program.command("engram-pull")
+    .description("Pull Engram memories and reconcile cached lifecycle state")
     .option("--engram-bin <path>", "Engram CLI binary", "engram")
-    .option("--project <name>", "Filter by Engram project")
-    .option(
-      "--kinds <kinds>",
-      "Comma-separated Engram kinds to pull (default: all)"
-    )
-    .option(
-      "--cursor-path <path>",
-      "Cursor file path",
-      join(DEFAULT_DATA_DIR, "engram-cursor.json")
-    )
-    .option("--dry-run", "Print stats without writing to the ledger", false)
+    .option("--project <name>", "Filter by Engram project (requires a separate cursor)")
+    .option("--kinds <kinds>", "Comma-separated Engram kinds")
+    .option("--cursor-path <path>", "Cursor file path (default: data directory/engram-cursor.json)")
+    .option("--dry-run", "Preview all matching entries without writing data or cursor", false)
+    .option("--replay", "Back up ledger/cursor and replay available upstream history idempotently", false)
+    .option("--no-embed", "Defer embeddings during recovery; keyword search remains available")
     .action(async (opts) => {
-      const db = openDb();
+      const dir = process.env["COMPOST_DATA_DIR"] ?? join(process.env["HOME"] ?? "/tmp", ".compost");
+      if ((opts.project || opts.kinds) && !opts.cursorPath) {
+        throw new Error("Filtered pulls require --cursor-path to avoid advancing the unfiltered daemon cursor");
+      }
+      const cursorPath = opts.cursorPath ?? join(dir, "engram-cursor.json");
+      const client = new CliEngramStreamClient({ engramBin: opts.engramBin });
+      const filters = {
+        ...(opts.project !== undefined ? { project: opts.project } : {}),
+        ...(opts.kinds !== undefined ? { kinds: opts.kinds.split(",").map((k) => k.trim()).filter(Boolean) } : {}),
+      };
+      const puller = new StreamPuller(client, { cursorPath, ...filters });
+      if (opts.dryRun) {
+        let cursor: StreamCursor = opts.replay ? { since: null, last_memory_id: null } : puller.loadCursor();
+        let entryCount = 0;
+        while (true) {
+          const batch = await puller.pullBatch({ cursor, limit: 1000 });
+          entryCount += batch.entries.length;
+          cursor = batch.cursor;
+          if (batch.reached_end) break;
+        }
+        process.stdout.write(JSON.stringify({ mode: "dry-run", ok: true, entry_count: entryCount, last_cursor: cursor }) + "\n");
+        return;
+      }
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const db = new Database(join(dir, "ledger.db"), { create: true });
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000");
+      let vectorStore: VectorStore | undefined;
       try {
-        const client = new CliEngramStreamClient({ engramBin: opts.engramBin });
-
-        if (opts.dryRun) {
-          // In dry run we pull the first batch via the underlying client
-          // directly, report counts, and do not advance cursor / ingest.
-          const r = await client.streamForCompost({ limit: 1000 });
-          const summary = {
-            mode: "dry-run",
-            ok: r.ok,
-            entry_count: r.data?.length ?? 0,
-            error: r.error ?? null,
-          };
-          process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
-          return;
+        applyMigrations(db);
+        if (opts.replay) {
+          const recoveryDir = join(dir, "backups", `${Date.now()}-engram-replay`);
+          backup(db, recoveryDir);
+          if (existsSync(cursorPath)) copyFileSync(cursorPath, join(recoveryDir, "engram-cursor.json"));
+          puller.saveCursor({ since: null, last_memory_id: null });
         }
-
-        // Wire embedding services so new chunks land in LanceDB. Without
-        // this the entries are SQLite/FTS5-visible only and ANN can't
-        // surface them — flattens cross-project reasoning quality (R3
-        // dogfound 2026-04-25). Graceful degradation if Ollama embed
-        // service is unreachable: ingest-adapter swallows the embed
-        // error and the chunk stays embedded_at IS NULL until backfill.
-        const { VectorStore } = await import(
-          "../../../compost-core/src/storage/lancedb"
-        );
-        const { OllamaEmbeddingService } = await import(
-          "../../../compost-core/src/embedding/ollama"
-        );
-        const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
-        const lanceDir = join(dataDir, "lancedb");
-        const embSvc = new OllamaEmbeddingService();
-        let vectorStore: import("../../../compost-core/src/storage/lancedb").VectorStore | undefined;
-        try {
-          vectorStore = new VectorStore(lanceDir, embSvc);
-          await vectorStore.connect();
-        } catch {
-          vectorStore = undefined;
+        const embeddingService = new OllamaEmbeddingService();
+        if (opts.embed) {
+          vectorStore = new VectorStore(join(dir, "lancedb"), embeddingService);
+          try { await vectorStore.connect(); }
+          catch { await vectorStore.close(); vectorStore = undefined; }
         }
-
-        const pullOpts: {
-          client: typeof client;
-          cursorPath: string;
-          kinds?: string[];
-          project?: string | null;
-          embeddingService?: typeof embSvc;
-          vectorStore?: typeof vectorStore;
-        } = {
-          client,
-          cursorPath: opts.cursorPath,
-        };
-        if (opts.project !== undefined) pullOpts.project = opts.project;
-        if (opts.kinds !== undefined) {
-          pullOpts.kinds = opts.kinds.split(",").map((k) => k.trim()).filter(
-            (k) => k.length > 0
-          );
-        }
-        if (vectorStore) {
-          pullOpts.embeddingService = embSvc;
-          pullOpts.vectorStore = vectorStore;
-        }
-
-        const stats = await runEngramPullOnce(db, pullOpts);
+        const stats = await runEngramPullOnce(db, {
+          client, cursorPath, ...filters,
+          ...(vectorStore ? { embeddingService, vectorStore } : {}),
+        });
         process.stdout.write(JSON.stringify(stats, null, 2) + "\n");
-
-        if (vectorStore) await vectorStore.close();
-        if (stats.errors.length > 0) process.exitCode = 1;
+        if (stats.errors.length) process.exitCode = 1;
       } finally {
+        await vectorStore?.close();
         db.close();
       }
     });

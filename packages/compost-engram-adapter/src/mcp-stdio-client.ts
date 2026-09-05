@@ -135,7 +135,7 @@ export class StdioEngramMcpClient implements EngramMcpClient {
       try {
         const parsed = JSON.parse(text) as Record<string, unknown>;
         return { ok: true, data: parsed };
-      } catch (e) {
+      } catch (_e) {
         return {
           ok: false,
           error: `${name} non-JSON response: ${text.slice(0, 200)}`,

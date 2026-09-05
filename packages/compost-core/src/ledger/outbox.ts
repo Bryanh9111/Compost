@@ -154,7 +154,7 @@ const AUTO_WRAPPED_METADATA = {
  *
  * Returns null if no drainable rows exist.
  */
-export function drainOne(db: Database): DrainResult | null {
+export function drainOne(db: Database, adapter?: string): DrainResult | null {
   // STEP 1: Claim next drainable row
   const pending = db
     .query(
@@ -162,10 +162,11 @@ export function drainOne(db: Database): DrainResult | null {
               trust_tier, transform_policy, payload, appended_at
        FROM observe_outbox
        WHERE drained_at IS NULL AND drain_quarantined_at IS NULL
+         AND (? IS NULL OR adapter = ?)
        ORDER BY seq
        LIMIT 1`
     )
-    .get() as OutboxRow | null;
+    .get(adapter ?? null, adapter ?? null) as OutboxRow | null;
 
   if (!pending) return null;
 

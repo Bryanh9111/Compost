@@ -1,10 +1,10 @@
 # Compost
 
-A self-evolving personal knowledge base. Ingests local files, web URLs, and AI tool events into a structured memory layer with hybrid semantic + keyword search, time-aware ranking, and LLM-powered synthesis.
+A local metacognitive action ledger, artifact index, coverage audit and query router for work across tools. Engram owns durable atomic knowledge; Compost records actions and points to their evidence.
 
 ## What it does
 
-Compost watches what you read, write, and discuss across tools (Claude Code, local files, web pages), extracts structured facts, and makes them queryable with decay-based ranking. Knowledge fades like biological memory -- frequently accessed facts stay strong, unused ones decay.
+Compost captures supported tool events and explicit file/URL ingestion, keeps durable action and artifact pointers, and provides keyword and optional semantic retrieval. Its short-lived content cache can expire while action history survives. The current v4 direction freezes background reasoning, wiki and verdict production; see [ROADMAP](docs/ROADMAP.md).
 
 Three product guarantees: **Fresh** (active freshness loop for web sources), **Trustworthy** (provenance tracking from source to fact), **Auditable Coverage** (measurable SLO, not a promise of completeness).
 
@@ -210,16 +210,28 @@ Documented across 8 structured 4-way debates (Opus/Sonnet/Gemini/Codex). Key cho
 - Full v2 spec: `docs/compost-v2-spec.md`
 - Debate records: `debates/001-022/` (022 = wiki-only digest shaping verdict; Phase 6 P0 slice 2)
 
-## Stats
+## Verification
 
-- **~20K lines** of TypeScript + ~800 lines Python
-- **767 tests**, 0 failures
-- **25 SQL migrations** (observations, chunks, facts, wiki, outbox, fact_links, user-model schema in 0015, open_problems in 0016, crawl_queue in 0017, reasoning scheduler state in 0020, action_log in 0021, Engram context backfill in 0022, integrity scan indexes in 0023, and action project repair in 0024-0025)
-- **22 architecture debates** with 4 AI reviewers (`debates/001-022`)
-- **16 MCP tools** exposed to agents (Phase 0-2 + Phase 6 P0 gap/curiosity/digest/crawl + active fact→gap)
-- **3 transform policies** (local file, web content, LLM fact extraction)
-- **Provenance**: 4 hashes per observation (content, raw, origin, idempotency)
+```bash
+bun run test:coverage          # full suite; line coverage must be >=90%
+bun run typecheck
+bun run lint
+bun run check:engram-boundary
+uv run --project packages/compost-ingest pytest packages/compost-ingest/tests -q
+```
+
+The quality workflow runs these gates on pushes and pull requests. The coverage
+gate uses weighted LCOV covered/total lines, not the console's average per-file percentage. CLI handler
+integration tests run in-process for coverage, alongside subprocess lifecycle
+and real Engram integration checks. Coverage describes exercised production
+modules; external services are tested with bounded local fixtures.
+
+For safe historical recovery and lifecycle reconciliation, see
+[maintenance](docs/maintenance.md). Runtime counts come from the current schema,
+MCP tools/list and test output rather than static README totals.
 
 ## License
 
 MIT
+
+See [search indexes](docs/search-indexes.md) for multilingual recall, index health, atomic rebuild and reproducible lexical evaluation.

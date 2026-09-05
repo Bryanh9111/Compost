@@ -3,6 +3,8 @@ import {
   type EngramStreamEntry,
   type StreamForCompostArgs,
   engramStreamEntrySchema,
+  engramStateSchema,
+  type EngramMemoryState,
 } from "./stream-puller";
 import type { MCPCallResult } from "./writer";
 
@@ -89,9 +91,9 @@ export class CliEngramStreamClient implements EngramStreamClient {
       };
       if (this.env !== undefined) spawnArgs.env = this.env;
       const proc = this.spawn(spawnArgs);
-      exitCode = await proc.exited;
-      stdout = await new Response(proc.stdout).text();
-      stderr = await new Response(proc.stderr).text();
+      [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
+      ]);
     } catch (e) {
       return {
         ok: false,
@@ -111,9 +113,23 @@ export class CliEngramStreamClient implements EngramStreamClient {
     return parseJsonlEntries(stdout);
   }
 
+  async statesForCompost(memoryIds: string[]): Promise<MCPCallResult<EngramMemoryState[]>> {
+    if (memoryIds.length === 0) return { ok: true, data: [] };
+    try {
+      const proc = this.spawn({ cmd: [this.engramBin, "export-states", "--ids", ...memoryIds],
+        stdout: "pipe", stderr: "pipe", ...(this.env ? {env: this.env} : {}) });
+      const [code, out, err] = await Promise.all([
+        proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
+      ]);
+      if (code !== 0) return {ok: false, error: `engram states exited ${code}: ${err.slice(0, 200)}`};
+      return {ok: true, data: engramStateSchema.array().parse(JSON.parse(out))};
+    } catch (error) { return {ok: false, error: String(error)}; }
+  }
+
   private buildCmd(args: StreamForCompostArgs): string[] {
     const cmd = [this.engramBin, "export-stream"];
     if (args.since) cmd.push("--since", args.since);
+    if (args.after_id) cmd.push("--after-id", args.after_id);
     if (args.kinds) for (const k of args.kinds) cmd.push("--kinds", k);
     if (args.project) cmd.push("--project", args.project);
     if (args.include_compost) cmd.push("--include-compost");

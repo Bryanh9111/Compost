@@ -73,10 +73,11 @@ export class VectorStore {
    * Search for similar chunks by query text.
    * Returns top-K results with cosine similarity scores.
    */
-  async search(queryText: string, topK: number = 200): Promise<SearchHit[]> {
+  async search(queryText: string, topK: number = 200, signal?:AbortSignal): Promise<SearchHit[]> {
     if (!this.table) return [];
 
-    const [queryVec] = await this.embeddingService.embed([queryText]);
+    const [queryVec] = await this.embeddingService.embed([queryText],signal);
+    signal?.throwIfAborted();
     if (!queryVec) return [];
 
     const results = await (this.table.search(Array.from(queryVec)) as unknown as {

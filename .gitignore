@@ -63,3 +63,5 @@ scripts/com.[a-z]*.[a-z]*-daemon.plist
 # shouldn't ship in the public MIT fork-template). Each fork can keep its
 # own debates/ directory locally — they are not part of the public artifact.
 debates/
+
+coverage/

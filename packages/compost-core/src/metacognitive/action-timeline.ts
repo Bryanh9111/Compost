@@ -246,7 +246,7 @@ function loadActions(
     limit: number;
   }
 ): ActionRow[] {
-  const where = ["when_ts >= ?", "when_ts < ?"];
+  const where = ["julianday(when_ts) >= julianday(?)", "julianday(when_ts) < julianday(?)"];
   const params: Array<string | number> = [opts.startTs, opts.endTs];
   if (opts.project) {
     where.push("project = ?");
@@ -260,11 +260,11 @@ function loadActions(
 
   return db
     .query(
-      `SELECT action_id, source_system, source_id, what_text, when_ts, project,
+      `SELECT action_id, source_system, source_id, what_text, strftime('%Y-%m-%dT%H:%M:%fZ', when_ts) AS when_ts, project,
               artifact_locations, next_query_hint
        FROM action_log
        WHERE ${where.join(" AND ")}
-       ORDER BY when_ts DESC, created_at DESC
+       ORDER BY julianday(when_ts) DESC, created_at DESC
        LIMIT ?`
     )
     .all(...params) as ActionRow[];
@@ -317,7 +317,7 @@ function buildWhere(opts: {
   project?: string;
   sourceSystem?: string;
 }): { whereSql: string; params: string[] } {
-  const where = ["when_ts >= ?", "when_ts < ?"];
+  const where = ["julianday(when_ts) >= julianday(?)", "julianday(when_ts) < julianday(?)"];
   const params = [opts.startTs, opts.endTs];
   if (opts.project) {
     where.push("project = ?");

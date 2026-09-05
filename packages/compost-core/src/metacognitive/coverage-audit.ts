@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import {lexicalCandidates} from "../query/lexical";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tokenizeQuestion } from "../cognitive/curiosity";
@@ -127,7 +128,8 @@ export function auditCoverage(
   const rows = loadCandidateActions(db, {
     project: opts.project,
     sinceTs,
-    limit: mode === "timeline" ? limit : 1000,
+    limit: mode === "timeline" ? limit : 200,
+    topic: mode === "topic" ? cleanedQuery : undefined,
   });
 
   const scoredActions = rows
@@ -224,7 +226,7 @@ export function formatCoverageAudit(report: CoverageAuditReport): string {
 
 function loadCandidateActions(
   db: Database,
-  opts: { project?: string; sinceTs: string | null; limit: number }
+  opts: { project?: string; sinceTs: string | null; limit: number; topic?:string }
 ): ActionRow[] {
   const where: string[] = [];
   const params: Array<string | number> = [];
@@ -233,19 +235,25 @@ function loadCandidateActions(
     params.push(opts.project);
   }
   if (opts.sinceTs) {
-    where.push("when_ts >= ?");
+    where.push("julianday(when_ts) >= julianday(?)");
     params.push(opts.sinceTs);
+  }
+  if (opts.topic !== undefined) {
+    const matches=lexicalCandidates(db,'actions',opts.topic,{where:where.join(' AND ') || '1',params,limit:opts.limit});
+    if(matches.length===0)return [];
+    where.push(`rowid IN (${matches.map(()=>'?').join(',')})`);
+    params.push(...matches.map(m=>m.rowid));
   }
   params.push(opts.limit);
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   return db
     .query(
-      `SELECT action_id, source_system, source_id, what_text, when_ts, project,
+      `SELECT action_id, source_system, source_id, what_text, strftime('%Y-%m-%dT%H:%M:%fZ', when_ts) AS when_ts, project,
               artifact_locations, next_query_hint
        FROM action_log
        ${whereSql}
-       ORDER BY when_ts DESC, created_at DESC
+       ORDER BY julianday(when_ts) DESC, created_at DESC
        LIMIT ?`
     )
     .all(...params) as ActionRow[];

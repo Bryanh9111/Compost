@@ -1,3 +1,5 @@
+import { scrubEnvelope } from "../../compost-hook-shim/src/pii";
+import { processObservationAction } from "../../compost-core/src/metacognitive/action-processor";
 import { Database } from "bun:sqlite";
 import { createHash } from "crypto";
 import { v7 as uuidv7 } from "uuid";
@@ -168,6 +170,9 @@ export async function ingestEngramEntry(
   entry: EngramStreamEntry,
   opts: IngestOptions = {}
 ): Promise<IngestResult> {
+  const upstreamRaw = JSON.stringify(entry);
+  const safe = scrubEnvelope({ content: entry.content, tags: entry.tags }).envelope;
+  entry = { ...entry, ...safe };
   const policy = opts.transformPolicy ?? DEFAULT_TRANSFORM_POLICY;
   const idempotencyKey = `engram:${entry.memory_id}`;
   const sourceUri = `${ENGRAM_SOURCE_URI_ROOT}/${entry.memory_id}`;
@@ -184,6 +189,8 @@ export async function ingestEngramEntry(
   if (existing) {
     const tx = db.transaction(() => {
       ensureContextLinksForObservation(db, entry, existing.observe_id);
+      const action = processObservationAction(db, existing.observe_id);
+      if (action.status === "error") throw new Error(action.reason);
     });
     tx();
     const factCount = db
@@ -204,7 +211,7 @@ export async function ingestEngramEntry(
   const trustTier = entry.origin === "agent" ? "first_party" : "user";
   const contentBuffer = Buffer.from(entry.content, "utf-8");
   const contentHash = sha256(entry.content);
-  const rawJson = JSON.stringify(entry);
+  const rawJson = upstreamRaw;
   const rawHash = sha256(rawJson);
   const originHash = sha256(
     `${ENGRAM_ADAPTER}|${sourceUri}|${idempotencyKey}`
@@ -293,6 +300,8 @@ export async function ingestEngramEntry(
       ]
     );
 
+    const action = processObservationAction(db, observeId);
+    if (action.status === "error") throw new Error(action.reason);
     db.exec("COMMIT");
 
     // Post-commit: embed chunk and write to LanceDB if services provided.

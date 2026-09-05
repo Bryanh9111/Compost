@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";

@@ -1,3 +1,4 @@
+import type { VectorStore } from "../../compost-core/src/storage/lancedb";
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { applyMigrations } from "../../compost-core/src/schema/migrator";
@@ -82,4 +83,22 @@ describe("startMcpServer — dependency-resolution regression guard", () => {
 
     db.close();
   });
+});
+
+test('MCP queries use injected vectors and retain BM25 on embedding outage', async () => {
+  const {ingestEngramEntry,ensureEngramSource}=await import('../../compost-engram-adapter/src/ingest-adapter');
+  const db=new Database(':memory:');applyMigrations(db);upsertPolicies(db);ensureEngramSource(db);
+  await ingestEngramEntry(db,{memory_id:'mcp-vector',kind:'fact',content:'uniquekey ledger fixture',project:'audit',scope:'project',created_at:'2026-09-01T00:00:00Z',updated_at:'2026-09-01T00:00:00Z',tags:[],origin:'human'});
+  const fact=db.query('select fact_id,observe_id from facts').get() as {fact_id:string;observe_id:string};
+  let offline=false;let searches=0;
+  const vectors={async search(){searches++;if(offline)throw new Error('embedding offline');return [{...fact,chunk_id:'chunk',score:0.9}];}};
+  const handle=await startMcpServer(db,new BreakerRegistry(new OllamaLLMService()),vectors as unknown as VectorStore);
+  try{
+    const registered=(handle.server as unknown as {_registeredTools:Record<string,{handler:(input:Record<string,unknown>,extra:Record<string,unknown>)=>Promise<{content:{text:string}[]}>}>})._registeredTools;
+    const r=await registered['compost.query'].handler({q:'no-lexical-match',budget:2},{});
+    expect(JSON.parse(r.content[0].text).hits).toHaveLength(1);
+    offline=true;
+    const fallback=await registered['compost.query'].handler({q:'uniquekey'},{});
+    expect(JSON.parse(fallback.content[0].text).hits).toHaveLength(1);expect(searches).toBe(2);
+  }finally{await handle.stop();db.close();}
 });

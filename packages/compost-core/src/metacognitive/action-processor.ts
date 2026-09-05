@@ -98,6 +98,7 @@ export function processObservationAction(
       | { action_id: string }
       | null;
     if (duplicate) {
+      db.run("UPDATE action_log SET source_observe_id=? WHERE action_id=? AND source_observe_id IS NULL", [observeId, duplicate.action_id]);
       return {
         observe_id: observeId,
         status: "duplicate",
@@ -298,7 +299,7 @@ function deriveActionSourceId(
   }
 
   if (sourceSystem === "engram" && row.source_uri.startsWith("engram://")) {
-    return `${row.source_uri}:${row.adapter_sequence}:${row.observe_id}`;
+    return row.source_uri;
   }
 
   if (sourceSystem === "zsh") {
