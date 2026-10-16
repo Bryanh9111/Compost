@@ -9,11 +9,33 @@ export interface ClaimResult {
   lease_token: string;
 }
 
+export interface ClaimOptions {
+  /** Only claim the queue row for this observation (one-shot CLI ingest). */
+  observeId?: string;
+  /** Rows whose attempts reach this count are quarantined. Spec §4 default. */
+  maxRetries?: number;
+}
+
+export interface FailOptions {
+  maxRetries?: number;
+}
+
+/** Spec §4 extraction default; policies carry their own value in registry.ts. */
+export const DEFAULT_MAX_RETRIES = 3;
+const BACKOFF_BASE_SEC = 60;
+const BACKOFF_CAP_SEC = 900;
+
+const CLAIMABLE = `completed_at IS NULL
+           AND quarantined_at IS NULL
+           AND (lease_expires_at IS NULL OR lease_expires_at < datetime('now'))`;
+
 /**
  * Claim one pending queue row. Spec §10.2.
  *
- * - Skips rows with active (non-expired) leases
- * - Skips completed rows
+ * - Skips rows with active (non-expired) leases, completed rows, quarantined
+ *   rows and rows whose backoff (`next_attempt_at`) has not elapsed
+ * - Quarantines rows that exhausted their attempts without a terminal state
+ *   (a worker that died never calls fail), so one predicate owns the rule
  * - Increments attempts on each claim
  * - Sets lease_owner, lease_token, lease_expires_at (+60s)
  *
@@ -21,27 +43,39 @@ export interface ClaimResult {
  */
 export function claimOne(
   db: Database,
-  workerId: string
+  workerId: string,
+  opts: ClaimOptions = {}
 ): ClaimResult | null {
   const leaseToken = uuidv7();
+  const maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const observeId = opts.observeId ?? null;
 
-  // Bun's SQLite doesn't support RETURNING on UPDATE well in all versions,
-  // so we do a two-step: find + update in a transaction.
   const tx = db.transaction(() => {
-    // Find the next claimable row
+    db.run(
+      `UPDATE ingest_queue
+       SET quarantined_at = datetime('now'),
+           last_error = coalesce(last_error, 'attempts exhausted'),
+           lease_owner = NULL,
+           lease_token = NULL,
+           lease_expires_at = NULL
+       WHERE ${CLAIMABLE}
+         AND attempts >= ?`,
+      [maxRetries]
+    );
+
     const candidate = db
       .query(
         `SELECT id FROM ingest_queue
-         WHERE completed_at IS NULL
-           AND (lease_expires_at IS NULL OR lease_expires_at < datetime('now'))
+         WHERE ${CLAIMABLE}
+           AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
+           AND (? IS NULL OR observe_id = ?)
          ORDER BY priority ASC, enqueued_at ASC
          LIMIT 1`
       )
-      .get() as { id: number } | null;
+      .get(observeId, observeId) as { id: number } | null;
 
     if (!candidate) return null;
 
-    // Claim it
     db.run(
       `UPDATE ingest_queue
        SET lease_owner = ?,
@@ -52,8 +86,7 @@ export function claimOne(
       [workerId, leaseToken, candidate.id]
     );
 
-    // Read back the claimed row
-    const row = db
+    return db
       .query(
         `SELECT id, observe_id, source_kind, attempts
          FROM ingest_queue WHERE id = ?`
@@ -64,11 +97,9 @@ export function claimOne(
       source_kind: string;
       attempts: number;
     };
-
-    return row;
   });
 
-  const row = tx();
+  const row = tx.immediate();
   if (!row) return null;
 
   return { ...row, lease_token: leaseToken };
@@ -114,23 +145,73 @@ export function complete(
 }
 
 /**
- * Record a processing failure. Clears lease so another worker can retry.
- * Does NOT set completed_at. Spec §10.2 failure.
+ * Record a processing failure. Clears the lease and schedules the next
+ * attempt with exponential backoff (60s, 120s, ... capped at 15 minutes);
+ * once attempts reach maxRetries the row is quarantined instead. Does NOT
+ * set completed_at. Spec §10.2 failure.
  */
 export function fail(
   db: Database,
   id: number,
   leaseToken: string,
-  error: string
+  error: string,
+  opts: FailOptions = {}
 ): boolean {
+  const maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
   const result = db.run(
     `UPDATE ingest_queue
      SET last_error = ?,
          lease_owner = NULL,
          lease_token = NULL,
-         lease_expires_at = NULL
+         lease_expires_at = NULL,
+         next_attempt_at = CASE
+           WHEN attempts >= ? THEN NULL
+           ELSE datetime('now', '+' || min(? * (1 << max(attempts - 1, 0)), ?) || ' seconds')
+         END,
+         quarantined_at = CASE
+           WHEN attempts >= ? THEN datetime('now')
+           ELSE quarantined_at
+         END
      WHERE id = ? AND lease_token = ?`,
-    [error, id, leaseToken]
+    [error, maxRetries, BACKOFF_BASE_SEC, BACKOFF_CAP_SEC, maxRetries, id, leaseToken]
   );
   return result.changes > 0;
+}
+
+/**
+ * Operator reset behind `compost doctor --ingest-retry`: clears quarantine,
+ * backoff and the attempt counter so the row gets a fresh set of retries.
+ * Returns the number of rows requeued.
+ */
+export function requeueQuarantined(db: Database, id?: number): number {
+  const result = db.run(
+    `UPDATE ingest_queue
+     SET quarantined_at = NULL,
+         next_attempt_at = NULL,
+         attempts = 0,
+         last_error = NULL
+     WHERE quarantined_at IS NOT NULL
+       AND completed_at IS NULL
+       AND (? IS NULL OR id = ?)`,
+    [id ?? null, id ?? null]
+  );
+  return result.changes;
+}
+
+export interface IngestQueueCounts {
+  pending: number;
+  quarantined: number;
+}
+
+/** Queue counters for daemon status and doctor. Pending excludes quarantine. */
+export function ingestQueueCounts(db: Database): IngestQueueCounts {
+  const row = db
+    .query(
+      `SELECT
+         SUM(CASE WHEN completed_at IS NULL AND quarantined_at IS NULL THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN completed_at IS NULL AND quarantined_at IS NOT NULL THEN 1 ELSE 0 END) AS quarantined
+       FROM ingest_queue`
+    )
+    .get() as { pending: number | null; quarantined: number | null };
+  return { pending: Number(row.pending ?? 0), quarantined: Number(row.quarantined ?? 0) };
 }
