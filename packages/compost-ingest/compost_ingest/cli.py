@@ -73,9 +73,10 @@ def run_extraction(payload: dict[str, Any]) -> dict[str, Any]:
         chunks = extract_chunks(content)
         facts = extract_facts(content, chunks)
 
-    # LLM-based fact extraction (additive, merges with heading-based facts)
+    # LLM-based fact extraction (additive, merges with heading-based facts).
+    # skip_llm_facts re-derives chunks only (manifest backfill): no Ollama calls.
     chunk_dicts = [{"chunk_id": c.chunk_id, "text": c.text, "metadata": c.metadata} for c in chunks]
-    llm_facts = extract_facts_llm(chunk_dicts)
+    llm_facts = [] if payload.get("skip_llm_facts") else extract_facts_llm(chunk_dicts)
 
     all_facts = [
         {

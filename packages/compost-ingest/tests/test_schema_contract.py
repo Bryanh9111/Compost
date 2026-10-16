@@ -198,3 +198,19 @@ def test_cli_success_exit_0() -> None:
     assert result.returncode == 0
     out = json.loads(result.stdout)
     assert_valid_output(out)
+
+
+def test_skip_llm_facts_makes_no_llm_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Manifest backfill re-derives chunks for ~30k observations; it must never touch Ollama."""
+    import compost_ingest.cli as cli
+
+    def boom(_chunks: list[dict]) -> list:
+        raise AssertionError("extract_facts_llm must not be called")
+
+    monkeypatch.setattr(cli, "extract_facts_llm", boom)
+    payload = {**_make_payload("simple-note.md"), "skip_llm_facts": True}
+    assert_valid_input(payload)
+    output = run_extraction(payload)
+    assert_valid_output(output)
+    assert len(output["chunks"]) > 0
+    assert all(f["confidence"] == 0.8 for f in output["facts"])

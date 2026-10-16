@@ -11,6 +11,8 @@ import {
  */
 export interface ReflectionReport {
   sensoryObservationsDeleted: number;
+  /** observe_ids removed by the sensory GC; callers drop their LanceDB vectors. */
+  sensoryObserveIdsDeleted: string[];
   sensoryFactsCascaded: number;
   semanticFactsTombstoned: number;
   contradictionsResolved: number;
@@ -37,6 +39,7 @@ export function reflect(db: Database): ReflectionReport {
   const startedAt = Date.now();
   const report: ReflectionReport = {
     sensoryObservationsDeleted: 0,
+    sensoryObserveIdsDeleted: [],
     sensoryFactsCascaded: 0,
     semanticFactsTombstoned: 0,
     contradictionsResolved: 0,
@@ -51,13 +54,16 @@ export function reflect(db: Database): ReflectionReport {
     const gcTx = db.transaction(() => {
       // Count observations and facts BEFORE the delete.
       // bun:sqlite's changes includes CASCADE-deleted rows, so we count explicitly.
-      const obsCount = db
+      // The cascade reaches chunks but not LanceDB, so the ids are reported
+      // for the caller to delete vectors with.
+      const doomed = db
         .query(
-          `SELECT COUNT(*) AS c FROM observations
+          `SELECT observe_id FROM observations
            WHERE captured_at < datetime('now', '-${SENSORY_TTL_DAYS} days')
              AND source_id IN (SELECT id FROM source WHERE kind = 'sensory')`
         )
-        .get() as { c: number };
+        .all() as Array<{ observe_id: string }>;
+      const obsCount = { c: doomed.length };
 
       const factsCount = db
         .query(
@@ -79,6 +85,7 @@ export function reflect(db: Database): ReflectionReport {
       );
 
       report.sensoryObservationsDeleted = obsCount.c;
+      report.sensoryObserveIdsDeleted = doomed.map((row) => row.observe_id);
     });
     gcTx();
   } catch (err) {
