@@ -132,11 +132,18 @@ describe("startDaemon", () => {
     const status = await sendSocket(join(dataDir, "daemon.sock"), "status") as {
       pid?: unknown;
       uptime?: unknown;
+      ingest?: Record<string, unknown>;
       schedulers?: unknown;
     };
     expect(status.pid).toBe(process.pid);
     expect(typeof status.uptime).toBe("number");
     expect(Array.isArray(status.schedulers)).toBe(true);
+    expect(status.ingest).toEqual({
+      pending: 0,
+      quarantined: 0,
+      unembedded_chunks: 0,
+      embed_error_chunks: 0,
+    });
 
     const schedulers = status.schedulers as Array<Record<string, unknown>>;
     for (const name of ["drain", "reflect", "ingest", "freshness", "reasoning"]) {

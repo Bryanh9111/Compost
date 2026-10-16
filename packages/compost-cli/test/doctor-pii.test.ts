@@ -134,9 +134,88 @@ describe("doctor --check-integrity", () => {
     expect(report.dangling_fact_links).toBe(0);
     expect(report.stale_wiki_pages).toBe(0);
     expect(report.quarantined_outbox).toBe(0);
+    expect(report.quarantined_ingest).toBe(0);
+    expect(report.unembedded_chunks).toBe(0);
+    expect(report.embed_error_chunks).toBe(0);
     expect(report.unknown_transform_policies.in_observe_outbox).toBe(0);
     expect(report.unknown_transform_policies.in_observations).toBe(0);
     expect(report.total_issues).toBe(0);
+  });
+
+  test("counts quarantined ingest rows as issues and --ingest-retry requeues them", async () => {
+    const db = setupDb(dataDir);
+    db.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run(
+      `INSERT INTO observations VALUES ('obs-q','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)`
+    );
+    db.run(
+      `INSERT INTO ingest_queue (observe_id, source_kind, priority, attempts, last_error, quarantined_at)
+       VALUES ('obs-q', 'local-file', 1, 3, 'extractor exploded', datetime('now'))`
+    );
+    db.close();
+
+    const before = JSON.parse((await runCli(["doctor", "--check-integrity"], dataDir)).stdout);
+    expect(before.quarantined_ingest).toBe(1);
+    expect(before.pending_ingest_observations).toBe(0);
+    expect(before.orphan_observations).toBe(0);
+    expect(before.total_issues).toBe(1);
+    expect(before.hint).toContain("--ingest-retry");
+
+    const bad = await runCli(["doctor", "--ingest-retry", "nope"], dataDir);
+    expect(bad.exitCode).toBe(1);
+
+    const retry = await runCli(["doctor", "--ingest-retry", "all"], dataDir);
+    expect(retry.exitCode).toBe(0);
+    expect(JSON.parse(retry.stdout)).toEqual({ requeued: 1 });
+
+    const after = JSON.parse((await runCli(["doctor", "--check-integrity"], dataDir)).stdout);
+    expect(after.quarantined_ingest).toBe(0);
+    expect(after.pending_ingest_observations).toBe(1);
+    expect(after.total_issues).toBe(0);
+    const check = new Database(join(dataDir, "ledger.db"), { readonly: true });
+    const row = check.query("SELECT attempts, last_error FROM ingest_queue").get() as { attempts: number; last_error: string | null };
+    check.close();
+    expect(row).toEqual({ attempts: 0, last_error: null });
+  });
+
+  test("reports unembedded and isolated chunks without counting them as issues", async () => {
+    const db = setupDb(dataDir);
+    db.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run(
+      `INSERT INTO observations VALUES ('obs-c','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)`
+    );
+    db.run("INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d1','obs-c','L2','tp-2026-04','succeeded')");
+    db.run(
+      `INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy, embed_error)
+       VALUES ('obs-c:c0','obs-c','d1',0,'a','h',0,1,'tp-2026-04',NULL), ('obs-c:c1','obs-c','d1',1,'b','h',0,1,'tp-2026-04','dim 1')`
+    );
+    db.close();
+
+    const report = JSON.parse((await runCli(["doctor", "--check-integrity"], dataDir)).stdout);
+    expect(report.unembedded_chunks).toBe(1);
+    expect(report.embed_error_chunks).toBe(1);
+    expect(report.total_issues).toBe(0);
+  });
+
+  test("--drain-retry resets drain_attempts along with the quarantine", async () => {
+    const db = setupDb(dataDir);
+    db.run(
+      `INSERT INTO observe_outbox
+        (adapter, source_id, source_kind, source_uri, idempotency_key,
+         trust_tier, transform_policy, payload, drain_attempts,
+         drain_error, drain_quarantined_at)
+       VALUES ('test', 's1', 'host-adapter', 'test://s1', 'k1',
+               'first_party', 'tp-2026-04', '{}', 6,
+               'boom', datetime('now'))`
+    );
+    db.close();
+
+    const result = await runCli(["doctor", "--drain-retry"], dataDir);
+    expect(JSON.parse(result.stdout)).toEqual({ released: 1 });
+    const check = new Database(join(dataDir, "ledger.db"), { readonly: true });
+    const row = check.query("SELECT drain_attempts, drain_quarantined_at FROM observe_outbox").get() as { drain_attempts: number; drain_quarantined_at: string | null };
+    check.close();
+    expect(row).toEqual({ drain_attempts: 0, drain_quarantined_at: null });
   });
 
   test("detects orphan observations (observation without derivation_run)", async () => {

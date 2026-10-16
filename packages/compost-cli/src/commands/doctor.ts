@@ -4,6 +4,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
+import { requeueQuarantined } from "../../../compost-core/src/queue/lease";
+import { countPendingChunks } from "../../../compost-core/src/pipeline/embed-pending";
 import { DEFAULT_PENDING_DB_PATH } from "../../../compost-engram-adapter/src/constants";
 import { PendingWritesQueue } from "../../../compost-engram-adapter/src/pending-writes";
 import { reconcileEngramQueue } from "../../../compost-engram-adapter/src/reconcile";
@@ -87,6 +89,10 @@ export function registerDoctor(program: Command): void {
     .option(
       "--drain-retry",
       "Release quarantined outbox rows back into the drain queue"
+    )
+    .option(
+      "--ingest-retry <target>",
+      "Requeue quarantined ingest rows (a queue id or `all`), resetting their attempts"
     )
     .option("--rebuild <layer>", "Rebuild a derivation layer (e.g. L1)")
     .option("--policy <name>", "Policy name for --rebuild")
@@ -310,12 +316,29 @@ export function registerDoctor(program: Command): void {
       if (opts.drainRetry) {
         const db = openDb();
         try {
+          // Reset the counter too, or the next failure re-quarantines at once.
           const result = db.run(
-            "UPDATE observe_outbox SET drain_quarantined_at = NULL WHERE drain_quarantined_at IS NOT NULL"
+            "UPDATE observe_outbox SET drain_quarantined_at = NULL, drain_attempts = 0 WHERE drain_quarantined_at IS NOT NULL"
           );
           process.stdout.write(
             JSON.stringify({ released: result.changes }) + "\n"
           );
+        } finally {
+          db.close();
+        }
+        return;
+      }
+
+      if (opts.ingestRetry !== undefined) {
+        const target = opts.ingestRetry;
+        const id = target === "all" ? undefined : Number(target);
+        if (id !== undefined && !Number.isInteger(id)) {
+          process.stderr.write("error: --ingest-retry expects a queue id or `all`\n");
+          process.exit(1);
+        }
+        const db = openDb();
+        try {
+          process.stdout.write(JSON.stringify({ requeued: requeueQuarantined(db, id) }) + "\n");
         } finally {
           db.close();
         }
@@ -632,9 +655,18 @@ export function registerDoctor(program: Command): void {
             .query(
               `SELECT COUNT(DISTINCT observe_id) AS c
                FROM ingest_queue
-               WHERE completed_at IS NULL`
+               WHERE completed_at IS NULL AND quarantined_at IS NULL`
             )
             .get() as { c: number };
+
+          const quarantinedIngest = db
+            .query(
+              `SELECT COUNT(*) AS c FROM ingest_queue
+               WHERE completed_at IS NULL AND quarantined_at IS NOT NULL`
+            )
+            .get() as { c: number };
+
+          const chunkBacklog = countPendingChunks(db);
 
           const quarantinedOutbox = db
             .query(
@@ -677,6 +709,7 @@ export function registerDoctor(program: Command): void {
           const totalIssues =
             storage.database_errors.length + storage.foreign_key_violations.length + storage.fts_errors.length +
             quarantinedOutbox.c +
+            quarantinedIngest.c +
             orphanObs.c +
             danglingLinks.c +
             staleWikiCount.c +
@@ -688,8 +721,11 @@ export function registerDoctor(program: Command): void {
               {
                 ...storage,
                 quarantined_outbox: quarantinedOutbox.c,
+                quarantined_ingest: quarantinedIngest.c,
                 orphan_observations: orphanObs.c,
                 pending_ingest_observations: pendingIngestObs.c,
+                unembedded_chunks: chunkBacklog.pending,
+                embed_error_chunks: chunkBacklog.failed,
                 dangling_fact_links: danglingLinks.c,
                 stale_wiki_pages: staleWikiCount.c,
                 unknown_transform_policies: {
@@ -700,6 +736,8 @@ export function registerDoctor(program: Command): void {
                 hint:
                   quarantinedOutbox.c > 0
                     ? "Integrity issues detected, including quarantined outbox rows. Review drain_error before using `compost doctor --drain-retry`; no automatic fix applied."
+                    : quarantinedIngest.c > 0
+                      ? "Integrity issues detected, including quarantined ingest rows. Review ingest_queue.last_error before using `compost doctor --ingest-retry <id|all>`; no automatic fix applied."
                     : totalIssues > 0
                       ? "Integrity issues detected. Review via `docs/dogfood-notes.md` workflow; no automatic fix applied."
                     : "Schema integrity checks passed.",
@@ -716,7 +754,7 @@ export function registerDoctor(program: Command): void {
       }
 
       process.stderr.write(
-        "doctor: specify --reconcile, --measure-hook, --drain-retry, --rebuild, --check-llm, --check-pii, --check-integrity, or --reconcile-engram\n"
+        "doctor: specify --reconcile, --measure-hook, --drain-retry, --ingest-retry, --rebuild, --check-llm, --check-pii, --check-integrity, or --reconcile-engram\n"
       );
       process.exit(1);
     });

@@ -32,6 +32,8 @@ import type { EngramMcpClient } from "../../compost-engram-adapter/src/writer";
 import type { EngramStreamClient } from "../../compost-engram-adapter/src/stream-puller";
 import { PendingWritesQueue } from "../../compost-engram-adapter/src/pending-writes";
 import { recoverStaleRuns } from "./recovery";
+import { ingestQueueCounts } from "../../compost-core/src/queue/lease";
+import { countPendingChunks } from "../../compost-core/src/pipeline/embed-pending";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -392,6 +394,7 @@ async function startControlSocket(
             pid: process.pid,
             uptime: process.uptime(),
             outbox: collectOutboxHealth(db),
+            ingest: collectIngestHealth(db),
             schedulers: collectSchedulerHealth(schedulers),
           };
           _socket.write(JSON.stringify(info) + "\n");
@@ -446,6 +449,25 @@ export function collectOutboxHealth(db: Database): {
   return {
     pending: row.pending ?? 0,
     quarantined: row.quarantined ?? 0,
+  };
+}
+
+export interface IngestHealth {
+  pending: number;
+  quarantined: number;
+  unembedded_chunks: number;
+  embed_error_chunks: number;
+}
+
+/** Queue + vector backlog for `daemon status`; quarantine and embed errors mark degraded. */
+export function collectIngestHealth(db: Database): IngestHealth {
+  const queue = ingestQueueCounts(db);
+  const chunks = countPendingChunks(db);
+  return {
+    pending: queue.pending,
+    quarantined: queue.quarantined,
+    unembedded_chunks: chunks.pending,
+    embed_error_chunks: chunks.failed,
   };
 }
 

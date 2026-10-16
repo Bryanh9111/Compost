@@ -178,6 +178,7 @@ describe("CLI program structure", () => {
       pid: 12345,
       uptime: 100.2,
       outbox: { pending: 3, quarantined: 2 },
+      ingest: { pending: 1, quarantined: 1, unembedded_chunks: 7, embed_error_chunks: 2 },
       schedulers: [
         {
           name: "ingest",
@@ -196,6 +197,7 @@ describe("CLI program structure", () => {
 
     expect(output).toContain("pid: 12345  uptime: 100s");
     expect(output).toContain("outbox: pending=3 quarantined=2 [degraded]");
+    expect(output).toContain("ingest: pending=1 quarantined=1 unembedded=7 embed_errors=2 [degraded]");
     expect(output).toContain("schedulers:");
     expect(output).toContain("ingest");
     expect(output).toContain("[running]");
@@ -206,6 +208,16 @@ describe("CLI program structure", () => {
     expect(output).toContain("errors=2");
   });
 
+  it("formats a healthy ingest line without the degraded marker", () => {
+    const output = formatDaemonStatus({
+      pid: 1,
+      uptime: 1,
+      ingest: { pending: 0, quarantined: 0, unembedded_chunks: 3, embed_error_chunks: 0 },
+    });
+    expect(output).toContain("ingest: pending=0 quarantined=0 unembedded=3");
+    expect(output).not.toContain("[degraded]");
+  });
+
   it("doctor has diagnostic and LLM probe options", () => {
     const program = buildProgram();
     const doctor = program.commands.find((c) => c.name() === "doctor");
@@ -214,6 +226,7 @@ describe("CLI program structure", () => {
     expect(optionNames).toContain("--reconcile");
     expect(optionNames).toContain("--measure-hook");
     expect(optionNames).toContain("--drain-retry");
+    expect(optionNames).toContain("--ingest-retry");
     expect(optionNames).toContain("--check-llm");
     expect(optionNames).toContain("--ollama-url");
     expect(optionNames).toContain("--llm-model");
