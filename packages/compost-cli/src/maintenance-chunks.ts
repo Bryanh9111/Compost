@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { extractionTimeoutMs, runExtractor, type ExtractFn } from "../../compost-core/src/pipeline/extractor";
-import { namespaceExtractionOutput, sha256Hex } from "../../compost-core/src/pipeline/persist-extraction";
+import { namespaceExtractionOutput, namespaceLegacyChunkIds, sha256Hex } from "../../compost-core/src/pipeline/persist-extraction";
 import type { ChunkRef } from "../../compost-core/src/storage/lancedb";
 import { localChunkId } from "./maintenance-vectors";
 
@@ -37,6 +37,8 @@ export interface BackfillReport {
   failed: number;
   errors: Array<{ observe_id: string; message: string }>;
   sample: string[];
+  /** Legacy `cN` rows renamed before the backfill (apply only). */
+  legacy_ids_renamed: number;
 }
 
 const MAX_REPORTED_ERRORS = 20;
@@ -106,6 +108,7 @@ function firstActiveFact(db: Database, observeId: string): string | null {
  * the observation's stale vectors are dropped so the daemon sweep re-embeds.
  */
 export async function backfillChunks(db: Database, opts: BackfillOptions = {}): Promise<BackfillReport> {
+  const legacyRenamed = opts.apply ? namespaceLegacyChunkIds(db) : 0;
   const candidates = listBackfillCandidates(db, opts.limit);
   const report: BackfillReport = {
     mode: opts.apply ? "applied" : "dry-run",
@@ -117,6 +120,7 @@ export async function backfillChunks(db: Database, opts: BackfillOptions = {}): 
     failed: 0,
     errors: [],
     sample: candidates.slice(0, 5).map((c) => c.observe_id),
+    legacy_ids_renamed: legacyRenamed,
   };
   if (!opts.apply || candidates.length === 0) return report;
 

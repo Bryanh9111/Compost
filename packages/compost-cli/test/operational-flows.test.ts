@@ -118,6 +118,10 @@ test("doctor --rebuild L1 refuses while the chunk manifest is incomplete unless 
     const forced=await runCli(["doctor","--rebuild","L1","--force"],dir);
     expect(forced.exitCode,forced.stderr).toBe(0);
     expect(JSON.parse(forced.stdout).rebuilt).toBe(0);
+    writeFileSync(join(dir,"daemon.pid"),String(process.pid));
+    const live=await runCli(["doctor","--rebuild","L1","--force"],dir);
+    expect(live.exitCode).not.toBe(0);
+    expect(live.stderr).toContain("daemon running");
   } finally { embed.mockRestore(); rmSync(dir,{recursive:true,force:true}); }
 });
 

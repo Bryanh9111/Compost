@@ -7,6 +7,7 @@ import { applyMigrations } from "../../../compost-core/src/schema/migrator";
 import { requeueQuarantined } from "../../../compost-core/src/queue/lease";
 import { countPendingChunks } from "../../../compost-core/src/pipeline/embed-pending";
 import { countBackfillCandidates } from "../maintenance-chunks";
+import { assertDaemonStopped } from "../maintenance-vectors";
 import { DEFAULT_PENDING_DB_PATH } from "../../../compost-engram-adapter/src/constants";
 import { PendingWritesQueue } from "../../../compost-engram-adapter/src/pending-writes";
 import { reconcileEngramQueue } from "../../../compost-engram-adapter/src/reconcile";
@@ -354,8 +355,11 @@ export function registerDoctor(program: Command): void {
           process.exit(1);
         }
 
-        const db = openDb();
         const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+        // The daemon re-derives observations while a rebuild embeds; its queued
+        // vector cleanups would be cleared by the swap. Rebuild offline only.
+        assertDaemonStopped(dataDir);
+        const db = openDb();
         try {
           // A rebuild reads only the SQLite manifest. Before 0028 most manifest
           // rows were lost to chunk id collisions, so rebuilding would discard
@@ -689,6 +693,9 @@ export function registerDoctor(program: Command): void {
             .get() as { c: number };
 
           const chunkBacklog = countPendingChunks(db);
+          const legacyChunkIds = db
+            .query("SELECT count(*) AS c FROM chunks WHERE chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'")
+            .get() as { c: number };
 
           const quarantinedOutbox = db
             .query(
@@ -732,6 +739,7 @@ export function registerDoctor(program: Command): void {
             storage.database_errors.length + storage.foreign_key_violations.length + storage.fts_errors.length +
             quarantinedOutbox.c +
             quarantinedIngest.c +
+            legacyChunkIds.c +
             orphanObs.c +
             danglingLinks.c +
             staleWikiCount.c +
@@ -748,6 +756,7 @@ export function registerDoctor(program: Command): void {
                 pending_ingest_observations: pendingIngestObs.c,
                 unembedded_chunks: chunkBacklog.pending,
                 embed_error_chunks: chunkBacklog.failed,
+                legacy_chunk_ids: legacyChunkIds.c,
                 dangling_fact_links: danglingLinks.c,
                 stale_wiki_pages: staleWikiCount.c,
                 unknown_transform_policies: {
@@ -760,6 +769,8 @@ export function registerDoctor(program: Command): void {
                     ? "Integrity issues detected, including quarantined outbox rows. Review drain_error before using `compost doctor --drain-retry`; no automatic fix applied."
                     : quarantinedIngest.c > 0
                       ? "Integrity issues detected, including quarantined ingest rows. Review ingest_queue.last_error before using `compost doctor --ingest-retry <id|all>`; no automatic fix applied."
+                    : legacyChunkIds.c > 0
+                      ? "Chunk rows with pre-0028 ids found: a daemon running old code wrote them after the migration. Restart the daemon (it renames them at boot) or run `compost maintenance --backfill-chunks --apply`."
                     : totalIssues > 0
                       ? "Integrity issues detected. Review via `docs/dogfood-notes.md` workflow; no automatic fix applied."
                     : "Schema integrity checks passed.",

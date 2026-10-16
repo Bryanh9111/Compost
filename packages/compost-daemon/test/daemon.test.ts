@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createConnection } from "net";
@@ -107,6 +107,27 @@ describe("startDaemon", () => {
       .query("SELECT name FROM sqlite_master WHERE type='table' AND name='_compost_migrations'")
       .get();
     expect(row).not.toBeNull();
+    db.close();
+  });
+
+  it("renames chunk rows left with pre-0028 ids by an old daemon", async () => {
+    tmpDir = makeTmpDir();
+    const dataDir = join(tmpDir, "compost-legacy-ids");
+    mkdirSync(dataDir, { recursive: true });
+    const seedDb = new Database(join(dataDir, "ledger.db"));
+    applyMigrations(seedDb);
+    seedDb.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    seedDb.run(
+      "INSERT INTO observations VALUES ('obs-l','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)"
+    );
+    seedDb.run("INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d1','obs-l','L2','tp-2026-04','succeeded')");
+    seedDb.run(
+      "INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy) VALUES ('c0','obs-l','d1',0,'a','h',0,1,'tp-2026-04')"
+    );
+    seedDb.close();
+
+    const { db } = await startDaemon(dataDir, false);
+    expect(db.query("SELECT chunk_id FROM chunks").all()).toEqual([{ chunk_id: "obs-l:c0" }]);
     db.close();
   });
 

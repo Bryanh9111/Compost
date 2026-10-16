@@ -137,6 +137,7 @@ describe("doctor --check-integrity", () => {
     expect(report.quarantined_ingest).toBe(0);
     expect(report.unembedded_chunks).toBe(0);
     expect(report.embed_error_chunks).toBe(0);
+    expect(report.legacy_chunk_ids).toBe(0);
     expect(report.unknown_transform_policies.in_observe_outbox).toBe(0);
     expect(report.unknown_transform_policies.in_observations).toBe(0);
     expect(report.total_issues).toBe(0);
@@ -176,6 +177,24 @@ describe("doctor --check-integrity", () => {
     const row = check.query("SELECT attempts, last_error FROM ingest_queue").get() as { attempts: number; last_error: string | null };
     check.close();
     expect(row).toEqual({ attempts: 0, last_error: null });
+  });
+
+  test("counts chunk rows that still carry pre-0028 ids as issues", async () => {
+    const db = setupDb(dataDir);
+    db.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run(
+      `INSERT INTO observations VALUES ('obs-l','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)`
+    );
+    db.run("INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d1','obs-l','L2','tp-2026-04','succeeded')");
+    db.run(
+      `INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy, embedded_at)
+       VALUES ('c0','obs-l','d1',0,'a','h',0,1,'tp-2026-04',datetime('now'))`
+    );
+    db.close();
+    const report = JSON.parse((await runCli(["doctor", "--check-integrity"], dataDir)).stdout);
+    expect(report.legacy_chunk_ids).toBe(1);
+    expect(report.total_issues).toBe(1);
+    expect(report.hint).toContain("pre-0028");
   });
 
   test("reports unembedded and isolated chunks without counting them as issues", async () => {
