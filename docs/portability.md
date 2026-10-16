@@ -20,14 +20,14 @@ Why the restriction:
   ledger.db-shm     - shared memory (transient)
   blobs/            - raw content payloads > 64 KiB (referenced via blob_ref)
   wiki/             - L3 synthesized markdown pages (Phase 1+)
-  logs/             - daemon logs (pino JSON, rotated by the daemon)
-  lance/            - LanceDB vector store (Phase 1+)
+  daemon.log        - launchd stdout/stderr (pino JSON); the daily backup tick rotates it copy-then-truncate into daemon.log.1 .. .5 once it exceeds 20 MiB
+  lancedb/          - LanceDB vector store (chunk_vectors table)
   lancedb.lock      - proper-lockfile cross-process write lock for LanceDB
 ```
 
 ## Permissions
 
-`scripts/install.sh` applies `chmod 700` to `~/.compost/` and all subdirectories. The `ledger.db` file itself is created with `0600` by better-sqlite3. WAL/SHM sidecars inherit permissions from the parent directory.
+`scripts/install.sh` applies `chmod 700` to `~/.compost/` and all subdirectories. The `ledger.db` file is created by bun:sqlite inside that `0700` directory, so it is reachable only by the owning user. WAL/SHM sidecars inherit permissions from the parent directory.
 
 Default macOS umask (022) would create world-readable directories. `chmod 700` restricts access to the owning user only. This does not protect against root or same-user processes, but closes the multi-user-machine data leak.
 
