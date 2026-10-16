@@ -6,6 +6,7 @@ import { claimOne } from "../src/queue/lease";
 import {
   type ExtractionOutput,
   namespaceExtractionOutput,
+  namespaceLegacyChunkIds,
   persistExtraction,
 } from "../src/pipeline/persist-extraction";
 
@@ -217,6 +218,23 @@ describe("pipeline/persist-extraction", () => {
     expect(winner.archived_at).not.toBeNull();
     expect(winner.archive_reason).toBe("superseded");
     expect(db.query("SELECT superseded_by FROM facts WHERE fact_id = 'loser'").get()).toEqual({ superseded_by: "winner" });
+  });
+
+  test("namespaceLegacyChunkIds renames plain extractor ids and nothing else", () => {
+    seedObservation("obs-1");
+    const insert = db.prepare(
+      "INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy) VALUES (?, 'obs-1', 'd-obs-1', ?, 't', 'h', 0, 1, ?)"
+    );
+    insert.run("c0", 0, policyId);
+    insert.run("obs-1:c1", 1, policyId);
+    insert.run("019d88e8-c70a-7000-8000-000000000002", 2, policyId);
+    expect(namespaceLegacyChunkIds(db)).toBe(1);
+    expect((db.query("SELECT chunk_id FROM chunks ORDER BY chunk_index").all() as { chunk_id: string }[]).map((r) => r.chunk_id)).toEqual([
+      "obs-1:c0",
+      "obs-1:c1",
+      "019d88e8-c70a-7000-8000-000000000002",
+    ]);
+    expect(namespaceLegacyChunkIds(db)).toBe(0);
   });
 
   test("a lost lease rolls back facts, chunks and the derivation transition", () => {

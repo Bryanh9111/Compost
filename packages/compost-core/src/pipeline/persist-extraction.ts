@@ -115,6 +115,28 @@ export function sha256Hex(content: string): string {
 }
 
 /**
+ * Rewrite extractor-local chunk ids (c0, c1, ...) that a pre-0028 writer
+ * stored as the global id. Migration 0028 does this once; a daemon still
+ * running the old code after the migration writes more, so the daemon boot,
+ * the manifest backfill and doctor call this idempotent sweep again.
+ * Returns the number of rows renamed.
+ */
+export function namespaceLegacyChunkIds(db: Database): number {
+  const legacy = (
+    db
+      .query("SELECT count(*) AS n FROM chunks WHERE chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'")
+      .get() as { n: number }
+  ).n;
+  if (legacy > 0) {
+    db.run(
+      `UPDATE chunks SET chunk_id = observe_id || ':' || chunk_id
+       WHERE chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'`
+    );
+  }
+  return legacy;
+}
+
+/**
  * Extractors emit document-local chunk ids (c0, c1, ...). chunks.chunk_id is
  * a global primary key, so every id is namespaced by its observation before
  * it reaches the ledger or LanceDB. Idempotent for ids already namespaced.

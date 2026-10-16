@@ -257,6 +257,16 @@ describe("migrator", () => {
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='vector_gc_queue'").get()).not.toBeNull();
   });
 
+  test("0029 replaces an earlier claim-less vector_gc_queue with the claimable shape", () => {
+    applyMigrations(db, { upTo: "0028_chunk_identity_and_ingest_retry" });
+    db.run("CREATE TABLE vector_gc_queue (observe_id TEXT PRIMARY KEY, enqueued_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    const result = applyMigrations(db);
+    expect(result.applied.map((m) => m.name)).toEqual(["0029_vector_gc_queue"]);
+    expect(result.errors).toHaveLength(0);
+    const cols = (db.query("PRAGMA table_info(vector_gc_queue)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toEqual(["observe_id", "enqueued_at", "claimed_token", "claimed_at"]);
+  });
+
   test("0022 backfills Engram project contexts for existing observations", () => {
     applyMigrations(db);
 

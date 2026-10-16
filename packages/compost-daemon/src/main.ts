@@ -34,6 +34,7 @@ import { PendingWritesQueue } from "../../compost-engram-adapter/src/pending-wri
 import { recoverStaleRuns } from "./recovery";
 import { ingestQueueCounts } from "../../compost-core/src/queue/lease";
 import { countPendingChunks } from "../../compost-core/src/pipeline/embed-pending";
+import { namespaceLegacyChunkIds } from "../../compost-core/src/pipeline/persist-extraction";
 import pino from "pino";
 
 const log = pino({ name: "compost-daemon" });
@@ -132,6 +133,8 @@ export async function startDaemon(
 
   upsertPolicies(db);
   log.info("policies upserted");
+  const renamed = namespaceLegacyChunkIds(db);
+  if (renamed > 0) log.warn({ renamed }, "namespaced chunk ids written by a pre-0028 daemon");
 
   // 4. Write PID file
   writeFileSync(pidPath, String(process.pid), "utf-8");
