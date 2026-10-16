@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 27 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 28 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(27);
+    expect(result.applied).toHaveLength(28);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -53,6 +53,7 @@ describe("migrator", () => {
       "0025_action_context_project_repair",
       "0026_maintenance_audit",
       "0027_search_indexes",
+      "0028_chunk_identity_and_ingest_retry",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -203,13 +204,54 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(27);
+    expect(before.pending).toHaveLength(28);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(27);
+    expect(after.applied).toHaveLength(28);
     expect(after.pending).toHaveLength(0);
+  });
+
+  test("0028 namespaces legacy chunk ids, keeps uuid ids and adds retry columns", () => {
+    const upTo = applyMigrations(db, { upTo: "0027_search_indexes" });
+    expect(upTo.applied).toHaveLength(27);
+    db.run(
+      "INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)"
+    );
+    for (const obs of ["obs-1", "obs-2"]) {
+      db.run(
+        `INSERT INTO observations VALUES (?,'s1','file:///a',datetime('now'),datetime('now'),?,?,NULL,NULL,'text/markdown','local-file',1,'user',?,'tp-2026-04',NULL,NULL,NULL)`,
+        [obs, `h-${obs}`, `r-${obs}`, `k-${obs}`]
+      );
+      db.run(
+        "INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES (?, ?, 'L2', 'tp-2026-04', 'succeeded')",
+        [`d-${obs}`, obs]
+      );
+    }
+    const insert = db.prepare(
+      "INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy) VALUES (?, ?, ?, ?, 'text', 'hash', 0, 4, 'tp-2026-04')"
+    );
+    insert.run("c0", "obs-1", "d-obs-1", 0);
+    insert.run("c1", "obs-1", "d-obs-1", 1);
+    const uuid = "019d88e8-c70a-7000-8000-000000000001";
+    insert.run(uuid, "obs-2", "d-obs-2", 0);
+    db.run("INSERT INTO ingest_queue (observe_id, source_kind, priority) VALUES ('obs-1', 'local-file', 1)");
+
+    const result = applyMigrations(db);
+    expect(result.applied.map((m) => m.name)).toEqual(["0028_chunk_identity_and_ingest_retry"]);
+    expect(result.errors).toHaveLength(0);
+
+    const ids = (db.query("SELECT chunk_id FROM chunks ORDER BY observe_id, chunk_index").all() as { chunk_id: string }[]).map((r) => r.chunk_id);
+    expect(ids).toEqual(["obs-1:c0", "obs-1:c1", uuid]);
+    const chunkCols = (db.query("PRAGMA table_info(chunks)").all() as { name: string }[]).map((c) => c.name);
+    expect(chunkCols).toContain("fact_id");
+    expect(chunkCols).toContain("embed_error");
+    const queueCols = (db.query("PRAGMA table_info(ingest_queue)").all() as { name: string }[]).map((c) => c.name);
+    expect(queueCols).toContain("next_attempt_at");
+    expect(queueCols).toContain("quarantined_at");
+    const index = db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_queue_claimable'").get();
+    expect(index).not.toBeNull();
   });
 
   test("0022 backfills Engram project contexts for existing observations", () => {
