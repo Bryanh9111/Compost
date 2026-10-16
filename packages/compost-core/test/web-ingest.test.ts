@@ -15,7 +15,7 @@ test("web ingest extracts and embeds local HTTP evidence, skips unchanged pages,
   }});
   let embedded = 0;
   const embeddings = { model: "test", dim: 3, async embed(texts: string[]) { return texts.map(() => new Float32Array([1,0,0])); } };
-  const vectors = { async add(rows: unknown[]) { embedded += rows.length; } } as unknown as VectorStore;
+  const vectors = { async upsert(rows: unknown[]) { embedded += rows.length; } } as unknown as VectorStore;
   try {
     expect((await ingestUrl(db,server.url.href,"/tmp",{policyId:"missing"})).ok).toBe(false);
     const first = await ingestUrl(db,server.url.href,"/tmp",{embeddingService:embeddings,vectorStore:vectors});

@@ -7,8 +7,16 @@ import type { Database } from "bun:sqlite";
 import { v7 as uuidv7 } from "uuid";
 import { appendToOutbox, drainOne } from "../ledger/outbox";
 import type { OutboxEvent } from "../ledger/outbox";
-import { claimOne, complete, fail } from "../queue/lease";
-import { validatePolicyExists } from "../policies/registry";
+import { claimOne, fail } from "../queue/lease";
+import { policies as policyRegistry, validatePolicyExists } from "../policies/registry";
+import {
+  beginDerivation,
+  failDerivation,
+  persistExtraction,
+  type ExtractionOutput,
+} from "./persist-extraction";
+import { extractionTimeoutMs, runExtractor } from "./extractor";
+import { embedObservationChunks } from "./embed-observation";
 import type { EmbeddingService } from "../embedding/types";
 import type { VectorStore } from "../storage/lancedb";
 
@@ -21,6 +29,7 @@ export interface WebIngestResult {
   chunks_count?: number;
   facts_count?: number;
   embedded_count?: number;
+  embedding_error?: string;
   skipped_304?: boolean;
   error?: string;
 }
@@ -29,22 +38,6 @@ export interface WebIngestOptions {
   embeddingService?: EmbeddingService;
   vectorStore?: VectorStore;
   policyId?: string;
-}
-
-interface WebExtractionOutput {
-  chunks: Array<{
-    chunk_id: string;
-    text: string;
-    source_chunk_ids?: string[];
-  }>;
-  facts: Array<{
-    subject: string;
-    predicate: string;
-    object: string;
-    confidence?: number;
-    importance?: number;
-    source_chunk_ids?: string[];
-  }>;
 }
 
 function computeHash(content: string): string {
@@ -150,143 +143,62 @@ export async function ingestUrl(
 
   appendToOutbox(db, event);
 
-  // Drain + process
-  const drainResult = drainOne(db);
+  // Drain + process. The freshness loop runs inside the daemon, so only this
+  // adapter's rows are drained and only this observation's queue row claimed.
+  const drainResult = drainOne(db, "web-url");
   if (!drainResult) {
     return { ok: true, observe_id: undefined, status_code: res.status, content_type: mimeType };
   }
 
   const observeId = drainResult.observe_id;
-  const workerId = `web-ingest:${process.pid}`;
-  const claimed = claimOne(db, workerId);
+  const policy = policyRegistry[policyId as keyof typeof policyRegistry];
+  const maxRetries = policy?.extraction.maxRetries;
+  const claimed = claimOne(db, `web-ingest:${process.pid}`, { observeId, maxRetries });
   if (!claimed) {
     return { ok: true, observe_id: observeId, status_code: res.status, content_type: mimeType };
   }
 
-  // Run Python extraction
   const derivationId = uuidv7();
-  db.run(
-    `INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status)
-     VALUES (?, ?, 'L2', ?, 'running')`,
-    [derivationId, observeId, policyId]
-  );
-
+  let output: ExtractionOutput;
   try {
-    const { existsSync } = await import("fs");
-    const { join } = await import("path");
-
-    const ingestPkgDir = join(import.meta.dir, "../../..", "compost-ingest");
-    const venvPython = join(ingestPkgDir, ".venv/bin/python");
-
-    let cmd: string[];
-    if (existsSync(venvPython)) {
-      cmd = [venvPython, "-m", "compost_ingest", "extract"];
-    } else {
-      cmd = ["uv", "run", "--project", ingestPkgDir, "python", "-m", "compost_ingest", "extract"];
-    }
-
-    const extractionInput = JSON.stringify({
-      observe_id: observeId,
-      source_uri: url,
-      mime_type: mimeType,
-      content_ref: "inline",
-      content,
-      transform_policy: policyId,
-    });
-
-    const proc = Bun.spawn(cmd, {
-      stdin: new Blob([extractionInput]),
-      stdout: "pipe",
-      stderr: "pipe",
-      cwd: ingestPkgDir,
-    });
-
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-
-    if (exitCode !== 0) {
-      throw new Error(`extraction failed (exit ${exitCode}): ${stderr.slice(0, 500)}`);
-    }
-
-    const output = JSON.parse(stdout) as WebExtractionOutput;
-
-    // Write facts + chunks (reuse ingest logic pattern)
-    const insertFact = db.prepare(
-      `INSERT OR IGNORE INTO facts (fact_id, subject, predicate, object, confidence, importance, observe_id, last_reinforced_at_unix_sec, half_life_seconds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    const insertChunk = db.prepare(
-      `INSERT OR IGNORE INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    const nowUnixSec = Math.floor(Date.now() / 1000);
-
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const fact of output.facts) {
-        insertFact.run(uuidv7(), fact.subject, fact.predicate, fact.object,
-          fact.confidence ?? 0.8, fact.importance ?? 0.5, observeId, nowUnixSec, 2592000);
-      }
-      for (let i = 0; i < output.chunks.length; i++) {
-        const chunk = output.chunks[i]!;
-        insertChunk.run(chunk.chunk_id, observeId, derivationId, i, chunk.text,
-          computeHash(chunk.text), 0, chunk.text.length, policyId);
-      }
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
-
-    // Embeddings
-    let embeddedCount = 0;
-    if (opts.embeddingService && opts.vectorStore && output.chunks.length > 0) {
-      const vectors = await opts.embeddingService.embed(output.chunks.map((c: { text: string }) => c.text));
-      const factRows = db.query("SELECT fact_id FROM facts WHERE observe_id = ? ORDER BY created_at").all(observeId) as { fact_id: string }[];
-
-      const chunkToFactId = new Map<string, string>();
-      for (let fi = 0; fi < output.facts.length; fi++) {
-        const fact = output.facts[fi]!;
-        const factId = factRows[fi]?.fact_id;
-        if (factId && fact.source_chunk_ids) {
-          for (const cid of fact.source_chunk_ids) {
-            if (!chunkToFactId.has(cid)) chunkToFactId.set(cid, factId);
-          }
-        }
-      }
-
-      const chunkVectors = output.chunks.map((chunk: { chunk_id: string }, i: number) => ({
-        chunk_id: chunk.chunk_id,
-        fact_id: chunkToFactId.get(chunk.chunk_id) ?? (factRows[0]?.fact_id ?? `orphan:${observeId}:${i}`),
+    beginDerivation(db, { derivationId, observeId, policyId });
+    output = await runExtractor(
+      {
         observe_id: observeId,
-        vector: vectors[i]!,
-      }));
-
-      await opts.vectorStore.add(chunkVectors);
-      const updateEmbedded = db.prepare("UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?");
-      for (const cv of chunkVectors) updateEmbedded.run(cv.chunk_id);
-      embeddedCount = chunkVectors.length;
-    }
-
-    db.run(
-      `UPDATE derivation_run SET status = 'succeeded', finished_at = datetime('now'), artifact_ref = ? WHERE derivation_id = ?`,
-      [JSON.stringify({ chunks: output.chunks.length, facts: output.facts.length, embedded: embeddedCount }), derivationId]
+        source_uri: url,
+        mime_type: mimeType,
+        content_ref: "inline",
+        content,
+        transform_policy: policyId,
+      },
+      { timeoutMs: extractionTimeoutMs(policy?.extraction.timeoutSec ?? 0) }
     );
-    complete(db, claimed.id, claimed.lease_token);
-
-    return {
-      ok: true, observe_id: observeId, derivation_id: derivationId,
-      status_code: res.status, content_type: mimeType,
-      chunks_count: output.chunks.length, facts_count: output.facts.length, embedded_count: embeddedCount,
-    };
+    persistExtraction(db, {
+      observeId,
+      derivationId,
+      policyId,
+      output,
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    db.run(`UPDATE derivation_run SET status = 'failed', finished_at = datetime('now'), error = ? WHERE derivation_id = ?`, [errorMsg, derivationId]);
-    fail(db, claimed.id, claimed.lease_token, errorMsg);
+    failDerivation(db, derivationId, errorMsg);
+    fail(db, claimed.id, claimed.lease_token, errorMsg, { maxRetries });
     return { ok: false, observe_id: observeId, derivation_id: derivationId, error: errorMsg };
   }
+
+  const embedding = await embedObservationChunks(db, observeId, opts);
+  return {
+    ok: true,
+    observe_id: observeId,
+    derivation_id: derivationId,
+    status_code: res.status,
+    content_type: mimeType,
+    chunks_count: output.chunks.length,
+    facts_count: output.facts.length,
+    embedded_count: embedding.embedded,
+    ...(embedding.error ? { embedding_error: embedding.error } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
