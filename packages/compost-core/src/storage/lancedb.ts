@@ -9,6 +9,11 @@ import * as lancedb from "@lancedb/lancedb";
 import type { EmbeddingService } from "../embedding/types";
 
 const LANCE_TABLE_NAME = "chunk_vectors";
+const DELETE_BATCH_SIZE = 500;
+
+function quoteLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
 
 export interface ChunkVector {
   chunk_id: string;
@@ -67,6 +72,64 @@ export class VectorStore {
     } else {
       await this.table.add(rows);
     }
+  }
+
+  /**
+   * Insert or replace vectors keyed by chunk_id (globally unique since
+   * migration 0028). Idempotent: a retry or a re-embed overwrites the row
+   * instead of appending a duplicate.
+   */
+  async upsert(chunks: ChunkVector[]): Promise<void> {
+    if (chunks.length === 0) return;
+    if (!this.db) throw new Error("VectorStore not connected");
+
+    const rows = chunks.map((c) => ({
+      chunk_id: c.chunk_id,
+      fact_id: c.fact_id,
+      observe_id: c.observe_id,
+      vector: Array.from(c.vector),
+    }));
+
+    if (!this.table) {
+      this.table = await this.db.createTable(LANCE_TABLE_NAME, rows);
+      return;
+    }
+    await this.table
+      .mergeInsert("chunk_id")
+      .whenMatchedUpdateAll()
+      .whenNotMatchedInsertAll()
+      .execute(rows);
+  }
+
+  /**
+   * Delete every vector of the given observations (reflect GC, re-embeds).
+   * Batched so the predicate stays small on large sweeps.
+   */
+  async deleteByObserveIds(observeIds: string[]): Promise<void> {
+    if (!this.table) return;
+    for (let i = 0; i < observeIds.length; i += DELETE_BATCH_SIZE) {
+      const list = observeIds
+        .slice(i, i + DELETE_BATCH_SIZE)
+        .map(quoteLiteral)
+        .join(", ");
+      await this.table.delete(`observe_id IN (${list})`);
+    }
+  }
+
+  /** Row count, optionally filtered by a LanceDB predicate. */
+  async countRows(filter?: string): Promise<number> {
+    if (!this.table) return 0;
+    return this.table.countRows(filter);
+  }
+
+  /**
+   * Compact fragments and prune old versions. Every write creates a new
+   * fragment and version, so an unoptimised table degrades scan speed and
+   * disk use steadily; the daemon calls this from its daily backup tick.
+   */
+  async optimize(options: { cleanupOlderThan?: Date } = {}): Promise<void> {
+    if (!this.table) return;
+    await this.table.optimize(options);
   }
 
   /**
@@ -131,8 +194,7 @@ export class VectorStore {
    * Delete all vectors for a given observe_id (for reflect GC).
    */
   async deleteByObserveId(observeId: string): Promise<void> {
-    if (!this.table) return;
-    await this.table.delete(`observe_id = '${observeId}'`);
+    await this.deleteByObserveIds([observeId]);
   }
 
   /**
