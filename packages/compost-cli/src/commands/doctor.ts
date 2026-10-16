@@ -6,6 +6,7 @@ import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
 import { requeueQuarantined } from "../../../compost-core/src/queue/lease";
 import { countPendingChunks } from "../../../compost-core/src/pipeline/embed-pending";
+import { countBackfillCandidates } from "../maintenance-chunks";
 import { DEFAULT_PENDING_DB_PATH } from "../../../compost-engram-adapter/src/constants";
 import { PendingWritesQueue } from "../../../compost-engram-adapter/src/pending-writes";
 import { reconcileEngramQueue } from "../../../compost-engram-adapter/src/reconcile";
@@ -95,6 +96,7 @@ export function registerDoctor(program: Command): void {
       "Requeue quarantined ingest rows (a queue id or `all`), resetting their attempts"
     )
     .option("--rebuild <layer>", "Rebuild a derivation layer (e.g. L1)")
+    .option("--force", "Rebuild L1 even when the chunk manifest is incomplete (vectors without manifest rows are lost)")
     .option("--policy <name>", "Policy name for --rebuild")
     .option(
       "--check-llm",
@@ -355,6 +357,19 @@ export function registerDoctor(program: Command): void {
         const db = openDb();
         const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
         try {
+          // A rebuild reads only the SQLite manifest. Before 0028 most manifest
+          // rows were lost to chunk id collisions, so rebuilding would discard
+          // their vectors; refuse until `maintenance --backfill-chunks` ran.
+          const missingManifest = countBackfillCandidates(db);
+          if (missingManifest > 0 && !opts.force) {
+            process.stderr.write(
+              JSON.stringify({
+                ok: false,
+                error: `chunk manifest incomplete for ${missingManifest} observations; run \`compost maintenance --backfill-chunks --apply\` first or pass --force`,
+              }) + "\n"
+            );
+            process.exit(1);
+          }
           const { OllamaEmbeddingService } = await import(
             "../../../compost-core/src/embedding/ollama"
           );
@@ -374,11 +389,13 @@ export function registerDoctor(program: Command): void {
           const chunks = db
             .query(
               `SELECT c.chunk_id, c.observe_id, c.text_content,
-                      (SELECT f.fact_id FROM facts f
-                       WHERE f.observe_id = c.observe_id AND f.archived_at IS NULL
-                         AND f.superseded_by IS NULL
-                       ORDER BY f.created_at, f.fact_id LIMIT 1) AS fact_id
+                      COALESCE(c.fact_id,
+                        (SELECT f.fact_id FROM facts f
+                         WHERE f.observe_id = c.observe_id AND f.archived_at IS NULL
+                           AND f.superseded_by IS NULL
+                         ORDER BY f.created_at, f.fact_id LIMIT 1)) AS fact_id
                FROM chunks c
+               WHERE c.embed_error IS NULL
                ORDER BY c.created_at, c.chunk_id`
             )
             .all() as Array<{

@@ -488,6 +488,42 @@ export interface BackupSchedulerOpts {
   ledgerPath: string;
   backupDir: string;
   retentionCount?: number;
+  /** Compacts LanceDB fragments after the backup; every write adds one. */
+  vectorStore?: { optimize(): Promise<void> };
+}
+
+export interface BackupTickResult {
+  path: string;
+  sizeBytes: number;
+  durationMs: number;
+  prunedCount: number;
+  retention: number;
+  optimized: boolean;
+  optimize_error?: string;
+}
+
+/** One backup window: snapshot, prune, then best-effort index compaction. */
+export async function runBackupTick(db: Database, opts: BackupSchedulerOpts): Promise<BackupTickResult> {
+  const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
+  const result = backup(db, opts.backupDir);
+  const prunedCount = pruneOldBackups(opts.backupDir, retention);
+  const tick: BackupTickResult = {
+    path: result.path,
+    sizeBytes: result.sizeBytes,
+    durationMs: result.durationMs,
+    prunedCount,
+    retention,
+    optimized: false,
+  };
+  if (opts.vectorStore) {
+    try {
+      await opts.vectorStore.optimize();
+      tick.optimized = true;
+    } catch (err) {
+      tick.optimize_error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return tick;
 }
 
 /**
@@ -537,7 +573,6 @@ export function startBackupScheduler(
   let running = true;
   let lastTickAt: string | null = null;
   let errorCount = 0;
-  const retention = opts.retentionCount ?? DEFAULT_BACKUP_RETENTION;
 
   function msUntilNextWindow(): number {
     return msUntilNextBackupWindow(opts.backupDir);
@@ -553,18 +588,9 @@ export function startBackupScheduler(
       await Bun.sleep(wait);
       if (!running) break;
       try {
-        const result = backup(db, opts.backupDir);
-        const pruned = pruneOldBackups(opts.backupDir, retention);
-        log.info(
-          {
-            path: result.path,
-            sizeBytes: result.sizeBytes,
-            durationMs: result.durationMs,
-            prunedCount: pruned,
-            retention,
-          },
-          "backup complete"
-        );
+        const tick = await runBackupTick(db, opts);
+        if (tick.optimize_error) errorCount++;
+        log.info(tick, "backup complete");
         lastTickAt = new Date().toISOString();
         // Sleep most of the day to leave the 03:00 window before next check
         await Bun.sleep(BACKUP_INTERVAL_MS - 60_000);

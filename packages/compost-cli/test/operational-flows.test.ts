@@ -101,6 +101,26 @@ test("hook entry redacts JSON and raw input before it reaches SQLite", async () 
   } finally { input.mockRestore(); rmSync(dir,{recursive:true,force:true}); }
 });
 
+test("doctor --rebuild L1 refuses while the chunk manifest is incomplete unless --force", async () => {
+  const { spyOn } = await import("bun:test");
+  const { OllamaEmbeddingService } = await import("../../compost-core/src/embedding/ollama");
+  const dir = mkdtempSync(join(tmpdir(),"compost-rebuild-guard-"));
+  const embed = spyOn(OllamaEmbeddingService.prototype,"embed").mockImplementation(async (texts)=>texts.map(()=>new Float32Array(768).fill(0.1)));
+  try {
+    const db=new Database(join(dir,"ledger.db"));applyMigrations(db);upsertPolicies(db);
+    db.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run("INSERT INTO observations VALUES ('obs-g','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)");
+    db.run("INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status, finished_at, artifact_ref) VALUES ('d-g','obs-g','L2','tp-2026-04','succeeded',datetime('now'),'{\"chunks\":2,\"facts\":0}')");
+    db.close();
+    const refused=await runCli(["doctor","--rebuild","L1"],dir);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain("backfill-chunks");
+    const forced=await runCli(["doctor","--rebuild","L1","--force"],dir);
+    expect(forced.exitCode,forced.stderr).toBe(0);
+    expect(JSON.parse(forced.stdout).rebuilt).toBe(0);
+  } finally { embed.mockRestore(); rmSync(dir,{recursive:true,force:true}); }
+});
+
 test("doctor validates embedding rebuild and hooks; historical reasoning controls preserve verdicts", async () => {
   const { spyOn } = await import("bun:test");
   const { OllamaEmbeddingService } = await import("../../compost-core/src/embedding/ollama");

@@ -201,6 +201,7 @@ export async function startDaemon(
   const backupSched: Scheduler = startBackupScheduler(db, {
     ledgerPath: dbPath,
     backupDir,
+    vectorStore,
   });
   const graphHealthSched: Scheduler = startGraphHealthScheduler(db);
   const actionReconcileSched: Scheduler = startActionReconcileScheduler(db);
