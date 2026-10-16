@@ -48,7 +48,7 @@ function checksum(content: string): string {
   return hasher.digest("hex");
 }
 
-export function applyMigrations(db: Database): ApplyResult {
+export function applyMigrations(db: Database, opts: { upTo?: string } = {}): ApplyResult {
   // All CLI, MCP, and daemon processes share ledger.db. A concurrent short
   // writer must delay startup briefly instead of turning a valid migration
   // into a fatal `database is locked` error.
@@ -67,6 +67,8 @@ export function applyMigrations(db: Database): ApplyResult {
 
   for (const migration of migrations) {
     if (alreadyApplied.has(migration.name)) continue;
+    // Tests of data migrations seed the pre-migration shape first.
+    if (opts.upTo && migration.name > opts.upTo) break;
 
     const sql = readFileSync(migration.path, "utf-8");
     const hash = checksum(sql);
