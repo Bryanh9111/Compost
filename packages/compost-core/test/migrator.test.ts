@@ -21,10 +21,10 @@ describe("migrator", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("applyMigrations creates tracking table and applies all 28 migrations", () => {
+  test("applyMigrations creates tracking table and applies all 29 migrations", () => {
     const result = applyMigrations(db);
 
-    expect(result.applied).toHaveLength(28);
+    expect(result.applied).toHaveLength(29);
     expect(result.applied.map((m) => m.name)).toEqual([
       "0001_init",
       "0002_debate3_fixes",
@@ -54,6 +54,7 @@ describe("migrator", () => {
       "0026_maintenance_audit",
       "0027_search_indexes",
       "0028_chunk_identity_and_ingest_retry",
+      "0029_vector_gc_queue",
     ]);
     expect(result.errors).toHaveLength(0);
   });
@@ -112,7 +113,7 @@ describe("migrator", () => {
       "user_pattern_events",      // 0015 user model schema
       "user_pattern_observations",// 0015
       "user_patterns",            // 0015
-      "vector_gc_queue",          // 0028 re-derivation vector cleanup
+      "vector_gc_queue",          // 0029 re-derivation vector cleanup
       "web_fetch_state",
       "wiki_page_observe",
       "wiki_page_versions",
@@ -205,12 +206,12 @@ describe("migrator", () => {
     // Before any migrations
     const before = getMigrationStatus(db);
     expect(before.applied).toHaveLength(0);
-    expect(before.pending).toHaveLength(28);
+    expect(before.pending).toHaveLength(29);
 
     // After all migrations
     applyMigrations(db);
     const after = getMigrationStatus(db);
-    expect(after.applied).toHaveLength(28);
+    expect(after.applied).toHaveLength(29);
     expect(after.pending).toHaveLength(0);
   });
 
@@ -240,7 +241,7 @@ describe("migrator", () => {
     db.run("INSERT INTO ingest_queue (observe_id, source_kind, priority) VALUES ('obs-1', 'local-file', 1)");
 
     const result = applyMigrations(db);
-    expect(result.applied.map((m) => m.name)).toEqual(["0028_chunk_identity_and_ingest_retry"]);
+    expect(result.applied.map((m) => m.name)).toEqual(["0028_chunk_identity_and_ingest_retry", "0029_vector_gc_queue"]);
     expect(result.errors).toHaveLength(0);
 
     const ids = (db.query("SELECT chunk_id FROM chunks ORDER BY observe_id, chunk_index").all() as { chunk_id: string }[]).map((r) => r.chunk_id);

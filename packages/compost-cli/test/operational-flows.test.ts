@@ -136,8 +136,10 @@ test("doctor validates embedding rebuild and hooks; historical reasoning control
     await ingestEngramEntry(db,{memory_id:"rebuild",kind:"fact",content:"recovery evidence workflow",project:"audit",scope:"project",created_at:new Date().toISOString(),updated_at:new Date().toISOString(),tags:[],origin:"human"});
     const fact=db.query("SELECT fact_id FROM facts").get() as {fact_id:string};
     db.run("INSERT INTO facts(fact_id,subject,predicate,object,observe_id) SELECT 'second-rebuild-fact','recovery','has','evidence',observe_id FROM facts LIMIT 1");
+    db.run("INSERT INTO vector_gc_queue(observe_id) SELECT observe_id FROM observations LIMIT 1");
     expect(JSON.parse(await run("doctor","--rebuild","L1")).rebuilt).toBe(1);
     expect(db.query("SELECT count(*) n FROM chunks WHERE embedded_at IS NULL").get()).toEqual({n:0});
+    expect(db.query("SELECT count(*) n FROM vector_gc_queue").get()).toEqual({n:0});
     await run("reason","run",fact.fact_id,"--no-llm","--json");
     const chain=JSON.parse(await run("reason","run",fact.fact_id,"--json"));
     expect(chain.chain_id).toBeDefined();

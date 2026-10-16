@@ -18,6 +18,8 @@ export interface ConsolidateReport {
   mode: "dry-run" | "applied";
   sources: Array<{ dir: string; rows: number }>;
   orphans_dropped: number;
+  /** Rows of observations with a pending vector cleanup; dropped, queue cleared on apply. */
+  gc_pending_dropped: number;
   duplicates_dropped: number;
   ids_rewritten: number;
   written: number;
@@ -86,6 +88,7 @@ export async function consolidateVectors(
     mode: opts.apply ? "applied" : "dry-run",
     sources: [],
     orphans_dropped: 0,
+    gc_pending_dropped: 0,
     duplicates_dropped: 0,
     ids_rewritten: 0,
     written: 0,
@@ -96,6 +99,9 @@ export async function consolidateVectors(
     (db.query("SELECT observe_id FROM observations").all() as Array<{ observe_id: string }>).map(
       (r) => r.observe_id
     )
+  );
+  const gcPending = new Set(
+    (db.query("SELECT observe_id FROM vector_gc_queue").all() as Array<{ observe_id: string }>).map((r) => r.observe_id)
   );
   const seen = new Set<string>();
   const outDir = join(opts.dataDir, `lancedb-consolidate-${Date.now()}-${process.pid}`);
@@ -121,6 +127,10 @@ export async function consolidateVectors(
           for (const row of page) {
             if (!known.has(row.observe_id)) {
               report.orphans_dropped++;
+              continue;
+            }
+            if (gcPending.has(row.observe_id)) {
+              report.gc_pending_dropped++;
               continue;
             }
             const key = `${row.observe_id}|${localChunkId(row.chunk_id, row.observe_id)}`;
@@ -190,6 +200,8 @@ export async function consolidateVectors(
 }
 
 function recordAudit(db: Database, report: ConsolidateReport): void {
+  // The new index no longer holds vectors of queued observations.
+  db.run("DELETE FROM vector_gc_queue");
   db.run(
     "INSERT INTO maintenance_audit(operation,target_table,target_id,detail_json) VALUES (?,?,?,?)",
     ["consolidate-vectors", "chunk_vectors", "lancedb", JSON.stringify(report)]
