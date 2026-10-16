@@ -166,10 +166,12 @@ export async function embedPendingChunks(
     "UPDATE chunks SET embedded_at = datetime('now'), embed_error = NULL WHERE chunk_id = ?"
   );
   const markFailed = db.prepare("UPDATE chunks SET embed_error = ? WHERE chunk_id = ?");
+  // IMMEDIATE so busy_timeout applies when a CLI writer (compost add) holds
+  // the ledger; a deferred read-to-write upgrade fails with SQLITE_BUSY at once.
   db.transaction(() => {
     for (const row of good) markEmbedded.run(row.chunk_id);
     for (const { chunk, reason } of bad) markFailed.run(reason, chunk.chunk_id);
-  })();
+  }).immediate();
 
   return {
     embedded: good.length,

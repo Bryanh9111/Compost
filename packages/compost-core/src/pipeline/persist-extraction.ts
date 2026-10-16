@@ -137,7 +137,7 @@ export function namespaceLegacyChunkIds(db: Database): number {
     );
     db.run(`UPDATE chunks SET chunk_id = observe_id || ':' || chunk_id WHERE ${LEGACY_CHUNK_ID}`);
     return legacy;
-  })();
+  }).immediate();
 }
 
 /**
