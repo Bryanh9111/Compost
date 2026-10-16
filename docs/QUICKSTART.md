@@ -149,10 +149,14 @@ bun run check:engram-boundary       # static Compost/Engram boundary drift check
 Healthy local baseline:
 
 - `compost daemon status` shows `drain`, `ingest`, and `freshness` running with
-  `errors=0`. `reasoning [stopped]` is expected in v4.
+  `errors=0`. `reasoning [stopped]` is expected in v4. The `ingest:` line shows
+  `quarantined=0`; `unembedded=K` is normal while the embedding sweep catches up.
 - `doctor --check-pii` reports zero rows.
 - `doctor --check-integrity` reports zero issues. Active work is reported
-  separately as `pending_ingest_observations` and is not counted as an orphan.
+  separately as `pending_ingest_observations` and is not counted as an orphan;
+  `quarantined_ingest` must be zero (`doctor --ingest-retry` requeues after the
+  cause is fixed), and `unembedded_chunks` / `embed_error_chunks` are
+  informational.
 - `doctor --check-llm` reports `ollama.ok=true`. If `generation.ok=false` with
   `severity=warn`, Ollama is reachable but the configured model did not finish
   inside the quick timeout; use `--llm-timeout-ms`, `--llm-model`, or
