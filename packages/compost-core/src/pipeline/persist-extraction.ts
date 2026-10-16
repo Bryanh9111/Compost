@@ -121,19 +121,23 @@ export function sha256Hex(content: string): string {
  * the manifest backfill and doctor call this idempotent sweep again.
  * Returns the number of rows renamed.
  */
+const LEGACY_CHUNK_ID = "chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'";
+
 export function namespaceLegacyChunkIds(db: Database): number {
-  const legacy = (
-    db
-      .query("SELECT count(*) AS n FROM chunks WHERE chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'")
-      .get() as { n: number }
-  ).n;
-  if (legacy > 0) {
+  return db.transaction(() => {
+    const legacy = (db.query(`SELECT count(*) AS n FROM chunks WHERE ${LEGACY_CHUNK_ID}`).get() as { n: number }).n;
+    if (legacy === 0) return 0;
+    // A legacy row whose canonical id already exists (the observation was
+    // re-derived under another policy by the old daemon) loses to it: the
+    // canonical row is the one the new code embeds and marks.
     db.run(
-      `UPDATE chunks SET chunk_id = observe_id || ':' || chunk_id
-       WHERE chunk_id GLOB 'c[0-9]*' AND chunk_id NOT GLOB '*-*' AND chunk_id NOT GLOB '*:*'`
+      `DELETE FROM chunks
+       WHERE ${LEGACY_CHUNK_ID}
+         AND EXISTS (SELECT 1 FROM chunks c2 WHERE c2.chunk_id = chunks.observe_id || ':' || chunks.chunk_id)`
     );
-  }
-  return legacy;
+    db.run(`UPDATE chunks SET chunk_id = observe_id || ':' || chunk_id WHERE ${LEGACY_CHUNK_ID}`);
+    return legacy;
+  })();
 }
 
 /**

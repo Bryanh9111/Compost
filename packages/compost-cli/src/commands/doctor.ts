@@ -358,7 +358,12 @@ export function registerDoctor(program: Command): void {
         const dataDir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
         // The daemon re-derives observations while a rebuild embeds; its queued
         // vector cleanups would be cleared by the swap. Rebuild offline only.
-        assertDaemonStopped(dataDir);
+        try {
+          assertDaemonStopped(dataDir);
+        } catch (err) {
+          process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(2);
+        }
         const db = openDb();
         try {
           // A rebuild reads only the SQLite manifest. Before 0028 most manifest

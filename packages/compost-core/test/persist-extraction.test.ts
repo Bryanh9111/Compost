@@ -237,6 +237,19 @@ describe("pipeline/persist-extraction", () => {
     expect(namespaceLegacyChunkIds(db)).toBe(0);
   });
 
+  test("namespaceLegacyChunkIds drops a legacy row whose canonical id already exists", () => {
+    seedObservation("obs-1");
+    const insert = db.prepare(
+      "INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy, embedded_at) VALUES (?, 'obs-1', 'd-obs-1', ?, ?, 'h', 0, 1, ?, ?)"
+    );
+    insert.run("obs-1:c0", 0, "canonical", policyId, "2026-10-16T00:00:00Z");
+    insert.run("c0", 0, "legacy", "tp-2026-04", null);
+    expect(namespaceLegacyChunkIds(db)).toBe(1);
+    expect(db.query("SELECT chunk_id, text_content, embedded_at FROM chunks").all()).toEqual([
+      { chunk_id: "obs-1:c0", text_content: "canonical", embedded_at: "2026-10-16T00:00:00Z" },
+    ]);
+  });
+
   test("a lost lease rolls back facts, chunks and the derivation transition", () => {
     const { claimed, derivationId } = seedObservation("obs-1");
     expect(() =>
