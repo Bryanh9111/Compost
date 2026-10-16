@@ -46,14 +46,23 @@ extract -> store`), while action-shaped events are also lifted into
    e. Enqueue into ingest_queue
    f. Ack outbox row
    g. Best-effort metacognitive lift into action_log
-4. Worker claims from ingest_queue (lease protocol: 60s, heartbeat 30s)
-5. Bun.spawn Python extractor (stdin JSON -> stdout JSON)
-6. INSERT facts (L2) + chunks into SQLite
-7. Generate embeddings via OllamaEmbeddingService
-8. Write vectors to LanceDB
-9. Update chunks.embedded_at
-10. Mark derivation_run succeeded + complete queue item
+4. Worker claims from ingest_queue (lease 60s, heartbeat every 20s; a running
+   derivation left by a dead worker is superseded first)
+5. Python extractor (stdin JSON -> stdout JSON) under a hard timeout
+   (max(policy.extraction.timeoutSec, COMPOST_EXTRACT_TIMEOUT_SEC=600))
+6. persistExtraction: ONE transaction inserts facts (L2), chunks with their
+   fact mapping (chunk_id = `<observe_id>:<local id>`, embedded_at NULL),
+   marks derivation_run succeeded and completes the queue row (lease-guarded)
+7. embedPendingChunks: embed the observation's pending chunks, upsert into
+   LanceDB by chunk_id, set embedded_at. Best effort inline; the worker's idle
+   sweep embeds whatever is still pending once the service is back, and inputs
+   the service answers with the wrong shape are isolated via chunks.embed_error
 ```
+
+Retries: a failed extraction backs off through the queue (60s, 120s) and the row
+is quarantined on the third exhausted attempt (`doctor --ingest-retry` requeues).
+Facts are searchable through BM25 as soon as step 6 commits; vectors never gate
+them.
 
 Idempotency: adapters compute a stable `idempotency_key` from source identity
 and event identity/content. Outbox UNIQUE + observations UNIQUE provide double
@@ -93,7 +102,8 @@ protection.
 ```
 1. reflect(db)
 2. Sensory hard-GC: DELETE observations WHERE source.kind='sensory' AND captured_at < -7d
-   (FK CASCADE deletes facts, chunks, queue entries, captured_items)
+   (FK CASCADE deletes facts, chunks, queue entries, captured_items; the report
+   lists the observe_ids so the daemon and the CLI drop their LanceDB vectors)
 3. Semantic soft-tombstone: SET archived_at WHERE importance*decay < 0.001 AND NOT pinned
 4. Contradiction arbitration: same subject+predicate, different object,
    restricted to explicit single-valued predicates
@@ -101,7 +111,7 @@ protection.
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (25 migrations)
+## Database schema (28 migrations)
 
 ### Core tables
 
@@ -110,9 +120,9 @@ protection.
 | `source` | meta | Registered data sources (file, web, claude-code) |
 | `observations` | L0 | Immutable provenance ledger |
 | `observe_outbox` | L0 | Crash-safe event buffer |
-| `ingest_queue` | L0 | Extraction work queue with lease protocol |
+| `ingest_queue` | L0 | Extraction work queue: lease protocol, backoff (`next_attempt_at`), quarantine (`quarantined_at`) |
 | `facts` | L2 | Subject-predicate-object triples |
-| `chunks` | L1 | Text segments with LanceDB vector mapping |
+| `chunks` | L1 | Text segments; `chunk_id` = `<observe_id>:<local id>`, `fact_id`, `embedded_at` / `embed_error` track the LanceDB vector |
 | `wiki_pages` | L3 | LLM-synthesized wiki page registry |
 | `derivation_run` | meta | Tracks extraction runs per (observe_id, policy) |
 | `ranking_profile` | meta | Configurable ranking weights (w1-w7) |
