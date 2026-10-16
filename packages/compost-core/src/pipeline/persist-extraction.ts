@@ -38,6 +38,64 @@ export interface PersistExtractionInput {
   queue: { id: number; leaseToken: string };
 }
 
+/**
+ * The active-run key of idx_derivation_run_active (0002_debate3_fixes.sql)
+ * for the L2 ingest path: one running/succeeded run per observation+policy.
+ */
+const ACTIVE_INGEST_RUN = `observe_id = ?
+       AND layer = 'L2'
+       AND transform_policy = ?
+       AND model_id = ''
+       AND coalesce(context_scope_id, '') = ''
+       AND coalesce(extraction_profile, '') = ''`;
+
+export function hasSucceededIngestDerivation(
+  db: Database,
+  observeId: string,
+  policyId: string
+): boolean {
+  const row = db
+    .query(`SELECT 1 FROM derivation_run WHERE ${ACTIVE_INGEST_RUN} AND status = 'succeeded' LIMIT 1`)
+    .get(observeId, policyId);
+  return row !== null;
+}
+
+/**
+ * Open a `running` derivation for a claimed queue row. A run left `running`
+ * by a worker that died (or whose lease expired mid-extraction) is marked
+ * failed first, so the unique active-run index never rejects the re-claim.
+ * Returns the number of superseded runs.
+ */
+export function beginDerivation(
+  db: Database,
+  input: { derivationId: string; observeId: string; policyId: string }
+): number {
+  const superseded = db.run(
+    `UPDATE derivation_run
+     SET status = 'failed', finished_at = datetime('now'), error = 'superseded by re-claim'
+     WHERE ${ACTIVE_INGEST_RUN} AND status = 'running'`,
+    [input.observeId, input.policyId]
+  ).changes;
+  db.run(
+    `INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status)
+     VALUES (?, ?, 'L2', ?, 'running')`,
+    [input.derivationId, input.observeId, input.policyId]
+  );
+  return superseded;
+}
+
+/** Mark a still-running derivation failed; a no-op once it reached a terminal state. */
+export function failDerivation(db: Database, derivationId: string, error: string): boolean {
+  return (
+    db.run(
+      `UPDATE derivation_run
+       SET status = 'failed', finished_at = datetime('now'), error = ?
+       WHERE derivation_id = ? AND status = 'running'`,
+      [error, derivationId]
+    ).changes > 0
+  );
+}
+
 export interface PersistExtractionResult {
   factIds: string[];
   chunkIds: string[];

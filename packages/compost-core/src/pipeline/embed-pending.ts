@@ -83,18 +83,18 @@ export async function embedPendingChunks(
   if (rows.length === 0) return { embedded: 0, failed: 0, remaining: 0 };
 
   const dim = opts.embeddingService.dim;
-  const wellFormed = (vector: Float32Array | undefined): vector is Float32Array =>
+  const wellFormed = (vector: Float32Array | undefined): boolean =>
     vector instanceof Float32Array && vector.length === dim;
 
   const good: ChunkVector[] = [];
   const bad: Array<{ chunk: PendingChunk; reason: string }> = [];
   const vectors = await opts.embeddingService.embed(rows.map((r) => r.text_content));
-  if (vectors.length === rows.length && vectors.every(wellFormed)) {
-    rows.forEach((chunk, i) => good.push(toChunkVector(db, chunk, vectors[i]!)));
+  if (vectors.length === rows.length && vectors.every((v) => wellFormed(v))) {
+    for (const [i, chunk] of rows.entries()) good.push(toChunkVector(db, chunk, vectors[i]!));
   } else {
     for (const chunk of rows) {
       const [vector] = await opts.embeddingService.embed([chunk.text_content]);
-      if (wellFormed(vector)) {
+      if (vector && wellFormed(vector)) {
         good.push(toChunkVector(db, chunk, vector));
       } else {
         const shape = vector ? `a vector of dim ${vector.length}` : "no vector";

@@ -8,6 +8,16 @@ import { claimOne, complete, fail } from "../queue/lease";
 import { getActivePolicy, validatePolicyExists } from "../policies/registry";
 import type { EmbeddingService } from "../embedding/types";
 import type { VectorStore } from "../storage/lancedb";
+import {
+  beginDerivation,
+  failDerivation,
+  hasSucceededIngestDerivation,
+  persistExtraction,
+  sha256Hex,
+  type ExtractionOutput,
+} from "./persist-extraction";
+import { extractionTimeoutMs, runExtractor } from "./extractor";
+import { embedObservationChunks } from "./embed-observation";
 
 export interface IngestResult {
   ok: boolean;
@@ -16,6 +26,8 @@ export interface IngestResult {
   chunks_count?: number;
   facts_count?: number;
   embedded_count?: number;
+  /** Set when facts were persisted but the embedding service failed. */
+  embedding_error?: string;
   already_drained_by_concurrent_worker?: boolean;
   error?: string;
 }
@@ -25,30 +37,9 @@ export interface IngestOptions {
   vectorStore?: VectorStore;
 }
 
-interface ExtractionOutput {
-  observe_id: string;
-  extractor_version: string;
-  transform_policy: string;
-  chunks: Array<{ chunk_id: string; text: string; metadata?: { char_start?: number; char_end?: number; [k: string]: unknown } }>;
-  facts: Array<{
-    subject: string;
-    predicate: string;
-    object: string;
-    confidence?: number;
-    importance?: number;
-    source_chunk_ids?: string[];
-  }>;
-  normalized_content: string;
-  content_hash_raw: string;
-  content_hash_normalized: string;
-  warnings: string[];
-}
-
-function computeHash(content: string): string {
-  const hasher = new Bun.CryptoHasher("sha256");
-  hasher.update(content);
-  return hasher.digest("hex");
-}
+const ADAPTER = "local-file";
+/** Upper bound on older pending rows of this adapter drained before ours. */
+const MAX_DRAIN_PASSES = 10_000;
 
 function detectMimeType(filePath: string): string {
   if (filePath.endsWith(".md") || filePath.endsWith(".markdown"))
@@ -60,25 +51,26 @@ function detectMimeType(filePath: string): string {
   return "text/plain";
 }
 
-function getConcurrentDrainFacts(
-  db: Database,
-  event: OutboxEvent
-): { observe_id: string; facts_count: number; derivation_id?: string } | null {
-  const outboxRow = db
+/** observe_id of this event's outbox row once it has been drained, else null. */
+function drainedObserveId(db: Database, event: OutboxEvent): string | null {
+  const row = db
     .query(
       `SELECT observe_id FROM observe_outbox
-       WHERE adapter = ? AND source_id = ? AND idempotency_key = ?`
+       WHERE adapter = ? AND source_id = ? AND idempotency_key = ? AND drained_at IS NOT NULL`
     )
     .get(event.adapter, event.source_id, event.idempotency_key) as {
     observe_id: string | null;
   } | null;
+  return row?.observe_id ?? null;
+}
 
-  if (!outboxRow?.observe_id) return null;
-
+function getConcurrentDrainFacts(
+  db: Database,
+  observeId: string
+): { observe_id: string; facts_count: number; derivation_id?: string } | null {
   const observation = db
     .query("SELECT observe_id FROM observations WHERE observe_id = ?")
-    .get(outboxRow.observe_id) as { observe_id: string } | null;
-
+    .get(observeId) as { observe_id: string } | null;
   if (!observation) return null;
 
   const facts = db
@@ -87,7 +79,7 @@ function getConcurrentDrainFacts(
        FROM facts
        WHERE observe_id = ? AND archived_at IS NULL`
     )
-    .get(observation.observe_id) as { facts_count: number };
+    .get(observeId) as { facts_count: number };
 
   const derivation = db
     .query(
@@ -97,13 +89,20 @@ function getConcurrentDrainFacts(
        ORDER BY COALESCE(finished_at, started_at) DESC
        LIMIT 1`
     )
-    .get(observation.observe_id) as { derivation_id: string } | null;
+    .get(observeId) as { derivation_id: string } | null;
 
   return {
-    observe_id: observation.observe_id,
+    observe_id: observeId,
     facts_count: facts.facts_count,
     derivation_id: derivation?.derivation_id,
   };
+}
+
+function countRows(db: Database, table: "facts" | "chunks", observeId: string): number {
+  const row = db
+    .query(`SELECT COUNT(*) AS n FROM ${table} WHERE observe_id = ?`)
+    .get(observeId) as { n: number };
+  return row.n;
 }
 
 /**
@@ -135,17 +134,15 @@ export async function ingestFile(
     return { ok: false, error: `policy ${policy.id} not registered` };
   }
 
-  const sourceId = absPath;
-  const idempotencyKey = computeHash(`local-file:${absPath}:${content}`);
   const now = new Date().toISOString();
 
   // Step 1: Append to outbox
   const event: OutboxEvent = {
-    adapter: "local-file",
-    source_id: sourceId,
+    adapter: ADAPTER,
+    source_id: absPath,
     source_kind: "local-file",
     source_uri: `file://${absPath}`,
-    idempotency_key: idempotencyKey,
+    idempotency_key: sha256Hex(`local-file:${absPath}:${content}`),
     trust_tier: "user",
     transform_policy: policy.id,
     payload: JSON.stringify({
@@ -159,10 +156,12 @@ export async function ingestFile(
 
   appendToOutbox(db, event);
 
-  // Step 2: Drain (observation + queue entry)
-  const drainResult = drainOne(db);
-  if (!drainResult) {
-    const concurrentDrain = getConcurrentDrainFacts(db, event);
+  // Step 2: Drain (observation + queue entry). A concurrent drainer (the
+  // daemon) may already have taken our row; otherwise drain this adapter's
+  // backlog until ours comes through, never processing someone else's row.
+  const drainedByOther = drainedObserveId(db, event);
+  if (drainedByOther) {
+    const concurrentDrain = getConcurrentDrainFacts(db, drainedByOther);
     if (concurrentDrain && concurrentDrain.facts_count > 0) {
       return {
         ok: true,
@@ -172,7 +171,6 @@ export async function ingestFile(
         already_drained_by_concurrent_worker: true,
       };
     }
-
     return {
       ok: false,
       error:
@@ -180,13 +178,20 @@ export async function ingestFile(
     };
   }
 
-  const observeId = drainResult.observe_id;
+  let observeId: string | null = null;
+  for (let pass = 0; pass < MAX_DRAIN_PASSES && observeId === null; pass++) {
+    if (!drainOne(db, ADAPTER)) break;
+    observeId = drainedObserveId(db, event);
+  }
+  if (observeId === null) {
+    return { ok: false, error: "outbox row was not drained (quarantined or still pending)" };
+  }
 
-  // Step 3: Claim from queue
-  const workerId = `add-cli:${process.pid}`;
-  const claimed = claimOne(db, workerId);
+  // Step 3: Claim this observation's queue row
+  const maxRetries = policy.extraction.maxRetries;
+  const claimed = claimOne(db, `add-cli:${process.pid}`, { observeId, maxRetries });
   if (!claimed) {
-    // Already processed or no queue entry
+    // Another worker holds or finished it
     return {
       ok: true,
       observe_id: observeId,
@@ -196,202 +201,46 @@ export async function ingestFile(
     };
   }
 
-  // Step 4: Run Python extraction subprocess
-  const derivationId = uuidv7();
-
-  // Record derivation_run as running
-  db.run(
-    `INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status)
-     VALUES (?, ?, 'L2', ?, 'running')`,
-    [derivationId, observeId, policy.id]
-  );
-
-  try {
-    const extractionInput = JSON.stringify({
-      observe_id: observeId,
-      source_uri: `file://${absPath}`,
-      mime_type: mimeType,
-      content_ref: "inline",
-      content,
-      transform_policy: policy.id,
-    });
-
-    // Find the compost-ingest package directory relative to this module
-    const ingestPkgDir = resolve(import.meta.dir, "../../..", "compost-ingest");
-    const venvPython = resolve(ingestPkgDir, ".venv/bin/python");
-
-    // Prefer venv python, then uv run, then system python3
-    let cmd: string[];
-    if (existsSync(venvPython)) {
-      cmd = [venvPython, "-m", "compost_ingest", "extract"];
-    } else {
-      cmd = ["uv", "run", "--project", ingestPkgDir, "python", "-m", "compost_ingest", "extract"];
-    }
-
-    const proc = Bun.spawn(cmd, {
-      stdin: new Blob([extractionInput]),
-      stdout: "pipe",
-      stderr: "pipe",
-      cwd: ingestPkgDir,
-    });
-
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-
-    if (exitCode !== 0) {
-      throw new Error(
-        `extraction failed (exit ${exitCode}): ${stderr.slice(0, 500)}`
-      );
-    }
-
-    let output: ExtractionOutput;
-    try {
-      output = JSON.parse(stdout);
-    } catch {
-      throw new Error(
-        `extraction output is not valid JSON: ${stdout.slice(0, 200)}`
-      );
-    }
-
-    // Step 5: Write facts to SQLite (L2) + chunks to chunks table
-    const insertFact = db.prepare(
-      `INSERT OR IGNORE INTO facts (fact_id, subject, predicate, object, confidence, importance, observe_id, last_reinforced_at_unix_sec, half_life_seconds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    const insertChunk = db.prepare(
-      `INSERT OR IGNORE INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    const nowUnixSec = Math.floor(Date.now() / 1000);
-    const defaultHalfLife = 2592000; // 30 days (from spec §2 tp-2026-04)
-
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const fact of output.facts) {
-        const factId = uuidv7();
-        insertFact.run(
-          factId,
-          fact.subject,
-          fact.predicate,
-          fact.object,
-          fact.confidence ?? 0.8,
-          fact.importance ?? 0.5,
-          observeId,
-          nowUnixSec,
-          defaultHalfLife
-        );
-      }
-
-      for (let i = 0; i < output.chunks.length; i++) {
-        const chunk = output.chunks[i]!;
-        const chunkHash = computeHash(chunk.text);
-        insertChunk.run(
-          chunk.chunk_id,
-          observeId,
-          derivationId,
-          i,
-          chunk.text,
-          chunkHash,
-          chunk.metadata?.char_start ?? 0,
-          chunk.metadata?.char_end ?? chunk.text.length,
-          policy.id
-        );
-      }
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
-
-    // Step 6: Generate embeddings + write to LanceDB (if services available)
-    let embeddedCount = 0;
-    if (opts.embeddingService && opts.vectorStore && output.chunks.length > 0) {
-      const chunkTexts = output.chunks.map((c) => c.text);
-      const vectors = await opts.embeddingService.embed(chunkTexts);
-
-      // Build chunk_id → fact_id mapping from extractor output
-      // Each fact has source_chunk_ids linking it to the chunks it was extracted from
-      const chunkToFactId = new Map<string, string>();
-      const factRows = db
-        .query("SELECT fact_id FROM facts WHERE observe_id = ? ORDER BY created_at")
-        .all(observeId) as { fact_id: string }[];
-
-      for (let fi = 0; fi < output.facts.length; fi++) {
-        const fact = output.facts[fi]!;
-        const factId = factRows[fi]?.fact_id;
-        if (factId && fact.source_chunk_ids) {
-          for (const cid of fact.source_chunk_ids) {
-            // First fact wins if multiple facts claim the same chunk
-            if (!chunkToFactId.has(cid)) {
-              chunkToFactId.set(cid, factId);
-            }
-          }
-        }
-      }
-
-        const chunkVectors = output.chunks.map((chunk, i) => ({
-          chunk_id: chunk.chunk_id,
-          fact_id: chunkToFactId.get(chunk.chunk_id)
-            ?? (factRows[0]?.fact_id ?? `orphan:${observeId}:${i}`),
-          observe_id: observeId,
-          vector: vectors[i]!,
-        }));
-
-      await opts.vectorStore.add(chunkVectors);
-
-      // Update chunks.embedded_at
-      const updateEmbedded = db.prepare(
-        "UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?"
-      );
-      for (const cv of chunkVectors) {
-        updateEmbedded.run(cv.chunk_id);
-      }
-      embeddedCount = chunkVectors.length;
-    }
-
-    // Step 7: Mark derivation as succeeded
-    db.run(
-      `UPDATE derivation_run
-       SET status = 'succeeded', finished_at = datetime('now'),
-           artifact_ref = ?
-       WHERE derivation_id = ?`,
-      [
-        JSON.stringify({
-          chunks: output.chunks.length,
-          facts: output.facts.length,
-          embedded: embeddedCount,
-        }),
-        derivationId,
-      ]
-    );
-
-    // Step 8: Complete queue item
+  if (hasSucceededIngestDerivation(db, observeId, policy.id)) {
     complete(db, claimed.id, claimed.lease_token);
-
+    const existing = getConcurrentDrainFacts(db, observeId);
     return {
       ok: true,
       observe_id: observeId,
-      derivation_id: derivationId,
-      chunks_count: output.chunks.length,
-      facts_count: output.facts.length,
-      embedded_count: embeddedCount,
+      derivation_id: existing?.derivation_id,
+      chunks_count: countRows(db, "chunks", observeId),
+      facts_count: existing?.facts_count ?? 0,
+      already_drained_by_concurrent_worker: true,
     };
+  }
+
+  // Step 4-5: Extract, then persist facts + chunks + derivation + completion atomically
+  const derivationId = uuidv7();
+  let output: ExtractionOutput;
+  try {
+    beginDerivation(db, { derivationId, observeId, policyId: policy.id });
+    output = await runExtractor(
+      {
+        observe_id: observeId,
+        source_uri: `file://${absPath}`,
+        mime_type: mimeType,
+        content_ref: "inline",
+        content,
+        transform_policy: policy.id,
+      },
+      { timeoutMs: extractionTimeoutMs(policy.extraction.timeoutSec) }
+    );
+    persistExtraction(db, {
+      observeId,
+      derivationId,
+      policyId: policy.id,
+      output,
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-
-    // Mark derivation as failed
-    db.run(
-      `UPDATE derivation_run
-       SET status = 'failed', finished_at = datetime('now'), error = ?
-       WHERE derivation_id = ?`,
-      [errorMsg, derivationId]
-    );
-
-    // Release queue lease
-    fail(db, claimed.id, claimed.lease_token, errorMsg);
-
+    failDerivation(db, derivationId, errorMsg);
+    fail(db, claimed.id, claimed.lease_token, errorMsg, { maxRetries });
     return {
       ok: false,
       observe_id: observeId,
@@ -399,4 +248,17 @@ export async function ingestFile(
       error: errorMsg,
     };
   }
+
+  // Step 6: Embed (if services available); facts are already searchable
+  const embedding = await embedObservationChunks(db, observeId, opts);
+
+  return {
+    ok: true,
+    observe_id: observeId,
+    derivation_id: derivationId,
+    chunks_count: output.chunks.length,
+    facts_count: output.facts.length,
+    embedded_count: embedding.embedded,
+    ...(embedding.error ? { embedding_error: embedding.error } : {}),
+  };
 }

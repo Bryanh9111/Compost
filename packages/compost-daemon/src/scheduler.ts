@@ -7,12 +7,21 @@ import { runCycle } from "../../compost-core/src/cognitive/reason-scheduler";
 import type { BreakerRegistry } from "../../compost-core/src/llm/breaker-registry";
 import type { LLMService } from "../../compost-core/src/llm/types";
 import { ingestUrl } from "../../compost-core/src/pipeline/web-ingest";
-import { claimOne, complete, fail } from "../../compost-core/src/queue/lease";
+import { claimOne, complete, fail, heartbeat } from "../../compost-core/src/queue/lease";
+import {
+  beginDerivation,
+  failDerivation,
+  hasSucceededIngestDerivation,
+  persistExtraction,
+  type ExtractionOutput,
+} from "../../compost-core/src/pipeline/persist-extraction";
+import { embedPendingChunks, type PendingVectorStore } from "../../compost-core/src/pipeline/embed-pending";
+import { extractionTimeoutMs, runExtractor, type ExtractFn } from "../../compost-core/src/pipeline/extractor";
 import { getActivePolicy } from "../../compost-core/src/policies/registry";
 import { reconcileActionPointers } from "../../compost-core/src/metacognitive/action-reconciler";
 import { v7 as uuidv7 } from "uuid";
 import { existsSync } from "fs";
-import { resolve, join } from "path";
+import { join } from "path";
 import type { EmbeddingService } from "../../compost-core/src/embedding/types";
 import type { VectorStore } from "../../compost-core/src/storage/lancedb";
 import pino from "pino";
@@ -260,82 +269,62 @@ export function startFreshnessLoop(db: Database, dataDir: string): Scheduler {
 
 export interface IngestWorkerOpts {
   embeddingService: EmbeddingService;
-  vectorStore: VectorStore;
+  vectorStore: PendingVectorStore;
   dataDir: string;
+  /** Extraction runner; tests inject one instead of spawning Python. */
+  extract?: ExtractFn;
+  /** Lease heartbeat period while an extraction runs. */
+  heartbeatMs?: number;
+  /** Pause after a failed extraction, on top of the queue's own backoff. */
+  failureSleepMs?: number;
 }
 
-interface ExtractionOutput {
-  observe_id: string;
-  extractor_version: string;
-  transform_policy: string;
-  chunks: Array<{
-    chunk_id: string;
-    text: string;
-    metadata?: { char_start?: number; char_end?: number; [k: string]: unknown };
-  }>;
-  facts: Array<{
-    subject: string;
-    predicate: string;
-    object: string;
-    confidence?: number;
-    importance?: number;
-    source_chunk_ids?: string[];
-  }>;
-  normalized_content: string;
-  content_hash_raw: string;
-  content_hash_normalized: string;
-  warnings: string[];
-}
-
-function computeHash(content: string): string {
-  const hasher = new Bun.CryptoHasher("sha256");
-  hasher.update(content);
-  return hasher.digest("hex");
-}
-
-function hasSucceededIngestDerivation(
-  db: Database,
-  observeId: string,
-  policyId: string
-): boolean {
-  const row = db
-    .query(
-      `SELECT 1
-       FROM derivation_run
-       WHERE observe_id = ?
-         AND layer = 'L2'
-         AND transform_policy = ?
-         AND model_id = ''
-         AND coalesce(context_scope_id, '') = ''
-         AND coalesce(extraction_profile, '') = ''
-         AND status = 'succeeded'
-       LIMIT 1`
-    )
-    .get(observeId, policyId);
-  return row !== null;
-}
+const INGEST_HEARTBEAT_MS = 20_000;
+const INGEST_FAILURE_SLEEP_MS = 1000;
+const SWEEP_BACKOFF_BASE_MS = 2000;
+const SWEEP_BACKOFF_CAP_MS = 5 * 60 * 1000;
+const EMBED_BATCH = 64;
 
 /**
- * Ingest worker: claims from ingest_queue, runs Python extraction,
- * writes facts/chunks to SQLite, generates embeddings + writes to LanceDB.
- * Mirrors the logic in ingest.ts:138-309 but runs as a daemon loop.
+ * Ingest worker: claims from ingest_queue, runs the extractor, persists
+ * facts + chunks + derivation + queue completion in one transaction, then
+ * embeds the observation's chunks. Embedding is best effort inline: the idle
+ * sweep (embedPendingChunks with no observation filter) catches up after an
+ * Ollama outage, so facts are never held back by vectors.
  */
 export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Scheduler {
   let running = true;
   let lastTickAt: string | null = null;
   let errorCount = 0;
+  let sweepFailures = 0;
+  let sweepBlockedUntil = 0;
+  const extract = opts.extract ?? runExtractor;
+  const heartbeatMs = opts.heartbeatMs ?? INGEST_HEARTBEAT_MS;
+  const failureSleepMs = opts.failureSleepMs ?? INGEST_FAILURE_SLEEP_MS;
+  const embedOpts = {
+    embeddingService: opts.embeddingService,
+    vectorStore: opts.vectorStore,
+    limit: EMBED_BATCH,
+  };
+
+  async function embedObservation(observeId: string): Promise<number> {
+    let embedded = 0;
+    for (;;) {
+      const result = await embedPendingChunks(db, { ...embedOpts, observeId });
+      embedded += result.embedded;
+      if (result.remaining === 0 || result.embedded === 0) return embedded;
+    }
+  }
 
   async function processOne(): Promise<boolean> {
-    const workerId = `daemon:${process.pid}`;
-    const claimed = claimOne(db, workerId);
-    if (!claimed) return false;
-
-    const derivationId = uuidv7();
     const policy = getActivePolicy();
+    const maxRetries = policy.extraction.maxRetries;
+    const claimed = claimOne(db, `daemon:${process.pid}`, { maxRetries });
+    if (!claimed) return false;
 
     const obs = db
       .query(
-        `SELECT observe_id, source_uri, mime_type, raw_bytes, metadata
+        `SELECT observe_id, source_uri, mime_type, raw_bytes
          FROM observations WHERE observe_id = ?`
       )
       .get(claimed.observe_id) as {
@@ -343,176 +332,92 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
       source_uri: string;
       mime_type: string;
       raw_bytes: Buffer | null;
-      metadata: string | null;
     } | null;
 
     if (!obs) {
-      fail(db, claimed.id, claimed.lease_token, "observation not found");
+      fail(db, claimed.id, claimed.lease_token, "observation not found", { maxRetries });
       return true;
     }
 
     if (hasSucceededIngestDerivation(db, obs.observe_id, policy.id)) {
       complete(db, claimed.id, claimed.lease_token);
-      log.info(
-        { observe_id: obs.observe_id },
-        "ingest worker: already processed"
-      );
+      log.info({ observe_id: obs.observe_id }, "ingest worker: already processed");
       return true;
     }
 
-    const content = obs.raw_bytes ? obs.raw_bytes.toString("utf-8") : "";
+    const derivationId = uuidv7();
+    const abort = new AbortController();
+    const pulse = setInterval(() => {
+      if (!heartbeat(db, claimed.id, claimed.lease_token)) {
+        abort.abort(new Error("lease stolen by another worker"));
+      }
+    }, heartbeatMs);
 
-    db.run(
-      `INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status)
-       VALUES (?, ?, 'L2', ?, 'running')`,
-      [derivationId, obs.observe_id, policy.id]
-    );
-
+    let output: ExtractionOutput;
     try {
-      const extractionInput = JSON.stringify({
-        observe_id: obs.observe_id,
-        source_uri: obs.source_uri,
-        mime_type: obs.mime_type,
-        content_ref: "inline",
-        content,
-        transform_policy: policy.id,
-      });
-
-      const ingestPkgDir = resolve(import.meta.dir, "../..", "compost-ingest");
-      const venvPython = resolve(ingestPkgDir, ".venv/bin/python");
-
-      let cmd: string[];
-      if (existsSync(venvPython)) {
-        cmd = [venvPython, "-m", "compost_ingest", "extract"];
-      } else {
-        cmd = ["uv", "run", "--project", ingestPkgDir, "python", "-m", "compost_ingest", "extract"];
-      }
-
-      const proc = Bun.spawn(cmd, {
-        stdin: new Blob([extractionInput]),
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd: ingestPkgDir,
-      });
-
-      const exitCode = await proc.exited;
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-
-      if (exitCode !== 0) {
-        throw new Error(`extraction failed (exit ${exitCode}): ${stderr.slice(0, 500)}`);
-      }
-
-      let output: ExtractionOutput;
-      try {
-        output = JSON.parse(stdout);
-      } catch {
-        throw new Error(`extraction output is not valid JSON: ${stdout.slice(0, 200)}`);
-      }
-
-      // Write facts + chunks to SQLite
-      const insertFact = db.prepare(
-        `INSERT OR IGNORE INTO facts (fact_id, subject, predicate, object, confidence, importance, observe_id, last_reinforced_at_unix_sec, half_life_seconds)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-      const insertChunk = db.prepare(
-        `INSERT OR IGNORE INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-
-      const nowUnixSec = Math.floor(Date.now() / 1000);
-      const defaultHalfLife = 2592000;
-
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        for (const fact of output.facts) {
-          insertFact.run(
-            uuidv7(), fact.subject, fact.predicate, fact.object,
-            fact.confidence ?? 0.8, fact.importance ?? 0.5,
-            obs.observe_id, nowUnixSec, defaultHalfLife
-          );
-        }
-        for (let i = 0; i < output.chunks.length; i++) {
-          const chunk = output.chunks[i]!;
-          insertChunk.run(
-            chunk.chunk_id, obs.observe_id, derivationId, i,
-            chunk.text, computeHash(chunk.text),
-            chunk.metadata?.char_start ?? 0,
-            chunk.metadata?.char_end ?? chunk.text.length,
-            policy.id
-          );
-        }
-        db.exec("COMMIT");
-      } catch (e) {
-        db.exec("ROLLBACK");
-        throw e;
-      }
-
-      // Generate embeddings + write to LanceDB
-      let embeddedCount = 0;
-      if (output.chunks.length > 0) {
-        const chunkTexts = output.chunks.map((c) => c.text);
-        const vectors = await opts.embeddingService.embed(chunkTexts);
-
-        const chunkToFactId = new Map<string, string>();
-        const factRows = db
-          .query("SELECT fact_id FROM facts WHERE observe_id = ? ORDER BY created_at")
-          .all(obs.observe_id) as { fact_id: string }[];
-
-        for (let fi = 0; fi < output.facts.length; fi++) {
-          const fact = output.facts[fi]!;
-          const factId = factRows[fi]?.fact_id;
-          if (factId && fact.source_chunk_ids) {
-            for (const cid of fact.source_chunk_ids) {
-              if (!chunkToFactId.has(cid)) {
-                chunkToFactId.set(cid, factId);
-              }
-            }
-          }
-        }
-
-        const chunkVectors = output.chunks.map((chunk, i) => ({
-          chunk_id: chunk.chunk_id,
-          fact_id: chunkToFactId.get(chunk.chunk_id)
-            ?? (factRows[0]?.fact_id ?? `orphan:${obs.observe_id}:${i}`),
+      beginDerivation(db, { derivationId, observeId: obs.observe_id, policyId: policy.id });
+      output = await extract(
+        {
           observe_id: obs.observe_id,
-          vector: vectors[i]!,
-        }));
-
-        await opts.vectorStore.add(chunkVectors);
-
-        const updateEmbedded = db.prepare(
-          "UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?"
-        );
-        for (const cv of chunkVectors) {
-          updateEmbedded.run(cv.chunk_id);
-        }
-        embeddedCount = chunkVectors.length;
-      }
-
-      db.run(
-        `UPDATE derivation_run
-         SET status = 'succeeded', finished_at = datetime('now'), artifact_ref = ?
-         WHERE derivation_id = ?`,
-        [JSON.stringify({ chunks: output.chunks.length, facts: output.facts.length, embedded: embeddedCount }), derivationId]
+          source_uri: obs.source_uri,
+          mime_type: obs.mime_type,
+          content_ref: "inline",
+          content: obs.raw_bytes ? obs.raw_bytes.toString("utf-8") : "",
+          transform_policy: policy.id,
+        },
+        { timeoutMs: extractionTimeoutMs(policy.extraction.timeoutSec), signal: abort.signal }
       );
-
-      complete(db, claimed.id, claimed.lease_token);
-      log.info(
-        { observe_id: obs.observe_id, facts: output.facts.length, chunks: output.chunks.length, embedded: embeddedCount },
-        "ingest worker: processed"
-      );
-      return true;
+      abort.signal.throwIfAborted();
+      persistExtraction(db, {
+        observeId: obs.observe_id,
+        derivationId,
+        policyId: policy.id,
+        output,
+        queue: { id: claimed.id, leaseToken: claimed.lease_token },
+      });
     } catch (err) {
       errorCount++;
       const errorMsg = err instanceof Error ? err.message : String(err);
-      db.run(
-        `UPDATE derivation_run SET status = 'failed', finished_at = datetime('now'), error = ? WHERE derivation_id = ?`,
-        [errorMsg, derivationId]
-      );
-      fail(db, claimed.id, claimed.lease_token, errorMsg);
-      log.error({ err, observe_id: obs.observe_id }, "ingest worker: failed");
+      failDerivation(db, derivationId, errorMsg);
+      fail(db, claimed.id, claimed.lease_token, errorMsg, { maxRetries });
+      log.error({ err, observe_id: obs.observe_id, attempts: claimed.attempts }, "ingest worker: failed");
+      if (failureSleepMs > 0) await Bun.sleep(failureSleepMs);
       return true;
+    } finally {
+      clearInterval(pulse);
+    }
+
+    let embedded = 0;
+    try {
+      embedded = await embedObservation(obs.observe_id);
+    } catch (err) {
+      errorCount++;
+      log.warn({ err, observe_id: obs.observe_id }, "ingest worker: embedding deferred to the pending sweep");
+    }
+    log.info(
+      { observe_id: obs.observe_id, facts: output.facts.length, chunks: output.chunks.length, embedded },
+      "ingest worker: processed"
+    );
+    return true;
+  }
+
+  /** Idle-time catch-up for chunks left unembedded; backs off while the service is down. */
+  async function sweepPending(): Promise<number> {
+    if (Date.now() < sweepBlockedUntil) return 0;
+    try {
+      const result = await embedPendingChunks(db, embedOpts);
+      sweepFailures = 0;
+      if (result.embedded > 0 || result.failed > 0) {
+        log.info(result, "ingest worker: embedded pending chunks");
+      }
+      return result.embedded;
+    } catch (err) {
+      errorCount++;
+      sweepFailures++;
+      const backoff = Math.min(SWEEP_BACKOFF_BASE_MS * 2 ** (sweepFailures - 1), SWEEP_BACKOFF_CAP_MS);
+      sweepBlockedUntil = Date.now() + backoff;
+      log.warn({ err, sweep_failures: sweepFailures, backoff_ms: backoff }, "ingest worker: pending embedding sweep failed");
+      return 0;
     }
   }
 
@@ -521,7 +426,7 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
       try {
         const processed = await processOne();
         lastTickAt = new Date().toISOString();
-        if (!processed) {
+        if (!processed && (await sweepPending()) === 0) {
           await Bun.sleep(INGEST_EMPTY_SLEEP_MS);
         }
       } catch (err) {
@@ -543,7 +448,6 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
     },
   };
 }
-
 
 // =====================================================================
 // Backup scheduler (P0-7, locked by debate 003 Pre-P0 fix #5)
