@@ -474,6 +474,7 @@ import {
   pruneOldBackups,
   DEFAULT_BACKUP_RETENTION,
 } from "../../compost-core/src/persistence/backup";
+import { rotateLog } from "../../compost-core/src/persistence/log-rotate";
 import { takeSnapshot as takeGraphHealthSnapshot } from "../../compost-core/src/cognitive/graph-health";
 import { scanObservationForCorrection } from "../../compost-core/src/cognitive/correction-detector";
 
@@ -490,6 +491,8 @@ export interface BackupSchedulerOpts {
   retentionCount?: number;
   /** Compacts LanceDB fragments after the backup; every write adds one. */
   vectorStore?: { optimize(): Promise<void> };
+  /** launchd appends the daemon's stdout here; rotated copy-then-truncate. */
+  logPath?: string;
 }
 
 export interface BackupTickResult {
@@ -500,6 +503,7 @@ export interface BackupTickResult {
   retention: number;
   optimized: boolean;
   optimize_error?: string;
+  log_rotated: boolean;
 }
 
 /** One backup window: snapshot, prune, then best-effort index compaction. */
@@ -514,6 +518,7 @@ export async function runBackupTick(db: Database, opts: BackupSchedulerOpts): Pr
     prunedCount,
     retention,
     optimized: false,
+    log_rotated: opts.logPath ? rotateLog(opts.logPath).rotated : false,
   };
   if (opts.vectorStore) {
     try {

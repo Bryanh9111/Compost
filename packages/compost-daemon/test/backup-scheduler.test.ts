@@ -115,4 +115,13 @@ describe("runBackupTick", () => {
     const tick = await runBackupTick(db, { ledgerPath: join(dir, "ledger.db"), backupDir: join(dir, "backups") });
     expect(tick.optimized).toBe(false);
   });
+
+  test("rotates an oversized daemon log and leaves a small one alone", async () => {
+    const logPath = join(dir, "daemon.log");
+    writeFileSync(logPath, "x".repeat(21 * 1024 * 1024));
+    const rotated = await runBackupTick(db, { ledgerPath: join(dir, "ledger.db"), backupDir: join(dir, "backups"), logPath });
+    expect(rotated.log_rotated).toBe(true);
+    const again = await runBackupTick(db, { ledgerPath: join(dir, "ledger.db"), backupDir: join(dir, "backups"), logPath });
+    expect(again.log_rotated).toBe(false);
+  });
 });
