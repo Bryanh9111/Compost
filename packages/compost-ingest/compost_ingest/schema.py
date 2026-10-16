@@ -32,6 +32,10 @@ INPUT_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "description": "Policy ID controlling extraction behavior (e.g. tp-2026-04)",
         },
+        "skip_llm_facts": {
+            "type": "boolean",
+            "description": "Chunks and heading facts only; no LLM fact extraction (manifest backfill)",
+        },
     },
 }
 

@@ -233,3 +233,34 @@ describe("startReflectScheduler wiki hook (Week 4 Day 4)", () => {
     expect(sig.target_ref).toBe("outbox:99");
   });
 });
+
+describe("startReflectScheduler vector GC", () => {
+  test("drops the vectors of observations the sensory GC removed", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "compost-sched-gc-"));
+    const db = new Database(join(tmpDir, "ledger.db"));
+    db.exec("PRAGMA foreign_keys=ON");
+    applyMigrations(db);
+    db.run("INSERT INTO source VALUES ('sensor','engram://memory','sensory',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run(
+      "INSERT INTO observations VALUES ('obs-old','sensor','engram://memory/1',datetime('now','-8 days'),datetime('now','-8 days'),'h1','r1',NULL,NULL,'text/plain','t',1,'user','i1','tp-2026-04',NULL,NULL,NULL)"
+    );
+    db.run(
+      "INSERT INTO observations VALUES ('obs-new','sensor','engram://memory/2',datetime('now'),datetime('now'),'h2','r2',NULL,NULL,'text/plain','t',2,'user','i2','tp-2026-04',NULL,NULL,NULL)"
+    );
+    const deleted: string[][] = [];
+    const sched = startReflectScheduler(db, {
+      intervalMs: 5,
+      vectorStore: { async deleteByObserveIds(ids) { deleted.push(ids); } },
+    });
+    try {
+      expect(await waitFor(() => deleted.length > 0)).toBe(true);
+      expect(deleted[0]).toEqual(["obs-old"]);
+      expect(db.query("SELECT observe_id FROM observations").all()).toEqual([{ observe_id: "obs-new" }]);
+      expect(sched.getHealth().error_count).toBe(0);
+    } finally {
+      sched.stop();
+      db.close();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

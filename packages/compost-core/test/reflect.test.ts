@@ -50,6 +50,7 @@ describe("cognitive/reflect", () => {
   test("reflect returns empty report on empty database", () => {
     const report = reflect(db);
     expect(report.sensoryObservationsDeleted).toBe(0);
+    expect(report.sensoryObserveIdsDeleted).toEqual([]);
     expect(report.sensoryFactsCascaded).toBe(0);
     expect(report.semanticFactsTombstoned).toBe(0);
     expect(report.outboxRowsPruned).toBe(0);
@@ -67,6 +68,7 @@ describe("cognitive/reflect", () => {
 
     const report = reflect(db);
     expect(report.sensoryObservationsDeleted).toBe(1);
+    expect(report.sensoryObserveIdsDeleted).toEqual(["obs-old"]);
 
     // Old observation gone
     const old = db.query("SELECT 1 FROM observations WHERE observe_id = 'obs-old'").get();

@@ -157,6 +157,7 @@ export async function startDaemon(
   const reflectSched: Scheduler = startReflectScheduler(db, {
     llm: llmRegistry,
     dataDir,
+    vectorStore,
   });
   try {
     recoverStaleRuns(db);

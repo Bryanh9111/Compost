@@ -17,14 +17,37 @@ function openDb(): Database {
   return db;
 }
 
+/** The sensory GC cascades through SQLite only; vectors are dropped here. */
+async function dropVectors(observeIds: string[]): Promise<void> {
+  const dir = process.env["COMPOST_DATA_DIR"] ?? DEFAULT_DATA_DIR;
+  const lanceDir = join(dir, "lancedb");
+  if (!existsSync(lanceDir)) return;
+  const { OllamaEmbeddingService } = await import("../../../compost-core/src/embedding/ollama");
+  const { VectorStore } = await import("../../../compost-core/src/storage/lancedb");
+  const store = new VectorStore(lanceDir, new OllamaEmbeddingService());
+  await store.connect();
+  try {
+    await store.deleteByObserveIds(observeIds);
+  } finally {
+    await store.close();
+  }
+}
+
 export function registerReflect(program: Command): void {
   program
     .command("reflect")
     .description("Manually trigger the reflection loop (active forgetting)")
-    .action(() => {
+    .action(async () => {
       const db = openDb();
       try {
         const report = reflect(db);
+        if (report.sensoryObserveIdsDeleted.length > 0) {
+          try {
+            await dropVectors(report.sensoryObserveIdsDeleted);
+          } catch (err) {
+            report.errors.push({ step: "vectorGC", message: err instanceof Error ? err.message : String(err) });
+          }
+        }
         process.stdout.write(JSON.stringify(report, null, 2) + "\n");
         if (report.errors.length) process.exitCode = 1;
       } finally {

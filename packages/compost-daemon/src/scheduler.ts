@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { drainOne } from "../../compost-core/src/ledger/outbox";
-import { reflect } from "../../compost-core/src/cognitive/reflect";
+import { reflect, type ReflectionReport } from "../../compost-core/src/cognitive/reflect";
 import { triage } from "../../compost-core/src/cognitive/triage";
 import { synthesizeWiki } from "../../compost-core/src/cognitive/wiki";
 import { runCycle } from "../../compost-core/src/cognitive/reason-scheduler";
@@ -118,6 +118,12 @@ export interface ReflectSchedulerOpts {
    * two cycles in sub-second wall time (Week 4 Day 4 scheduler integration).
    */
   intervalMs?: number;
+  /** Drops the vectors of observations the sensory GC removed. */
+  vectorStore?: VectorGc;
+}
+
+export interface VectorGc {
+  deleteByObserveIds(observeIds: string[]): Promise<void>;
 }
 
 /**
@@ -142,13 +148,23 @@ export function startReflectScheduler(
     while (running) {
       await Bun.sleep(intervalMs);
       if (!running) break;
+      let report: ReflectionReport;
       try {
-        const report = reflect(db);
-        log.info({ report }, "reflect complete");
+        report = reflect(db);
+        log.info({ report: { ...report, sensoryObserveIdsDeleted: report.sensoryObserveIdsDeleted.length } }, "reflect complete");
       } catch (err) {
         errorCount++;
         log.error({ err }, "reflect error");
         continue; // skip triage + wiki synth when reflect failed
+      }
+
+      if (opts.vectorStore && report.sensoryObserveIdsDeleted.length > 0) {
+        try {
+          await opts.vectorStore.deleteByObserveIds(report.sensoryObserveIdsDeleted);
+        } catch (err) {
+          errorCount++;
+          log.error({ err, observations: report.sensoryObserveIdsDeleted.length }, "vector GC error (continuing)");
+        }
       }
 
       // Debate 013 F2: run triage after reflect so the 5 scanners produce
