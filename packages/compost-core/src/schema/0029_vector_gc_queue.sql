@@ -9,13 +9,21 @@
 -- embedded until its row is gone, and the claim keeps two concurrent
 -- drainers (daemon sweep + `compost add`) from deleting each other's work.
 --
--- The queue is transient work, so an earlier shape of the table (created
--- without the claim columns by a pre-release build) is replaced outright
--- rather than altered column by column.
-DROP TABLE IF EXISTS vector_gc_queue;
-CREATE TABLE vector_gc_queue (
+-- A pre-release build created the table without the claim columns. Any
+-- queued ids it holds are unfinished cleanups, so the rows are carried over
+-- instead of dropped: ensure the old shape exists, copy into the new shape,
+-- then swap.
+CREATE TABLE IF NOT EXISTS vector_gc_queue (
+  observe_id TEXT PRIMARY KEY REFERENCES observations(observe_id) ON DELETE CASCADE,
+  enqueued_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE vector_gc_queue_next (
   observe_id TEXT PRIMARY KEY REFERENCES observations(observe_id) ON DELETE CASCADE,
   enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
   claimed_token TEXT,
   claimed_at TEXT
 );
+INSERT INTO vector_gc_queue_next (observe_id, enqueued_at)
+  SELECT observe_id, enqueued_at FROM vector_gc_queue;
+DROP TABLE vector_gc_queue;
+ALTER TABLE vector_gc_queue_next RENAME TO vector_gc_queue;

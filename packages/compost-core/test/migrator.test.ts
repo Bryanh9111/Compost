@@ -257,14 +257,23 @@ describe("migrator", () => {
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='vector_gc_queue'").get()).not.toBeNull();
   });
 
-  test("0029 replaces an earlier claim-less vector_gc_queue with the claimable shape", () => {
+  test("0029 upgrades an earlier claim-less vector_gc_queue and keeps its pending rows", () => {
     applyMigrations(db, { upTo: "0028_chunk_identity_and_ingest_retry" });
+    db.run("INSERT INTO source VALUES ('s1','file:///a','local-file',NULL,0.0,'user',datetime('now'),NULL)");
+    db.run(
+      "INSERT INTO observations VALUES ('obs-pending','s1','file:///a',datetime('now'),datetime('now'),'h','r',NULL,NULL,'text/markdown','local-file',1,'user','k','tp-2026-04',NULL,NULL,NULL)"
+    );
     db.run("CREATE TABLE vector_gc_queue (observe_id TEXT PRIMARY KEY, enqueued_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    db.run("INSERT INTO vector_gc_queue (observe_id, enqueued_at) VALUES ('obs-pending', '2026-10-16T12:00:00Z')");
     const result = applyMigrations(db);
     expect(result.applied.map((m) => m.name)).toEqual(["0029_vector_gc_queue"]);
     expect(result.errors).toHaveLength(0);
     const cols = (db.query("PRAGMA table_info(vector_gc_queue)").all() as { name: string }[]).map((c) => c.name);
     expect(cols).toEqual(["observe_id", "enqueued_at", "claimed_token", "claimed_at"]);
+    expect(db.query("SELECT * FROM vector_gc_queue").all()).toEqual([
+      { observe_id: "obs-pending", enqueued_at: "2026-10-16T12:00:00Z", claimed_token: null, claimed_at: null },
+    ]);
+    expect(db.query("SELECT name FROM sqlite_master WHERE name = 'vector_gc_queue_next'").get()).toBeNull();
   });
 
   test("0022 backfills Engram project contexts for existing observations", () => {
