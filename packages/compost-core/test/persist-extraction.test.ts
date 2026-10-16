@@ -149,7 +149,10 @@ describe("pipeline/persist-extraction", () => {
     });
     expect(result.replacedFacts).toBe(1);
     expect(result.replacedChunks).toBe(1);
-    expect(db.query("SELECT fact_id FROM facts").all()).toEqual([{ fact_id: result.factIds[0] }]);
+    expect(result.vectorGcQueued).toBe(true);
+    expect(db.query("SELECT observe_id FROM vector_gc_queue").all()).toEqual([{ observe_id: "obs-1" }]);
+    expect(db.query("SELECT fact_id FROM facts WHERE archived_at IS NULL").all()).toEqual([{ fact_id: result.factIds[0] }]);
+    expect(db.query("SELECT archive_reason FROM facts WHERE fact_id = 'stale-fact'").get()).toEqual({ archive_reason: "superseded" });
     const chunks = db.query("SELECT chunk_id, text_content, embedded_at FROM chunks ORDER BY chunk_index").all() as { chunk_id: string; text_content: string; embedded_at: string | null }[];
     expect(chunks.map((c) => [c.chunk_id, c.text_content, c.embedded_at])).toEqual([
       ["obs-1:c0", "# Heading", null],
@@ -171,7 +174,49 @@ describe("pipeline/persist-extraction", () => {
       queue: { id: claimed.id, leaseToken: claimed.lease_token },
     });
     expect(result.replacedFacts).toBe(0);
+    expect(result.vectorGcQueued).toBe(true);
     expect((db.query("SELECT count(*) AS n FROM facts").get() as { n: number }).n).toBe(2);
+  });
+
+  test("a first derivation queues no vector cleanup", () => {
+    const { claimed, derivationId } = seedObservation("obs-1");
+    const result = persistExtraction(db, {
+      observeId: "obs-1",
+      derivationId,
+      policyId,
+      output: output(),
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
+    expect(result.vectorGcQueued).toBe(false);
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 0 });
+  });
+
+  test("leftover facts referenced by other facts are archived, not deleted", () => {
+    const { claimed, derivationId } = seedObservation("obs-1");
+    db.run(
+      "INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d-failed', 'obs-1', 'L2', ?, 'failed')",
+      [policyId]
+    );
+    db.run("INSERT INTO facts (fact_id, subject, predicate, object, observe_id) VALUES ('winner', 's', 'p', 'o', 'obs-1')");
+    db.run(
+      `INSERT INTO observations VALUES ('obs-2','s1','file:///b',datetime('now'),datetime('now'),'h2','r2',NULL,NULL,'text/markdown','local-file',2,'user','k2',?,NULL,NULL,NULL)`,
+      [policyId]
+    );
+    db.run(
+      "INSERT INTO facts (fact_id, subject, predicate, object, observe_id, superseded_by, replaced_by_fact_id) VALUES ('loser', 's', 'p', 'old', 'obs-2', 'winner', 'winner')"
+    );
+
+    persistExtraction(db, {
+      observeId: "obs-1",
+      derivationId,
+      policyId,
+      output: output(),
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
+    const winner = db.query("SELECT archived_at, archive_reason FROM facts WHERE fact_id = 'winner'").get() as { archived_at: string | null; archive_reason: string };
+    expect(winner.archived_at).not.toBeNull();
+    expect(winner.archive_reason).toBe("superseded");
+    expect(db.query("SELECT superseded_by FROM facts WHERE fact_id = 'loser'").get()).toEqual({ superseded_by: "winner" });
   });
 
   test("a lost lease rolls back facts, chunks and the derivation transition", () => {

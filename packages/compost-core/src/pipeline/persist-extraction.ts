@@ -99,9 +99,11 @@ export function failDerivation(db: Database, derivationId: string, error: string
 export interface PersistExtractionResult {
   factIds: string[];
   chunkIds: string[];
-  /** Rows left by an earlier attempt that this derivation replaced. */
+  /** Rows left by an earlier attempt that this derivation replaced (facts are archived, chunks deleted). */
   replacedFacts: number;
   replacedChunks: number;
+  /** True when the observation's previous vectors were queued for deletion. */
+  vectorGcQueued: boolean;
 }
 
 const DEFAULT_HALF_LIFE_SEC = 2_592_000; // 30 days (spec §2 tp-2026-04)
@@ -165,18 +167,39 @@ export function persistExtraction(
     // A derivation replaces whatever an earlier attempt left behind. The
     // pre-0028 pipeline committed facts and chunks before embedding, so a
     // retry after an embedding failure would otherwise collide on chunk ids
-    // and duplicate facts. Facts from a run that did succeed (older policy)
-    // are kept; chunks are always re-derived from this extraction.
+    // and duplicate facts. Leftover facts are archived, not deleted: other
+    // facts may reference them (superseded_by, replaced_by_fact_id) and the
+    // archive keeps those identities. Facts of a run that did succeed under
+    // an older policy stay active; chunks are always re-derived.
+    const priorRuns = (
+      db
+        .query("SELECT count(*) AS n FROM derivation_run WHERE observe_id = ? AND derivation_id != ?")
+        .get(observeId, derivationId) as { n: number }
+    ).n;
     const priorSuccess =
       db
         .query("SELECT 1 FROM derivation_run WHERE observe_id = ? AND layer = 'L2' AND status = 'succeeded' LIMIT 1")
         .get(observeId) !== null;
-    const count = (table: "facts" | "chunks") =>
-      (db.query(`SELECT count(*) AS n FROM ${table} WHERE observe_id = ?`).get(observeId) as { n: number }).n;
-    const replacedFacts = priorSuccess ? 0 : count("facts");
-    if (!priorSuccess) db.run("DELETE FROM facts WHERE observe_id = ?", [observeId]);
-    const replacedChunks = count("chunks");
+    // Counted with SELECT: bun:sqlite's `changes` also counts the rows the
+    // FTS triggers touch.
+    const replacedFacts = priorSuccess
+      ? 0
+      : (db.query("SELECT count(*) AS n FROM facts WHERE observe_id = ? AND archived_at IS NULL").get(observeId) as { n: number }).n;
+    if (replacedFacts > 0) {
+      db.run(
+        `UPDATE facts SET archived_at = datetime('now'), archive_reason = 'superseded'
+         WHERE observe_id = ? AND archived_at IS NULL`,
+        [observeId]
+      );
+    }
+    const replacedChunks = (
+      db.query("SELECT count(*) AS n FROM chunks WHERE observe_id = ?").get(observeId) as { n: number }
+    ).n;
     db.run("DELETE FROM chunks WHERE observe_id = ?", [observeId]);
+    // Any earlier run may have embedded vectors (pre-0028 even without
+    // manifest rows); queue their removal durably, drained before embedding.
+    const vectorGcQueued = priorRuns > 0 || replacedChunks > 0 || replacedFacts > 0;
+    if (vectorGcQueued) db.run("INSERT OR IGNORE INTO vector_gc_queue (observe_id) VALUES (?)", [observeId]);
 
     const factIds: string[] = [];
     const chunkToFact = new Map<string, string>();
@@ -242,7 +265,7 @@ export function persistExtraction(
     }
 
     db.exec("COMMIT");
-    return { factIds, chunkIds, replacedFacts, replacedChunks };
+    return { factIds, chunkIds, replacedFacts, replacedChunks, vectorGcQueued };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;

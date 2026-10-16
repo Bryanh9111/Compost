@@ -63,7 +63,12 @@ function fakeEmbedding(failFirst = 0): EmbeddingService & { calls: number } {
 }
 
 function recorder() {
-  return { rows: [] as ChunkVector[], async upsert(rows: ChunkVector[]) { this.rows.push(...rows); } };
+  return {
+    rows: [] as ChunkVector[],
+    deleted: [] as string[][],
+    async upsert(rows: ChunkVector[]) { this.rows.push(...rows); },
+    async deleteByObserveIds(ids: string[]) { this.deleted.push(ids); },
+  };
 }
 
 function start(db: Database, extract: ExtractFn, embeddingService = fakeEmbedding(), vectorStore = recorder()) {
@@ -193,6 +198,21 @@ describe("daemon ingest worker", () => {
     const pending = db.query("SELECT count(*) AS n FROM chunks WHERE embedded_at IS NULL").get() as { n: number };
     expect(pending.n).toBe(0);
     expect(scheduler.getHealth().error_count).toBe(1);
+  });
+
+  test("a retried legacy observation drops its old vectors before the new chunks are embedded", async () => {
+    const db = makeDb();
+    seed(db, "obs-1");
+    // Pre-0028 shape: a failed run that embedded vectors but kept no manifest rows.
+    db.run(
+      "INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status, finished_at) VALUES ('old-run', 'obs-1', 'L2', ?, 'failed', datetime('now'))",
+      [getActivePolicy().id]
+    );
+    const { vectorStore } = start(db, async (input) => output(input.observe_id));
+
+    await waitFor(() => vectorStore.rows.length === 2, "chunks not embedded");
+    expect(vectorStore.deleted).toEqual([["obs-1"]]);
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 0 });
   });
 
   test("a running derivation left behind by a dead worker is superseded", async () => {

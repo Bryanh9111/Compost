@@ -112,6 +112,7 @@ describe("migrator", () => {
       "user_pattern_events",      // 0015 user model schema
       "user_pattern_observations",// 0015
       "user_patterns",            // 0015
+      "vector_gc_queue",          // 0028 re-derivation vector cleanup
       "web_fetch_state",
       "wiki_page_observe",
       "wiki_page_versions",
@@ -252,6 +253,7 @@ describe("migrator", () => {
     expect(queueCols).toContain("quarantined_at");
     const index = db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_queue_claimable'").get();
     expect(index).not.toBeNull();
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='vector_gc_queue'").get()).not.toBeNull();
   });
 
   test("0022 backfills Engram project contexts for existing observations", () => {
