@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { applyMigrations } from "../../../compost-core/src/schema/migrator";
 import {
+  isSqliteLockError,
   searchIndexStatus,
   rebuildSearchIndexes,
 } from "../../../compost-core/src/query/search-index";
@@ -32,6 +33,12 @@ export function registerIndexes(program: Command) {
           : searchIndexStatus(db);
         process.stdout.write(JSON.stringify(report, null, 2) + "\n");
         if (!report.ok) process.exitCode = 1;
+      } catch (e) {
+        if (!isSqliteLockError(e)) throw e;
+        process.stderr.write(
+          "indexes: ledger is locked by another writer; retry\n",
+        );
+        process.exitCode = 1;
       } finally {
         db.close();
       }

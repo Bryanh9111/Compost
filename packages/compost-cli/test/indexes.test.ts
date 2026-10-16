@@ -26,3 +26,28 @@ test("indexes CLI reports corruption and rebuilds without changing actions", asy
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test(
+  "indexes CLI reports a locked ledger as contention, not as index failure",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "compost-index-cli-"));
+    try {
+      expect((await runCli(["indexes"], dir)).code).toBe(0);
+      const writer = new Database(join(dir, "ledger.db"));
+      writer.exec("BEGIN IMMEDIATE");
+      let locked: Awaited<ReturnType<typeof runCli>>;
+      try {
+        locked = await runCli(["indexes"], dir);
+      } finally {
+        writer.exec("COMMIT");
+        writer.close();
+      }
+      expect(locked.code).toBe(1);
+      expect(locked.stderr).toContain("locked by another writer");
+      expect(locked.stdout).not.toContain('"ok"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);
