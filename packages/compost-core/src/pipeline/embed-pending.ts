@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { v7 as uuidv7 } from "uuid";
 import { EmbeddingShapeError, type EmbeddingService } from "../embedding/types";
 import type { ChunkVector } from "../storage/lancedb";
 
@@ -68,28 +69,42 @@ export function countPendingChunks(db: Database, observeId?: string): PendingChu
  * isolated through chunks.embed_error so the sweep never loops on them.
  */
 const GC_BATCH = 500;
+const GC_CLAIM_TTL = "-10 minutes";
 
 /**
  * Drop the vectors of observations whose re-derivation queued a cleanup.
- * Runs before any upsert so stale vectors never outlive their replacement;
- * rows leave the queue only after LanceDB confirmed the delete, so a
- * failure here is retried by the next pass. Returns observations cleaned.
+ * Rows are claimed first so two drainers (daemon sweep and `compost add`)
+ * never delete the same observation, and a queued observation's chunks are
+ * not embedded by anyone until its row is gone (see embedPendingChunks).
+ * Rows leave the queue only after LanceDB confirmed the delete; a failure
+ * releases the claim so the next pass retries. Returns observations cleaned.
  */
 export async function drainVectorGc(db: Database, store: PendingVectorStore): Promise<number> {
   if (!store.deleteByObserveIds) return 0;
   let drained = 0;
   for (;;) {
+    const token = uuidv7();
+    db.run(
+      `UPDATE vector_gc_queue
+       SET claimed_token = ?, claimed_at = datetime('now')
+       WHERE observe_id IN (
+         SELECT observe_id FROM vector_gc_queue
+         WHERE claimed_token IS NULL OR claimed_at < datetime('now', ?)
+         ORDER BY enqueued_at LIMIT ?
+       )`,
+      [token, GC_CLAIM_TTL, GC_BATCH]
+    );
     const ids = (
-      db.query("SELECT observe_id FROM vector_gc_queue ORDER BY enqueued_at LIMIT ?").all(GC_BATCH) as Array<{
-        observe_id: string;
-      }>
+      db.query("SELECT observe_id FROM vector_gc_queue WHERE claimed_token = ?").all(token) as Array<{ observe_id: string }>
     ).map((r) => r.observe_id);
     if (ids.length === 0) return drained;
-    await store.deleteByObserveIds(ids);
-    const remove = db.prepare("DELETE FROM vector_gc_queue WHERE observe_id = ?");
-    db.transaction(() => {
-      for (const id of ids) remove.run(id);
-    })();
+    try {
+      await store.deleteByObserveIds(ids);
+    } catch (err) {
+      db.run("UPDATE vector_gc_queue SET claimed_token = NULL, claimed_at = NULL WHERE claimed_token = ?", [token]);
+      throw err;
+    }
+    db.run("DELETE FROM vector_gc_queue WHERE claimed_token = ?", [token]);
     drained += ids.length;
     if (ids.length < GC_BATCH) return drained;
   }
@@ -107,11 +122,13 @@ export async function embedPendingChunks(
        FROM chunks
        WHERE embedded_at IS NULL AND embed_error IS NULL
          AND (? IS NULL OR observe_id = ?)
+         AND NOT EXISTS (SELECT 1 FROM vector_gc_queue g WHERE g.observe_id = chunks.observe_id)
        ORDER BY created_at, chunk_index
        LIMIT ?`
     )
     .all(scope, scope, opts.limit ?? DEFAULT_LIMIT) as PendingChunk[];
-  if (rows.length === 0) return { embedded: 0, failed: 0, remaining: 0 };
+  // Chunks of a queued (claimed elsewhere) observation still count as remaining.
+  if (rows.length === 0) return { embedded: 0, failed: 0, remaining: countPendingChunks(db, opts.observeId).pending };
 
   const dim = opts.embeddingService.dim;
   const wellFormed = (vector: Float32Array | undefined): boolean =>

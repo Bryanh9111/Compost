@@ -178,7 +178,7 @@ describe("pipeline/embed-pending", () => {
     };
 
     await expect(embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store })).rejects.toThrow("lance unavailable");
-    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 1 });
+    expect(db.query("SELECT claimed_token FROM vector_gc_queue").all()).toEqual([{ claimed_token: null }]);
     expect(events).toEqual([]);
 
     failDelete = false;
@@ -189,13 +189,35 @@ describe("pipeline/embed-pending", () => {
     expect(await drainVectorGc(db, store)).toBe(0);
   });
 
-  test("a store without deleteByObserveIds leaves the queue untouched", async () => {
+  test("a store without deleteByObserveIds leaves the queue untouched and skips the queued observation", async () => {
     seedObservation("obs-1", ["alpha"]);
+    seedObservation("obs-2", ["beta"]);
     db.run("INSERT INTO vector_gc_queue (observe_id) VALUES ('obs-1')");
     const store = recorderStore();
     expect(await drainVectorGc(db, store)).toBe(0);
-    await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    const result = await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    expect(result).toEqual({ embedded: 1, failed: 0, remaining: 1 });
+    expect(store.upserts[0]?.map((r) => r.chunk_id)).toEqual(["obs-2:c0"]);
     expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 1 });
+  });
+
+  test("a row claimed by another drainer is skipped until its claim expires", async () => {
+    seedObservation("obs-1", ["alpha"]);
+    db.run("INSERT INTO vector_gc_queue (observe_id, claimed_token, claimed_at) VALUES ('obs-1', 'other', datetime('now'))");
+    const deleted: string[][] = [];
+    const store = { ...recorderStore(), async deleteByObserveIds(ids: string[]) { deleted.push(ids); } };
+
+    // Live claim elsewhere: neither deleted nor embedded by this caller.
+    const blocked = await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    expect(blocked).toEqual({ embedded: 0, failed: 0, remaining: 1 });
+    expect(deleted).toEqual([]);
+
+    // Expired claim (crashed drainer): reclaimed, drained, embedded.
+    db.run("UPDATE vector_gc_queue SET claimed_at = datetime('now', '-20 minutes')");
+    const result = await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    expect(result).toEqual({ embedded: 1, failed: 0, remaining: 0 });
+    expect(deleted).toEqual([["obs-1"]]);
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 0 });
   });
 
   test("a service outage propagates and marks nothing", async () => {

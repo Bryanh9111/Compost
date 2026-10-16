@@ -81,6 +81,7 @@ describe("maintenance --consolidate-vectors", () => {
     expect(report).toMatchObject({
       mode: "dry-run",
       orphans_dropped: 1,
+      gc_pending_dropped: 0,
       duplicates_dropped: 1,
       ids_rewritten: 3,
       written: 4,
@@ -114,6 +115,15 @@ describe("maintenance --consolidate-vectors", () => {
     // Idempotent: a second pass finds nothing to rewrite or drop.
     const again = await consolidateVectors(db, { dataDir, pageSize: 2 });
     expect(again).toMatchObject({ orphans_dropped: 0, duplicates_dropped: 0, ids_rewritten: 0, written: 4 });
+  });
+
+  test("rows of observations with a queued vector cleanup are dropped and the queue cleared", async () => {
+    db.run("INSERT INTO vector_gc_queue (observe_id) VALUES ('C')");
+    const report = await consolidateVectors(db, { dataDir, includePrevious: [join(dataDir, "old")], apply: true });
+    expect(report).toMatchObject({ gc_pending_dropped: 1, written: 3 });
+    const live = await readRefs(join(dataDir, "lancedb"));
+    expect(live.refs.map((r) => r.chunk_id)).toEqual([UUID, "A:c0", "B:c0"]);
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 0 });
   });
 
   test("apply still retires a live index whose rows are all orphans", async () => {

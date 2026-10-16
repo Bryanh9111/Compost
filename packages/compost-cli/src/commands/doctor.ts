@@ -447,8 +447,13 @@ export function registerDoctor(program: Command): void {
 
           // Mark only the chunks actually embedded by this rebuild. Other
           // writers may have inserted new chunks while embedding was in flight.
+          // The whole index was replaced, so any queued vector cleanup is
+          // satisfied; a later drain must not delete the fresh vectors.
           const markEmbedded = db.prepare("UPDATE chunks SET embedded_at = datetime('now') WHERE chunk_id = ?");
-          db.transaction(() => { for (const chunk of chunks) markEmbedded.run(chunk.chunk_id); })();
+          db.transaction(() => {
+            for (const chunk of chunks) markEmbedded.run(chunk.chunk_id);
+            db.run("DELETE FROM vector_gc_queue");
+          })();
 
           process.stdout.write(
             JSON.stringify({ ok: true, rebuilt: embedded }) + "\n"

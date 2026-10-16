@@ -18,15 +18,6 @@
 ALTER TABLE chunks ADD COLUMN fact_id TEXT;
 ALTER TABLE chunks ADD COLUMN embed_error TEXT;
 
--- A re-derivation must drop the observation's previous vectors before the
--- new chunks are embedded. The requirement is recorded here inside the same
--- transaction, so a crash or a transient LanceDB failure between persist and
--- delete is retried by the next embedding pass instead of leaving stale rows.
-CREATE TABLE IF NOT EXISTS vector_gc_queue (
-  observe_id TEXT PRIMARY KEY REFERENCES observations(observe_id) ON DELETE CASCADE,
-  enqueued_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 ALTER TABLE ingest_queue ADD COLUMN next_attempt_at TEXT;
 ALTER TABLE ingest_queue ADD COLUMN quarantined_at TEXT;
 

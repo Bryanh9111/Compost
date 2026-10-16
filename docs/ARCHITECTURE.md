@@ -56,7 +56,10 @@ extract -> store`), while action-shaped events are also lifted into
 7. embedPendingChunks: embed the observation's pending chunks, upsert into
    LanceDB by chunk_id, set embedded_at. Best effort inline; the worker's idle
    sweep embeds whatever is still pending once the service is back, and inputs
-   the service answers with the wrong shape are isolated via chunks.embed_error
+   the service answers with the wrong shape are isolated via chunks.embed_error.
+   A re-derivation queues the observation in vector_gc_queue (same transaction
+   as step 6); the embedding pass claims and drains that queue before any
+   upsert, and never embeds a queued observation
 ```
 
 Retries: a failed extraction backs off through the queue (60s, 120s) and the row
@@ -111,7 +114,7 @@ protection.
 5. Outbox prune: DELETE WHERE drained > 7d AND NOT quarantined
 ```
 
-## Database schema (28 migrations)
+## Database schema (29 migrations)
 
 ### Core tables
 
