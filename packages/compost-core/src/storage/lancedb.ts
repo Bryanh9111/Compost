@@ -22,6 +22,12 @@ export interface ChunkVector {
   vector: Float32Array;
 }
 
+export interface ChunkRef {
+  chunk_id: string;
+  fact_id: string;
+  observe_id: string;
+}
+
 export interface SearchHit {
   chunk_id: string;
   fact_id: string;
@@ -114,6 +120,20 @@ export class VectorStore {
         .join(", ");
       await this.table.delete(`observe_id IN (${list})`);
     }
+  }
+
+  /** Every (chunk_id, fact_id, observe_id) in the store, without vectors. */
+  async listChunkRefs(): Promise<ChunkRef[]> {
+    if (!this.table) return [];
+    const rows = (await this.table
+      .query()
+      .select(["chunk_id", "fact_id", "observe_id"])
+      .toArray()) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      chunk_id: String(r.chunk_id),
+      fact_id: String(r.fact_id),
+      observe_id: String(r.observe_id),
+    }));
   }
 
   /** Row count, optionally filtered by a LanceDB predicate. */
