@@ -1,10 +1,12 @@
 import type { Database } from "bun:sqlite";
-import type { EmbeddingService } from "../embedding/types";
+import { EmbeddingShapeError, type EmbeddingService } from "../embedding/types";
 import type { ChunkVector } from "../storage/lancedb";
 
 /** The slice of VectorStore the sweep needs; tests substitute a recorder. */
 export interface PendingVectorStore {
   upsert(rows: ChunkVector[]): Promise<void>;
+  /** Optional: drop an observation's vectors before a re-derivation re-embeds it. */
+  deleteByObserveIds?(observeIds: string[]): Promise<void>;
 }
 
 export interface EmbedPendingOptions {
@@ -60,10 +62,10 @@ export function countPendingChunks(db: Database, observeId?: string): PendingChu
  * chunk_id and marks rows only after the store accepted them.
  *
  * A service outage (embed() throws) propagates so the caller can back off.
- * A wrong-shaped answer (fewer vectors or a bad dimension) is a poison
- * input, not an outage: the batch is retried one chunk at a time and the
- * offenders are isolated through chunks.embed_error so the sweep never
- * loops on them.
+ * A wrong-shaped answer (EmbeddingShapeError from the adapter, or a
+ * malformed return value from a lenient service) is a poison input, not an
+ * outage: the batch is retried one chunk at a time and the offenders are
+ * isolated through chunks.embed_error so the sweep never loops on them.
  */
 export async function embedPendingChunks(
   db: Database,
@@ -88,17 +90,26 @@ export async function embedPendingChunks(
 
   const good: ChunkVector[] = [];
   const bad: Array<{ chunk: PendingChunk; reason: string }> = [];
-  const vectors = await opts.embeddingService.embed(rows.map((r) => r.text_content));
-  if (vectors.length === rows.length && vectors.every((v) => wellFormed(v))) {
+  const shapeProblem = (vector: Float32Array | undefined) =>
+    vector ? `returned a vector of dim ${vector.length} (expected ${dim})` : `returned no vector (expected dim ${dim})`;
+
+  let vectors: Float32Array[] | null = null;
+  try {
+    vectors = await opts.embeddingService.embed(rows.map((r) => r.text_content));
+  } catch (err) {
+    if (!(err instanceof EmbeddingShapeError)) throw err;
+  }
+  if (vectors && vectors.length === rows.length && vectors.every((v) => wellFormed(v))) {
     for (const [i, chunk] of rows.entries()) good.push(toChunkVector(db, chunk, vectors[i]!));
   } else {
     for (const chunk of rows) {
-      const [vector] = await opts.embeddingService.embed([chunk.text_content]);
-      if (vector && wellFormed(vector)) {
-        good.push(toChunkVector(db, chunk, vector));
-      } else {
-        const shape = vector ? `a vector of dim ${vector.length}` : "no vector";
-        bad.push({ chunk, reason: `embedding service returned ${shape} (expected dim ${dim})` });
+      try {
+        const [vector] = await opts.embeddingService.embed([chunk.text_content]);
+        if (vector && wellFormed(vector)) good.push(toChunkVector(db, chunk, vector));
+        else bad.push({ chunk, reason: `embedding service ${shapeProblem(vector)}` });
+      } catch (err) {
+        if (!(err instanceof EmbeddingShapeError)) throw err;
+        bad.push({ chunk, reason: err.message });
       }
     }
   }

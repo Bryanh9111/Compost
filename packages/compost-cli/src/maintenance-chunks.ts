@@ -176,8 +176,11 @@ export async function backfillChunks(db: Database, opts: BackfillOptions = {}): 
       });
     })();
 
-    if (!complete && refs.size > 0 && opts.vectors) {
-      await opts.vectors.deleteByObserveIds([candidate.observe_id]);
+    if (!complete) {
+      // Rows that already existed (legacy partial manifest) keep stale
+      // embedded_at markers otherwise; the whole observation is re-embedded.
+      db.run("UPDATE chunks SET embedded_at = NULL, embed_error = NULL WHERE observe_id = ?", [candidate.observe_id]);
+      if (refs.size > 0 && opts.vectors) await opts.vectors.deleteByObserveIds([candidate.observe_id]);
     }
     report.inserted_rows += inserted;
     if (complete) report.matched++;

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { OllamaEmbeddingService } from "../src/embedding/ollama";
+import { EmbeddingShapeError } from "../src/embedding/types";
 
 type Mode = "ok" | "short" | "wrong-dim" | "error" | "slow";
 
@@ -52,16 +53,19 @@ describe("embedding/ollama against a fake server", () => {
   test("rejects when the server returns fewer embeddings than inputs", async () => {
     mode = "short";
     await expect(service().embed(["a", "b"])).rejects.toThrow("returned 1 embeddings for 2 inputs");
+    await expect(service().embed(["a", "b"])).rejects.toBeInstanceOf(EmbeddingShapeError);
   });
 
   test("rejects when a vector has the wrong dimension", async () => {
     mode = "wrong-dim";
     await expect(service().embed(["a"])).rejects.toThrow("Expected dim=768, got 4");
+    await expect(service().embed(["a"])).rejects.toBeInstanceOf(EmbeddingShapeError);
   });
 
   test("rejects on a non-2xx response with the status code", async () => {
     mode = "error";
     await expect(service().embed(["a"])).rejects.toThrow("Ollama embed failed (500)");
+    await expect(service().embed(["a"])).rejects.not.toBeInstanceOf(EmbeddingShapeError);
   });
 
   test("rejects when the request exceeds timeoutMs", async () => {

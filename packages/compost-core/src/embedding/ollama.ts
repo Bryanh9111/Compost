@@ -1,4 +1,4 @@
-import type { EmbeddingService, EmbeddingServiceConfig } from "./types";
+import { EmbeddingShapeError, type EmbeddingService, type EmbeddingServiceConfig } from "./types";
 import { withOllamaLock } from "../ollama/lock";
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
@@ -63,15 +63,15 @@ export class OllamaEmbeddingService implements EmbeddingService {
         const data = (await res.json()) as OllamaEmbedResponse;
 
         if (!data.embeddings || data.embeddings.length !== texts.length) {
-          throw new Error(
+          throw new EmbeddingShapeError(
             `Ollama returned ${data.embeddings?.length ?? 0} embeddings for ${texts.length} inputs`
           );
         }
 
         return data.embeddings.map((vec) => {
-          if (vec.length !== this.dim) {
-            throw new Error(
-              `Expected dim=${this.dim}, got ${vec.length} from ${this.model}`
+          if (!Array.isArray(vec) || vec.length !== this.dim) {
+            throw new EmbeddingShapeError(
+              `Expected dim=${this.dim}, got ${Array.isArray(vec) ? vec.length : typeof vec} from ${this.model}`
             );
           }
           return new Float32Array(vec);

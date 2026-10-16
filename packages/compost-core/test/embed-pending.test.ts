@@ -4,7 +4,7 @@ import { applyMigrations } from "../src/schema/migrator";
 import { getActivePolicy, upsertPolicies } from "../src/policies/registry";
 import { countPendingChunks, embedPendingChunks } from "../src/pipeline/embed-pending";
 import type { ChunkVector } from "../src/storage/lancedb";
-import type { EmbeddingService } from "../src/embedding/types";
+import { EmbeddingShapeError, type EmbeddingService } from "../src/embedding/types";
 
 const DIM = 4;
 
@@ -12,8 +12,12 @@ function vectorFor(text: string): Float32Array {
   return new Float32Array([text.length, 1, 2, 3]);
 }
 
-/** Answers well unless a text contains "poison" (wrong dim) or "vanish" (dropped). */
-function fakeService(): EmbeddingService & { calls: string[][] } {
+/**
+ * Answers well unless a text contains "poison" (wrong dim) or "vanish"
+ * (dropped). `strict` mirrors the Ollama adapter, which throws
+ * EmbeddingShapeError instead of returning the malformed answer.
+ */
+function fakeService(strict = false): EmbeddingService & { calls: string[][] } {
   const calls: string[][] = [];
   return {
     model: "fake",
@@ -22,9 +26,14 @@ function fakeService(): EmbeddingService & { calls: string[][] } {
     async embed(texts) {
       calls.push(texts);
       if (texts.some((t) => t.includes("outage"))) throw new Error("embedding service down");
-      return texts
-        .filter((t) => !t.includes("vanish"))
-        .map((t) => (t.includes("poison") ? new Float32Array([1]) : vectorFor(t)));
+      const kept = texts.filter((t) => !t.includes("vanish"));
+      if (strict && kept.length !== texts.length) {
+        throw new EmbeddingShapeError(`Ollama returned ${kept.length} embeddings for ${texts.length} inputs`);
+      }
+      if (strict && texts.some((t) => t.includes("poison"))) {
+        throw new EmbeddingShapeError(`Expected dim=${DIM}, got 1 from fake`);
+      }
+      return kept.map((t) => (t.includes("poison") ? new Float32Array([1]) : vectorFor(t)));
     },
   };
 }
@@ -137,6 +146,22 @@ describe("pipeline/embed-pending", () => {
 
     // Isolated chunks are not picked up again.
     expect(await embedPendingChunks(db, { embeddingService: service, vectorStore: store })).toEqual({ embedded: 0, failed: 0, remaining: 0 });
+  });
+
+  test("an adapter that throws EmbeddingShapeError is retried per chunk and the offenders isolated", async () => {
+    seedObservation("obs-1", ["alpha", "poison pill", "vanishing text", "gamma"]);
+    const store = recorderStore();
+    const service = fakeService(true);
+
+    const result = await embedPendingChunks(db, { embeddingService: service, vectorStore: store });
+    expect(result).toEqual({ embedded: 2, failed: 2, remaining: 0 });
+    expect(store.upserts[0]?.map((r) => r.chunk_id)).toEqual(["obs-1:c0", "obs-1:c3"]);
+    const failed = db
+      .query("SELECT chunk_id, embed_error FROM chunks WHERE embed_error IS NOT NULL ORDER BY chunk_index")
+      .all() as { chunk_id: string; embed_error: string }[];
+    expect(failed.map((r) => r.chunk_id)).toEqual(["obs-1:c1", "obs-1:c2"]);
+    expect(failed[0]?.embed_error).toContain("Expected dim=4");
+    expect(failed[1]?.embed_error).toContain("returned 0 embeddings for 1 inputs");
   });
 
   test("a service outage propagates and marks nothing", async () => {

@@ -127,6 +127,53 @@ describe("pipeline/persist-extraction", () => {
     expect(rows.map((r) => r.fact_id)).toEqual([null, null]);
   });
 
+  test("replaces facts and chunks left behind by an earlier failed attempt", () => {
+    const { claimed, derivationId } = seedObservation("obs-1");
+    db.run(
+      "INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d-failed', 'obs-1', 'L2', ?, 'failed')",
+      [policyId]
+    );
+    db.run("INSERT INTO facts (fact_id, subject, predicate, object, observe_id) VALUES ('stale-fact', 's', 'p', 'o', 'obs-1')");
+    db.run(
+      `INSERT INTO chunks (chunk_id, observe_id, derivation_id, chunk_index, text_content, content_hash, char_start, char_end, transform_policy, embedded_at)
+       VALUES ('obs-1:c0', 'obs-1', 'd-failed', 0, 'stale', 'h', 0, 5, ?, datetime('now'))`,
+      [policyId]
+    );
+
+    const result = persistExtraction(db, {
+      observeId: "obs-1",
+      derivationId,
+      policyId,
+      output: output(),
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
+    expect(result.replacedFacts).toBe(1);
+    expect(result.replacedChunks).toBe(1);
+    expect(db.query("SELECT fact_id FROM facts").all()).toEqual([{ fact_id: result.factIds[0] }]);
+    const chunks = db.query("SELECT chunk_id, text_content, embedded_at FROM chunks ORDER BY chunk_index").all() as { chunk_id: string; text_content: string; embedded_at: string | null }[];
+    expect(chunks.map((c) => [c.chunk_id, c.text_content, c.embedded_at])).toEqual([
+      ["obs-1:c0", "# Heading", null],
+      ["obs-1:c1", "Body text", null],
+    ]);
+  });
+
+  test("keeps facts of a run that succeeded under an older policy but re-derives the chunks", () => {
+    const { claimed, derivationId } = seedObservation("obs-1");
+    db.run(
+      "INSERT INTO derivation_run (derivation_id, observe_id, layer, transform_policy, status) VALUES ('d-old', 'obs-1', 'L2', 'tp-2026-04', 'succeeded')"
+    );
+    db.run("INSERT INTO facts (fact_id, subject, predicate, object, observe_id) VALUES ('old-fact', 's', 'p', 'o', 'obs-1')");
+    const result = persistExtraction(db, {
+      observeId: "obs-1",
+      derivationId,
+      policyId,
+      output: output(),
+      queue: { id: claimed.id, leaseToken: claimed.lease_token },
+    });
+    expect(result.replacedFacts).toBe(0);
+    expect((db.query("SELECT count(*) AS n FROM facts").get() as { n: number }).n).toBe(2);
+  });
+
   test("a lost lease rolls back facts, chunks and the derivation transition", () => {
     const { claimed, derivationId } = seedObservation("obs-1");
     expect(() =>

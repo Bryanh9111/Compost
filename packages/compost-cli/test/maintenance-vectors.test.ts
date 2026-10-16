@@ -116,6 +116,24 @@ describe("maintenance --consolidate-vectors", () => {
     expect(again).toMatchObject({ orphans_dropped: 0, duplicates_dropped: 0, ids_rewritten: 0, written: 4 });
   });
 
+  test("apply still retires a live index whose rows are all orphans", async () => {
+    const orphanDir = mkdtempSync(join(tmpdir(), "compost-consolidate-orphans-"));
+    const orphanDb = new Database(join(orphanDir, "ledger.db"));
+    applyMigrations(orphanDb);
+    try {
+      await fillStore(join(orphanDir, "lancedb"), [["c0", "fZ", "Z", 0]]);
+      const report = await consolidateVectors(orphanDb, { dataDir: orphanDir, apply: true });
+      expect(report).toMatchObject({ mode: "applied", orphans_dropped: 1, written: 0 });
+      expect(existsSync(join(orphanDir, "lancedb"))).toBe(false);
+      expect(report.previous_dir).toMatch(/-previous$/);
+      expect(existsSync(report.previous_dir!)).toBe(true);
+      expect(orphanDb.query("SELECT count(*) AS n FROM maintenance_audit").get()).toEqual({ n: 1 });
+    } finally {
+      orphanDb.close();
+      rmSync(orphanDir, { recursive: true, force: true });
+    }
+  });
+
   test("apply with no index at all writes nothing", async () => {
     const empty = mkdtempSync(join(tmpdir(), "compost-consolidate-empty-"));
     try {

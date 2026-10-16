@@ -99,6 +99,9 @@ export function failDerivation(db: Database, derivationId: string, error: string
 export interface PersistExtractionResult {
   factIds: string[];
   chunkIds: string[];
+  /** Rows left by an earlier attempt that this derivation replaced. */
+  replacedFacts: number;
+  replacedChunks: number;
 }
 
 const DEFAULT_HALF_LIFE_SEC = 2_592_000; // 30 days (spec §2 tp-2026-04)
@@ -159,6 +162,22 @@ export function persistExtraction(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    // A derivation replaces whatever an earlier attempt left behind. The
+    // pre-0028 pipeline committed facts and chunks before embedding, so a
+    // retry after an embedding failure would otherwise collide on chunk ids
+    // and duplicate facts. Facts from a run that did succeed (older policy)
+    // are kept; chunks are always re-derived from this extraction.
+    const priorSuccess =
+      db
+        .query("SELECT 1 FROM derivation_run WHERE observe_id = ? AND layer = 'L2' AND status = 'succeeded' LIMIT 1")
+        .get(observeId) !== null;
+    const count = (table: "facts" | "chunks") =>
+      (db.query(`SELECT count(*) AS n FROM ${table} WHERE observe_id = ?`).get(observeId) as { n: number }).n;
+    const replacedFacts = priorSuccess ? 0 : count("facts");
+    if (!priorSuccess) db.run("DELETE FROM facts WHERE observe_id = ?", [observeId]);
+    const replacedChunks = count("chunks");
+    db.run("DELETE FROM chunks WHERE observe_id = ?", [observeId]);
+
     const factIds: string[] = [];
     const chunkToFact = new Map<string, string>();
     for (const fact of output.facts) {
@@ -223,7 +242,7 @@ export function persistExtraction(
     }
 
     db.exec("COMMIT");
-    return { factIds, chunkIds };
+    return { factIds, chunkIds, replacedFacts, replacedChunks };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
