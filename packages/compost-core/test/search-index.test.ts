@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { applyMigrations } from "../src/schema/migrator";
 import { auditCoverage } from "../src/metacognitive/coverage-audit";
 import { query } from "../src/query/search";
@@ -125,6 +128,40 @@ test("failed rebuild rolls back all index changes", async () => {
   expect(
     auditCoverage(db, "transactional", { includeDocs: false }).matched_actions,
   ).toHaveLength(1);
+});
+
+test("status surfaces lock contention instead of reporting corruption and persists nothing", async () => {
+  const { searchIndexStatus } = await import("../src/query/search-index");
+  const dir = mkdtempSync(join(tmpdir(), "compost-search-index-"));
+  const ledger = new Database(join(dir, "ledger.db"));
+  const writer = new Database(join(dir, "ledger.db"));
+  const count = (table: string) =>
+    (ledger.query(`SELECT count(*) AS n FROM ${table}`).get() as { n: number })
+      .n;
+  // Changes only when another connection commits; proves the probe wrote nothing.
+  const dataVersion = () =>
+    (writer.query("PRAGMA data_version").get() as { data_version: number })
+      .data_version;
+  try {
+    expect(applyMigrations(ledger).errors).toEqual([]);
+    writer.exec("BEGIN IMMEDIATE");
+    ledger.exec("PRAGMA busy_timeout=50");
+    expect(() => searchIndexStatus(ledger)).toThrow("database is locked");
+    writer.exec("COMMIT");
+    const before = {
+      version: dataVersion(),
+      state: count("search_index_state"),
+      cjk: count("action_log_cjk"),
+    };
+    expect(searchIndexStatus(ledger).ok).toBe(true);
+    expect(dataVersion()).toBe(before.version);
+    expect(count("search_index_state")).toBe(before.state);
+    expect(count("action_log_cjk")).toBe(before.cjk);
+  } finally {
+    writer.close();
+    ledger.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("context filters apply before lexical candidate truncation", async () => {
