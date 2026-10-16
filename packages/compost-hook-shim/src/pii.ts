@@ -103,7 +103,12 @@ export function scrub(input: string, opts: ScrubOpts = {}): ScrubResult {
   );
 
   // 4. Credit card numbers (Luhn-validated, 13-19 digits with optional spaces/hyphens).
-  out = out.replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => {
+  //    Digit-anchored so a match never swallows a trailing separator. Runs that
+  //    embed an ISO date (counter + YYYY-MM-DD + counter, e.g. note filenames)
+  //    are skipped: no standard card grouping contains a 2-digit group, so this
+  //    cannot drop a normally formatted card.
+  out = out.replace(/\b\d(?:[ -]?\d){12,18}\b/g, (match) => {
+    if (/\d{4}-\d{2}-\d{2}/.test(match)) return match;
     const digits = match.replace(/\D/g, "");
     if (luhnCheck(digits)) {
       count++;

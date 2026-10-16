@@ -28,6 +28,28 @@ describe("pii.scrub — credit cards (Luhn-validated)", () => {
     expect(redactions).toBe(0);
     expect(scrubbed).toBe("Port 5432 and 8080");
   });
+
+  test("does not redact date-bearing numeric prefixes", () => {
+    const filename = "016 2025-02-17 100下马甲线 67b308cb00000000280297dc.md";
+    const { scrubbed, redactions } = scrub(filename);
+    expect(redactions).toBe(0);
+    expect(scrubbed).toBe(filename);
+
+    const inline = "id 016 2025-02-17 100 x";
+    expect(scrub(inline)).toEqual({ scrubbed: inline, redactions: 0 });
+  });
+
+  test("keeps the separator after a spaced card", () => {
+    const { scrubbed, redactions } = scrub("card: 4532 0151 1283 0366 expiry");
+    expect(scrubbed).toBe("card: [REDACTED_CC] expiry");
+    expect(redactions).toBe(1);
+  });
+
+  test("keeps the separator after a hyphenated card", () => {
+    const { scrubbed, redactions } = scrub("4532-0151-1283-0366 ok");
+    expect(scrubbed).toBe("[REDACTED_CC] ok");
+    expect(redactions).toBe(1);
+  });
 });
 
 describe("pii.scrub — API tokens", () => {
