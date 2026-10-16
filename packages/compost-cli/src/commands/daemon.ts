@@ -26,6 +26,12 @@ interface DaemonStatus {
     pending: number;
     quarantined: number;
   };
+  ingest?: {
+    pending: number;
+    quarantined: number;
+    unembedded_chunks: number;
+    embed_error_chunks: number;
+  };
   schedulers?: SchedulerHealth[];
 }
 
@@ -46,6 +52,13 @@ export function formatDaemonStatus(value: unknown): string {
     const state = value.outbox.quarantined > 0 ? " [degraded]" : "";
     lines.push(
       `outbox: pending=${value.outbox.pending} quarantined=${value.outbox.quarantined}${state}`
+    );
+  }
+  if (value.ingest) {
+    const degraded = value.ingest.quarantined > 0 || value.ingest.embed_error_chunks > 0;
+    const errors = value.ingest.embed_error_chunks > 0 ? ` embed_errors=${value.ingest.embed_error_chunks}` : "";
+    lines.push(
+      `ingest: pending=${value.ingest.pending} quarantined=${value.ingest.quarantined} unembedded=${value.ingest.unembedded_chunks}${errors}${degraded ? " [degraded]" : ""}`
     );
   }
   if (Array.isArray(value.schedulers)) {
