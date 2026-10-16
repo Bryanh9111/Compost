@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
 import { upsertPolicies } from "../src/policies/registry";
 import { OllamaEmbeddingService } from "../src/embedding/ollama";
+import { ollamaAvailable } from "../../../test/helpers/ollama";
 import { VectorStore } from "../src/storage/lancedb";
 import { ingestFile } from "../src/pipeline/ingest";
 import {
@@ -204,7 +205,9 @@ describe("query/search (BM25-only, no vectorStore)", () => {
   });
 });
 
-describe("query/search (integration with LanceDB)", () => {
+const live = await ollamaAvailable();
+
+describe.skipIf(!live)("query/search (integration with LanceDB)", () => {
   let db: Database;
   let tmpDir: string;
   let dataDir: string;

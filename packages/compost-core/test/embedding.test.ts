@@ -1,7 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { OllamaEmbeddingService } from "../src/embedding/ollama";
+import { ollamaAvailable } from "../../../test/helpers/ollama";
 
-describe("embedding/ollama", () => {
+const live = await ollamaAvailable();
+
+describe.skipIf(!live)("embedding/ollama", () => {
   const svc = new OllamaEmbeddingService();
 
   test("model and dim are correct", () => {

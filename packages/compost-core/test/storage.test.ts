@@ -4,8 +4,11 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { VectorStore } from "../src/storage/lancedb";
 import { OllamaEmbeddingService } from "../src/embedding/ollama";
+import { ollamaAvailable } from "../../../test/helpers/ollama";
 
-describe("storage/lancedb", () => {
+const live = await ollamaAvailable();
+
+describe.skipIf(!live)("storage/lancedb", () => {
   let tmpDir: string;
   let store: VectorStore;
   const embedding = new OllamaEmbeddingService();

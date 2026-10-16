@@ -11,6 +11,9 @@ import { tmpdir } from "os";
 import { applyMigrations } from "../src/schema/migrator";
 import { upsertPolicies, getActivePolicy } from "../src/policies/registry";
 import { ingestFile, } from "../src/pipeline/ingest";
+import { ollamaAvailable } from "../../../test/helpers/ollama";
+
+const live = await ollamaAvailable();
 
 const FIXTURE_MD = `# Test Document
 
@@ -149,7 +152,7 @@ describe("pipeline/ingest (end-to-end)", () => {
     expect(obs.transform_policy).toBe(getActivePolicy().id);
   });
 
-  test("ingestFile with embedding service writes to LanceDB and updates chunks.embedded_at", async () => {
+  test.skipIf(!live)("ingestFile with embedding service writes to LanceDB and updates chunks.embedded_at", async () => {
     const { OllamaEmbeddingService } = await import("../src/embedding/ollama");
     const { VectorStore } = await import("../src/storage/lancedb");
 
