@@ -5,7 +5,7 @@ import type { ChunkVector } from "../storage/lancedb";
 /** The slice of VectorStore the sweep needs; tests substitute a recorder. */
 export interface PendingVectorStore {
   upsert(rows: ChunkVector[]): Promise<void>;
-  /** Optional: drop an observation's vectors before a re-derivation re-embeds it. */
+  /** Drains vector_gc_queue before embedding; stores without it leave the queue for a caller that has it. */
   deleteByObserveIds?(observeIds: string[]): Promise<void>;
 }
 
@@ -67,10 +67,39 @@ export function countPendingChunks(db: Database, observeId?: string): PendingChu
  * outage: the batch is retried one chunk at a time and the offenders are
  * isolated through chunks.embed_error so the sweep never loops on them.
  */
+const GC_BATCH = 500;
+
+/**
+ * Drop the vectors of observations whose re-derivation queued a cleanup.
+ * Runs before any upsert so stale vectors never outlive their replacement;
+ * rows leave the queue only after LanceDB confirmed the delete, so a
+ * failure here is retried by the next pass. Returns observations cleaned.
+ */
+export async function drainVectorGc(db: Database, store: PendingVectorStore): Promise<number> {
+  if (!store.deleteByObserveIds) return 0;
+  let drained = 0;
+  for (;;) {
+    const ids = (
+      db.query("SELECT observe_id FROM vector_gc_queue ORDER BY enqueued_at LIMIT ?").all(GC_BATCH) as Array<{
+        observe_id: string;
+      }>
+    ).map((r) => r.observe_id);
+    if (ids.length === 0) return drained;
+    await store.deleteByObserveIds(ids);
+    const remove = db.prepare("DELETE FROM vector_gc_queue WHERE observe_id = ?");
+    db.transaction(() => {
+      for (const id of ids) remove.run(id);
+    })();
+    drained += ids.length;
+    if (ids.length < GC_BATCH) return drained;
+  }
+}
+
 export async function embedPendingChunks(
   db: Database,
   opts: EmbedPendingOptions
 ): Promise<EmbedPendingResult> {
+  await drainVectorGc(db, opts.vectorStore);
   const scope = opts.observeId ?? null;
   const rows = db
     .query(

@@ -370,7 +370,6 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
     }, heartbeatMs);
 
     let output: ExtractionOutput;
-    let replaced = 0;
     try {
       beginDerivation(db, { derivationId, observeId: obs.observe_id, policyId: policy.id });
       output = await extract(
@@ -385,13 +384,13 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
         { timeoutMs: extractionTimeoutMs(policy.extraction.timeoutSec), signal: abort.signal }
       );
       abort.signal.throwIfAborted();
-      replaced = persistExtraction(db, {
+      persistExtraction(db, {
         observeId: obs.observe_id,
         derivationId,
         policyId: policy.id,
         output,
         queue: { id: claimed.id, leaseToken: claimed.lease_token },
-      }).replacedChunks;
+      });
     } catch (err) {
       errorCount++;
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -406,8 +405,8 @@ export function startIngestWorker(db: Database, opts: IngestWorkerOpts): Schedul
 
     let embedded = 0;
     try {
-      // Stale vectors of a replaced extraction would otherwise outlive it.
-      if (replaced > 0) await opts.vectorStore.deleteByObserveIds?.([obs.observe_id]);
+      // embedPendingChunks drains vector_gc_queue first, so a re-derivation's
+      // stale vectors are gone before the new chunks are upserted.
       embedded = await embedObservation(obs.observe_id);
     } catch (err) {
       errorCount++;

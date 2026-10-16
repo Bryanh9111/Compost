@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { applyMigrations } from "../src/schema/migrator";
 import { getActivePolicy, upsertPolicies } from "../src/policies/registry";
-import { countPendingChunks, embedPendingChunks } from "../src/pipeline/embed-pending";
+import { countPendingChunks, drainVectorGc, embedPendingChunks } from "../src/pipeline/embed-pending";
 import type { ChunkVector } from "../src/storage/lancedb";
 import { EmbeddingShapeError, type EmbeddingService } from "../src/embedding/types";
 
@@ -162,6 +162,40 @@ describe("pipeline/embed-pending", () => {
     expect(failed.map((r) => r.chunk_id)).toEqual(["obs-1:c1", "obs-1:c2"]);
     expect(failed[0]?.embed_error).toContain("Expected dim=4");
     expect(failed[1]?.embed_error).toContain("returned 0 embeddings for 1 inputs");
+  });
+
+  test("drains vector_gc_queue before upserting and keeps the row when the delete fails", async () => {
+    seedObservation("obs-1", ["alpha"]);
+    db.run("INSERT INTO vector_gc_queue (observe_id) VALUES ('obs-1')");
+    const events: string[] = [];
+    let failDelete = true;
+    const store = {
+      async upsert(rows: ChunkVector[]) { events.push(`upsert:${rows.length}`); },
+      async deleteByObserveIds(ids: string[]) {
+        if (failDelete) throw new Error("lance unavailable");
+        events.push(`delete:${ids.join(",")}`);
+      },
+    };
+
+    await expect(embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store })).rejects.toThrow("lance unavailable");
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 1 });
+    expect(events).toEqual([]);
+
+    failDelete = false;
+    const result = await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    expect(result.embedded).toBe(1);
+    expect(events).toEqual(["delete:obs-1", "upsert:1"]);
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 0 });
+    expect(await drainVectorGc(db, store)).toBe(0);
+  });
+
+  test("a store without deleteByObserveIds leaves the queue untouched", async () => {
+    seedObservation("obs-1", ["alpha"]);
+    db.run("INSERT INTO vector_gc_queue (observe_id) VALUES ('obs-1')");
+    const store = recorderStore();
+    expect(await drainVectorGc(db, store)).toBe(0);
+    await embedPendingChunks(db, { embeddingService: fakeService(), vectorStore: store });
+    expect(db.query("SELECT count(*) AS n FROM vector_gc_queue").get()).toEqual({ n: 1 });
   });
 
   test("a service outage propagates and marks nothing", async () => {
