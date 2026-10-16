@@ -151,8 +151,16 @@ export async function consolidateVectors(
 
     if (!outConn) return report;
     if (!out) {
+      // Every row was an orphan or there was no index: the live index (if
+      // any) still has to go, or the report would lie about dropped rows.
       outConn.close();
       rmSync(outDir, { recursive: true, force: true });
+      if (existsSync(liveDir)) {
+        const previous = `${outDir}-previous`;
+        renameSync(liveDir, previous);
+        report.previous_dir = previous;
+        recordAudit(db, report);
+      }
       return report;
     }
     const count = await out.countRows();
@@ -177,9 +185,13 @@ export async function consolidateVectors(
     throw error;
   }
   report.previous_dir = hadLive ? previous : null;
+  recordAudit(db, report);
+  return report;
+}
+
+function recordAudit(db: Database, report: ConsolidateReport): void {
   db.run(
     "INSERT INTO maintenance_audit(operation,target_table,target_id,detail_json) VALUES (?,?,?,?)",
     ["consolidate-vectors", "chunk_vectors", "lancedb", JSON.stringify(report)]
   );
-  return report;
 }

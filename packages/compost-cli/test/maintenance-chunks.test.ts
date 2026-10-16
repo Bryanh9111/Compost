@@ -61,6 +61,7 @@ describe("maintenance --backfill-chunks", () => {
     seed("C", 2); // no vectors -> mismatched, left pending
     seed("D", 2, 2); // manifest complete -> not a candidate
     seed("P", 3, 1); // legacy partial manifest -> only the missing rows are added
+    seed("Q", 2, 1); // legacy partial manifest with a missing vector -> whole observation re-embedded
   });
 
   afterEach(() => db.close());
@@ -71,21 +72,22 @@ describe("maintenance --backfill-chunks", () => {
       ["B", 2, 0],
       ["C", 2, 0],
       ["P", 3, 1],
+      ["Q", 2, 1],
     ]);
-    expect(countBackfillCandidates(db)).toBe(4);
+    expect(countBackfillCandidates(db)).toBe(5);
     expect(listBackfillCandidates(db, 2)).toHaveLength(2);
   });
 
   test("dry run reports candidates without extracting", async () => {
     const extract = fakeExtract({});
     const report = await backfillChunks(db, { extract });
-    expect(report).toMatchObject({ mode: "dry-run", candidates: 4, processed: 0, inserted_rows: 0 });
-    expect(report.sample).toEqual(["A", "B", "C", "P"]);
+    expect(report).toMatchObject({ mode: "dry-run", candidates: 5, processed: 0, inserted_rows: 0 });
+    expect(report.sample).toEqual(["A", "B", "C", "P", "Q"]);
     expect(extract.calls).toEqual([]);
   });
 
   test("apply inserts embedded rows when vectors match, pending rows otherwise, and drops stale vectors", async () => {
-    const extract = fakeExtract({ A: 2, B: 2, C: 2, P: 3 });
+    const extract = fakeExtract({ A: 2, B: 2, C: 2, P: 3, Q: 2 });
     const vectors = fakeVectors([
       { chunk_id: "A:c0", fact_id: "fA", observe_id: "A" },
       { chunk_id: "c1", fact_id: "fA", observe_id: "A" }, // legacy-form id still resolves
@@ -93,12 +95,20 @@ describe("maintenance --backfill-chunks", () => {
       { chunk_id: "P:c0", fact_id: "fP", observe_id: "P" },
       { chunk_id: "P:c1", fact_id: "fP", observe_id: "P" },
       { chunk_id: "P:c2", fact_id: "fP", observe_id: "P" },
+      { chunk_id: "Q:c0", fact_id: "fQ", observe_id: "Q" },
     ]);
 
     const report = await backfillChunks(db, { apply: true, extract, vectors, concurrency: 3 });
-    expect(report).toMatchObject({ mode: "applied", candidates: 4, processed: 4, matched: 2, mismatched: 2, failed: 0, inserted_rows: 8 });
-    expect(extract.calls.sort()).toEqual(["A", "B", "C", "P"]);
-    expect(vectors.deleted).toEqual([["B"]]);
+    expect(report).toMatchObject({ mode: "applied", candidates: 5, processed: 5, matched: 2, mismatched: 3, failed: 0, inserted_rows: 9 });
+    expect(extract.calls.sort()).toEqual(["A", "B", "C", "P", "Q"]);
+    expect(vectors.deleted.sort()).toEqual([["B"], ["Q"]]);
+    // Q's pre-existing embedded row is reset so the sweep re-embeds the whole observation.
+    expect(
+      db.query("SELECT chunk_id, embedded_at FROM chunks WHERE observe_id = 'Q' ORDER BY chunk_index").all()
+    ).toEqual([
+      { chunk_id: "Q:c0", embedded_at: null },
+      { chunk_id: "Q:c1", embedded_at: null },
+    ]);
 
     const rows = db
       .query("SELECT chunk_id, fact_id, embedded_at IS NOT NULL AS embedded FROM chunks ORDER BY observe_id, chunk_index")
@@ -123,13 +133,13 @@ describe("maintenance --backfill-chunks", () => {
   test("an extraction failure is counted and does not stop the batch", async () => {
     const extract: ExtractFn = async (input) => {
       if (input.observe_id === "B") throw new Error("python exploded");
-      return fakeExtract({ A: 2, C: 2, P: 3 })(input, { timeoutMs: 1 });
+      return fakeExtract({ A: 2, C: 2, P: 3, Q: 2 })(input, { timeoutMs: 1 });
     };
     const report = await backfillChunks(db, { apply: true, extract, vectors: null, limit: 3 });
-    expect(report.candidates).toBe(4);
+    expect(report.candidates).toBe(5);
     expect(report.processed).toBe(3);
     expect(report.failed).toBe(1);
     expect(report.errors).toEqual([{ observe_id: "B", message: "python exploded" }]);
-    expect(countBackfillCandidates(db)).toBe(2);
+    expect(countBackfillCandidates(db)).toBe(3);
   });
 });

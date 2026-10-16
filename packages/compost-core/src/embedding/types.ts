@@ -25,3 +25,15 @@ export interface EmbeddingServiceConfig {
   /** Max texts per batch request. Default: 64 */
   batchSize?: number;
 }
+
+/**
+ * The service answered, but with the wrong number of vectors or a wrong
+ * dimension. That is a poison input, not an outage: callers isolate the
+ * offending chunk instead of retrying the batch.
+ */
+export class EmbeddingShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmbeddingShapeError";
+  }
+}
